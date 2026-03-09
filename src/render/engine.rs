@@ -977,27 +977,40 @@ impl Presenter {
             None
         };
 
-        // Font change BEFORE the sync block: we must clear the screen and
-        // flush it to the terminal so it is *visually* blank before Kitty
-        // processes the font-size RC command.  Kitty's set_font_size is
-        // out-of-band — it triggers an immediate terminal resize.  If old
-        // content is still visible, it re-wraps at the new (narrower)
-        // dimensions, producing a visible "jump".  By clearing first, there
-        // is nothing to reflow.
+        // Font change BEFORE the sync block.  Kitty's set_font_size RC
+        // command is out-of-band — it triggers an immediate terminal resize.
+        //
+        // A single large font jump causes a jarring visual glitch because
+        // Kitty reflows all on-screen content at the new dimensions in one
+        // frame.  Instead, we animate the change in 0.5pt steps — each step
+        // produces a tiny, barely-perceptible reflow that looks like a
+        // smooth zoom.  For decrease (more cols) there is no reflow issue,
+        // so we send the change in one shot.
         if let Some(target) = font_changing {
-            let stdout = io::stdout();
-            let mut pre = BufWriter::with_capacity(256 * 1024, stdout.lock());
-            // Clear screen — visually blank the terminal
-            queue!(pre, SetBackgroundColor(self.bg_color))?;
-            for row in 0..self.height {
-                queue!(pre, cursor::MoveTo(0, row))?;
-                write!(pre, "{}", " ".repeat(self.width as usize))?;
-            }
-            // Flush the clear so it is actually displayed
-            pre.flush()?;
+            let current = self.last_applied_font_size.unwrap_or(target);
+            let increasing = target > current;
 
-            // Now send the font change — screen is visually blank, so
-            // the resize won't cause any content reflow
+            let stdout = io::stdout();
+            let mut pre = stdout.lock();
+
+            if increasing && (target - current).abs() > 0.6 {
+                // Animate in 0.5pt steps — each is ~1 col of reflow, smooth
+                let step = 0.5_f64;
+                let num_steps = ((target - current) / step).ceil() as usize;
+                for i in 1..num_steps {
+                    let intermediate = current + step * i as f64;
+                    let json = format!(
+                        r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                        intermediate
+                    );
+                    let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+                    pre.write_all(esc.as_bytes())?;
+                    pre.flush()?;
+                    std::thread::sleep(std::time::Duration::from_millis(12));
+                }
+            }
+
+            // Final step — land exactly on target
             let json = format!(
                 r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
                 target
@@ -1008,9 +1021,8 @@ impl Presenter {
             drop(pre);
 
             self.last_applied_font_size = Some(target);
-            // Brief pause for Kitty to process + drain resize events
-            std::thread::sleep(std::time::Duration::from_millis(30));
-            while event::poll(std::time::Duration::from_millis(20))? {
+            // Drain all resize events from the animation steps
+            while event::poll(std::time::Duration::from_millis(10))? {
                 if let Event::Resize(w2, h2) = event::read()? {
                     self.width = w2;
                     self.height = h2;
