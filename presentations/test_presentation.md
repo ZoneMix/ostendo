@@ -6,6 +6,7 @@ theme: terminal_green
 # Ostendo Feature Test
 <!-- section: intro -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 A systematic test of all rendering features — one per slide.
 
@@ -34,6 +35,7 @@ TALKING POINTS:
 # ASCII Art
 <!-- section: formatting -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 This title should render as large FIGlet ASCII art
 
@@ -48,6 +50,7 @@ VERIFY: Large multi-line ASCII characters visible, not plain text
 # Bullet Depths
 <!-- section: formatting -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - Top level bullet
 - Another top level
@@ -68,6 +71,7 @@ VERIFY: Level 1 (•), level 2 (◦), level 3 (▪) at increasing indents
 # Bold Text
 <!-- section: formatting -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - This line has **bold text** inline
 - **Entire line is bold**
@@ -84,6 +88,7 @@ VERIFY: Bold text appears brighter/heavier than normal text
 # Italic Text
 <!-- section: formatting -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - This line has *italic text* inline
 - *Entire line is italic*
@@ -100,6 +105,7 @@ VERIFY: Italic text appears slanted (terminal-dependent)
 # Strikethrough Text
 <!-- section: formatting -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - This line has ~~strikethrough text~~ inline
 - ~~Entire line is struck through~~
@@ -116,6 +122,7 @@ VERIFY: Strikethrough line visible through text (terminal-dependent)
 # Inline Code
 <!-- section: formatting -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - This line has `inline code` with background
 - `Code at start` of line
@@ -132,6 +139,7 @@ VERIFY: Code spans have visible background distinct from page background
 # Mixed Inline Formatting
 <!-- section: formatting -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - **Bold** and *italic* and `code` together
 - **Bold *and italic* mixed** in one span
@@ -148,6 +156,7 @@ VERIFY: Each format type renders correctly without bleeding into others
 # Code Block: Python
 <!-- section: code -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 ```python {label: "example.py"}
 def fibonacci(n):
@@ -180,6 +189,7 @@ TALKING POINTS:
 # Executable Code
 <!-- section: code -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 ```python +exec {label: "hello.py"}
 import sys
@@ -210,6 +220,7 @@ TALKING POINTS:
 # Multiple Code Blocks
 <!-- section: code -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 ```rust {label: "example.rs"}
 fn main() {
@@ -233,6 +244,7 @@ VERIFY: Both blocks render with correct syntax highlighting and labels
 # Basic Table
 <!-- section: tables -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -253,6 +265,7 @@ VERIFY: Columns aligned, borders use box chars (┌─┬─┐ etc)
 # Table Alignment
 <!-- section: tables -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 | Left Aligned | Center Aligned | Right Aligned |
 | :--- | :---: | ---: |
@@ -271,6 +284,7 @@ VERIFY: Left col left-aligned, center col centered, right col right-aligned
 # Short Blockquote
 <!-- section: quotes -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 > The only truly secure system is one that is powered off.
 > -- Gene Spafford
@@ -286,6 +300,7 @@ VERIFY: "│" border visible in accent color, text is italic
 # Long Blockquote (Wrapping)
 <!-- section: quotes -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 > This is a very long blockquote line that should wrap automatically at the terminal width boundary while maintaining the left border pipe character and proper indentation throughout the wrapped lines to test the text wrapping functionality added in batch 1
 
@@ -300,6 +315,7 @@ VERIFY: No horizontal truncation, all wrapped lines show │ border
 # Blockquote with Formatting
 <!-- section: quotes -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 > This quote has **bold text** and *italic text* and `inline code` mixed in
 
@@ -316,6 +332,7 @@ VERIFY: Formatting renders inside blockquote, both quotes show borders
 # Two Equal Columns
 <!-- section: columns -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [1, 1] -->
 
@@ -342,6 +359,7 @@ VERIFY: Left and right columns render side by side with equal width
 # Asymmetric Columns (2:1)
 <!-- section: columns -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [2, 1] -->
 
@@ -368,6 +386,7 @@ VERIFY: Width ratio visually ~2:1, content doesn't overflow
 # Three Columns
 <!-- section: columns -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [1, 1, 1] -->
 
@@ -396,6 +415,7 @@ VERIFY: Three columns render side by side, none overlap
 # Columns with Code
 <!-- section: columns -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [3, 2] -->
 
@@ -425,6 +445,7 @@ VERIFY: Code block fits in left column, right column has bullets
 # Image: Auto Protocol
 <!-- section: images -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 ![Opus](../images/opus.png)
 
@@ -439,6 +460,7 @@ VERIFY: Image visible, not garbled, correct aspect ratio
 # Image: DakotaCon Logo (SVG)
 <!-- section: images -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 ![DakotaCon Logo](../images/dakotacon.svg)
 <!-- image_scale: 50 -->
@@ -454,6 +476,7 @@ VERIFY: SVG renders cleanly, no artifacts, correct aspect ratio
 # Image: ASCII Art (PNG)
 <!-- section: images -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 <!-- image_render: ascii -->
 
 ![Opus ASCII](../images/opus.png)
@@ -471,6 +494,7 @@ VERIFY: Recognizable image shape in ASCII chars
 # Image: ASCII Art (SVG)
 <!-- section: images -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 <!-- image_render: ascii -->
 
 ![DakotaCon ASCII](../images/dakotacon.svg)
@@ -486,12 +510,12 @@ VERIFY: Recognizable shape, clean rendering from SVG source
 
 ---
 
-<!-- font_size: 2 -->
+<!-- font_size: 7 -->
 # Font Size Directive
 <!-- section: display -->
 <!-- timing: 0.5 -->
 
-This slide uses `<!-- font_size: 2 -->` directive
+This slide uses `<!-- font_size: 7 -->` directive (+12pt offset)
 
 - Font size only changes in Kitty terminal (OSC 66)
 - In other terminals, this has no visible effect
@@ -508,6 +532,7 @@ VERIFY: No errors regardless of terminal, slide renders normally
 # Section Transition
 <!-- section: sections -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - This slide starts a new section: "sections"
 - Section name appears in status bar area
@@ -524,6 +549,7 @@ VERIFY: Section name shows in slide content area
 # Speaker Notes
 <!-- section: display -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - Press 'n' to toggle the notes panel
 - Notes appear at the bottom of the screen
@@ -553,6 +579,7 @@ TALKING POINTS:
 # Timing
 <!-- section: display -->
 <!-- timing: 2.0 -->
+<!-- font_size: 6 -->
 
 - This slide has 2.0 minute timing set
 - Timer starts on first slide navigation
@@ -570,6 +597,7 @@ VERIFY: Timer counts up in status bar after navigating slides
 # Theme Switching
 <!-- section: display -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - Use `:theme <slug>` to switch themes live
 - Try: `:theme dracula` or `:theme cyberpunk`
@@ -587,6 +615,7 @@ VERIFY: Colors change after :theme command, no rendering artifacts
 # Scale Adjustment
 <!-- section: display -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 - Press + to increase content scale
 - Press - to decrease content scale
@@ -604,6 +633,7 @@ VERIFY: Content area widens/narrows, margins adjust symmetrically
 # Scroll Test: Bullets
 <!-- section: scrolling -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 This slide has enough content to require scrolling. Use j/k or arrow keys.
 
@@ -654,6 +684,7 @@ TALKING POINTS:
 # Scroll Test: Code + Bullets + Quotes
 <!-- section: scrolling -->
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 
 Mixed content that requires scrolling through different element types.
 
@@ -723,6 +754,7 @@ TALKING POINTS:
 # Summary Checklist
 <!-- section: final -->
 <!-- timing: 1.0 -->
+<!-- font_size: 6 -->
 
 All features tested across 32 slides:
 

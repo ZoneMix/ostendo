@@ -6,6 +6,7 @@ theme: frost_glass
 # Ostendo
 <!-- section: intro -->
 <!-- timing: 1.0 -->
+<!-- font_size: 6 -->
 <!-- ascii_title -->
 
 AI-native terminal presentations from markdown
@@ -20,6 +21,7 @@ Press 'n' to toggle these speaker notes on/off.
 
 # What is Ostendo?
 <!-- timing: 2.0 -->
+<!-- font_size: 6 -->
 
 A Rust-powered presentation tool that renders **beautiful slide decks** directly in your terminal.
 
@@ -40,6 +42,7 @@ A Rust-powered presentation tool that renders **beautiful slide decks** directly
 # Image: Auto Protocol
 <!-- section: images -->
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 Ostendo auto-detects the best image protocol for your terminal.
 
@@ -52,6 +55,7 @@ Ostendo auto-detects the best image protocol for your terminal.
 
 # Image: ASCII Art
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 Pure ASCII character rendering with `<!-- image_render: ascii -->` -- the universal fallback.
 
@@ -65,6 +69,7 @@ Pure ASCII character rendering with `<!-- image_render: ascii -->` -- the univer
 
 # Image: Scaled
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 Control image size with `<!-- image_scale: N -->` (1-100):
 
@@ -80,6 +85,7 @@ Control image size with `<!-- image_scale: N -->` (1-100):
 # Code Execution
 <!-- section: code -->
 <!-- timing: 2.0 -->
+<!-- font_size: 6 -->
 
 Mark code blocks with `+exec` and press **Ctrl+E** to run:
 
@@ -104,6 +110,7 @@ print(json.dumps(features, indent=2))
 
 # Multi-Language Highlighting
 <!-- timing: 2.0 -->
+<!-- font_size: 6 -->
 
 Syntax highlighting via syntect supports 30+ languages:
 
@@ -132,6 +139,7 @@ done
 
 # Executable Bash
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 ```bash +exec {label: "system info"}
 echo "Date:     $(date '+%Y-%m-%d %H:%M:%S')"
@@ -148,6 +156,7 @@ echo "Rust:     $(rustc --version 2>/dev/null || echo 'not found')"
 # Column Layouts
 <!-- section: layouts -->
 <!-- timing: 2.0 -->
+<!-- font_size: 6 -->
 
 Use `<!-- column_layout: [ratio, ratio] -->` for side-by-side content:
 
@@ -178,6 +187,7 @@ Use `<!-- column_layout: [ratio, ratio] -->` for side-by-side content:
 
 # Columns + Code
 <!-- timing: 2.0 -->
+<!-- font_size: 6 -->
 
 Columns can contain code blocks too:
 
@@ -212,6 +222,7 @@ cursor.execute(query, (user_id,))
 
 # Weighted Columns
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 Adjust ratios for asymmetric layouts with `[2, 1]`:
 
@@ -239,6 +250,7 @@ Adjust ratios for asymmetric layouts with `[2, 1]`:
 # Data Tables
 <!-- section: tables -->
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 Standard markdown pipe tables with column alignment:
 
@@ -256,6 +268,7 @@ Standard markdown pipe tables with column alignment:
 # Block Quotes
 <!-- section: formatting -->
 <!-- timing: 1.0 -->
+<!-- font_size: 6 -->
 
 Use `>` for callouts and emphasis:
 
@@ -270,6 +283,7 @@ Use `>` for callouts and emphasis:
 
 # Inline Formatting
 <!-- timing: 1.0 -->
+<!-- font_size: 6 -->
 
 All standard markdown inline styles work in bullets, subtitles, and quotes:
 
@@ -288,6 +302,7 @@ All standard markdown inline styles work in bullets, subtitles, and quotes:
 # Content Scaling
 <!-- section: display -->
 <!-- timing: 1.0 -->
+<!-- font_size: 6 -->
 
 Press `+` and `-` to scale content width in real-time.
 
@@ -305,6 +320,7 @@ Press `+` and `-` to scale content width in real-time.
 # Image + Table
 <!-- section: images -->
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 ![Opus Logo](../../images/opus.png)
 <!-- image_scale: 40 -->
@@ -323,6 +339,7 @@ Press `+` and `-` to scale content width in real-time.
 # Theme Showcase
 <!-- section: meta -->
 <!-- timing: 2.0 -->
+<!-- font_size: 6 -->
 
 Switch themes live with `:theme <slug>` -- try these:
 
@@ -348,6 +365,7 @@ All 20 themes are available - run ostendo --list-themes to see them all.
 # Navigation Cheatsheet
 <!-- section: reference -->
 <!-- timing: 1.5 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [1, 1] -->
 <!-- column: 0 -->
@@ -380,6 +398,7 @@ All 20 themes are available - run ostendo --list-themes to see them all.
 # Built with Opus
 <!-- section: closing -->
 <!-- timing: 1.0 -->
+<!-- font_size: 6 -->
 
 ![Built with Claude Opus 4.6](../../images/opus.png)
 <!-- image_scale: 40 -->
@@ -392,6 +411,7 @@ All 20 themes are available - run ostendo --list-themes to see them all.
 
 # Thank You
 <!-- timing: 0.5 -->
+<!-- font_size: 6 -->
 <!-- ascii_title -->
 
 - See `AGENTS.md` to have AI build presentations for you

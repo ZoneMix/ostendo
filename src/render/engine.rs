@@ -126,6 +126,9 @@ pub struct Presenter {
     original_font_size: Option<String>,
     file_watcher: Option<crate::watch::FileWatcher>,
     presentation_path: PathBuf,
+    // Font change deferred until inside BeginSynchronizedUpdate
+    pending_font_size: Option<f64>,
+    last_applied_font_size: Option<f64>,
     // Smart redraw tracking
     last_rendered_slide: Option<usize>,
     last_rendered_scroll: usize,
@@ -252,6 +255,8 @@ impl Presenter {
             last_rendered_image_scale: 0,
             needs_full_redraw: true,
             image_scale_offset: 0,
+            pending_font_size: None,
+            last_applied_font_size: None,
         }
     }
 
@@ -313,9 +318,14 @@ impl Presenter {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
         crossterm::execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide, EnableMouseCapture)?;
+        // Set terminal default background to theme bg so cells created by
+        // font-change resizes inherit the correct color (no black flicker).
+        Self::set_terminal_bg(self.bg_color);
 
         let result = self.event_loop();
 
+        // Restore terminal default background before leaving alternate screen
+        Self::reset_terminal_bg();
         self.reset_font_size();
         crossterm::execute!(stdout, DisableMouseCapture, cursor::Show, terminal::LeaveAlternateScreen)?;
         terminal::disable_raw_mode()?;
@@ -572,7 +582,7 @@ impl Presenter {
                 let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
                 if cur < 20 {
                     self.slide_font_offsets.insert(self.current, cur + 1);
-                    self.adjust_font_size(2);
+                    self.apply_slide_font();
                     self.needs_full_redraw = true;
                     self.save_state();
                 }
@@ -581,17 +591,15 @@ impl Presenter {
                 let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
                 if cur > -20 {
                     self.slide_font_offsets.insert(self.current, cur - 1);
-                    self.adjust_font_size(-2);
+                    self.apply_slide_font();
                     self.needs_full_redraw = true;
                     self.save_state();
                 }
             }
             KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER) => {
-                if self.font_capability == FontSizeCapability::KittyRemote {
-                    self.reset_font_size();
-                }
                 self.slide_font_offsets.remove(&self.current);
+                self.apply_slide_font();
                 self.needs_full_redraw = true;
                 self.save_state();
             }
@@ -647,6 +655,7 @@ impl Presenter {
                         self.text_color = hex_to_color(&new_theme.colors.text).unwrap_or(Color::White);
                         self.code_bg_color = hex_to_color(&new_theme.colors.code_background).unwrap_or(Color::DarkGrey);
                         self.help_badge_bg = ensure_badge_contrast(self.code_bg_color, self.bg_color);
+                        Self::set_terminal_bg(self.bg_color);
                         self.theme = new_theme;
                         self.needs_full_redraw = true;
                     }
@@ -701,29 +710,6 @@ impl Presenter {
         }
     }
 
-    fn kitty_font_size_relative(&self, delta: f64, op: &str) {
-        if self.font_capability != FontSizeCapability::KittyRemote {
-            return;
-        }
-        let json = format!(
-            r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1},"increment_op":"{}"}}}}"#,
-            delta.abs(), op
-        );
-        let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-        let _ = std::io::Write::write_all(&mut std::io::stdout(), esc.as_bytes());
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-    }
-
-    /// Adjust terminal font size by a relative amount (Kitty only).
-    /// Positive delta = bigger, negative = smaller. Each step is 2pt.
-    fn adjust_font_size(&self, delta: i32) {
-        if delta >= 0 {
-            self.kitty_font_size_relative(delta as f64, "+");
-        } else {
-            self.kitty_font_size_relative((-delta) as f64, "-");
-        }
-    }
-
     /// Query Kitty's current font size at startup so we can restore it on exit.
     /// Tries `kitten @ get-font-size` first, then falls back to reading kitty.conf.
     fn query_kitty_font_size() -> Option<String> {
@@ -775,22 +761,43 @@ impl Presenter {
         }
     }
 
-    /// Apply the font offset for the current slide in a single font change.
-    /// Not flushed immediately — piggybacks on render_frame() flush so the
-    /// font change and new content appear together, avoiding flicker.
-    fn apply_slide_font(&self) {
+    /// Set the terminal's default background color via OSC 11.
+    /// This ensures any new cells created by terminal resizes (from font
+    /// changes) inherit the theme bg instead of the terminal's default black.
+    fn set_terminal_bg(color: Color) {
+        if let Color::Rgb { r, g, b } = color {
+            let esc = format!("\x1b]11;rgb:{:02x}/{:02x}/{:02x}\x1b\\", r, g, b);
+            let _ = std::io::Write::write_all(&mut io::stdout(), esc.as_bytes());
+            let _ = std::io::Write::flush(&mut io::stdout());
+        }
+    }
+
+    /// Reset the terminal's default background color to its original value.
+    fn reset_terminal_bg() {
+        // OSC 111 resets to the terminal's configured default
+        let _ = std::io::Write::write_all(&mut io::stdout(), b"\x1b]111\x1b\\");
+        let _ = std::io::Write::flush(&mut io::stdout());
+    }
+
+    /// Compute the font size for the current slide and store it as pending.
+    /// The actual escape sequence is written inside render_frame()'s
+    /// BeginSynchronizedUpdate block so the font change and content arrive
+    /// atomically, preventing flicker.
+    fn apply_slide_font(&mut self) {
         if self.font_capability != FontSizeCapability::KittyRemote {
             return;
         }
         let offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
-        if let Some(ref orig) = self.original_font_size {
+        let target = if let Some(ref orig) = self.original_font_size {
             if let Ok(base) = orig.parse::<f64>() {
-                let target = base + (offset as f64 * 2.0);
-                self.kitty_font_size_absolute(target, false);
-                return;
+                base + (offset as f64 * 2.0)
+            } else {
+                0.0
             }
-        }
-        self.kitty_font_size_absolute(0.0, false);
+        } else {
+            0.0
+        };
+        self.pending_font_size = Some(target);
     }
 
     fn next_slide(&mut self) {
@@ -955,8 +962,70 @@ impl Presenter {
     // ── Rendering (buffered – no flicker) ──────────────────────────
 
     fn render_frame(&mut self) -> Result<()> {
+        // If font size is changing, apply it before rendering and re-query
+        // dimensions.  The ioctl(TIOCGWINSZ) returns the new size
+        // synchronously after Kitty processes the font change, so we don't
+        // need to sleep or wait for SIGWINCH.  We also drain any resize
+        // events already queued so the event loop doesn't re-render again.
+        let font_changing = if let Some(target) = self.pending_font_size.take() {
+            if self.last_applied_font_size != Some(target) {
+                Some(target)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Font change BEFORE the sync block: we must clear the screen and
+        // flush it to the terminal so it is *visually* blank before Kitty
+        // processes the font-size RC command.  Kitty's set_font_size is
+        // out-of-band — it triggers an immediate terminal resize.  If old
+        // content is still visible, it re-wraps at the new (narrower)
+        // dimensions, producing a visible "jump".  By clearing first, there
+        // is nothing to reflow.
+        if let Some(target) = font_changing {
+            let stdout = io::stdout();
+            let mut pre = BufWriter::with_capacity(256 * 1024, stdout.lock());
+            // Clear screen — visually blank the terminal
+            queue!(pre, SetBackgroundColor(self.bg_color))?;
+            for row in 0..self.height {
+                queue!(pre, cursor::MoveTo(0, row))?;
+                write!(pre, "{}", " ".repeat(self.width as usize))?;
+            }
+            // Flush the clear so it is actually displayed
+            pre.flush()?;
+
+            // Now send the font change — screen is visually blank, so
+            // the resize won't cause any content reflow
+            let json = format!(
+                r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                target
+            );
+            let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+            pre.write_all(esc.as_bytes())?;
+            pre.flush()?;
+            drop(pre);
+
+            self.last_applied_font_size = Some(target);
+            // Brief pause for Kitty to process + drain resize events
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            while event::poll(std::time::Duration::from_millis(20))? {
+                if let Event::Resize(w2, h2) = event::read()? {
+                    self.width = w2;
+                    self.height = h2;
+                } else {
+                    break;
+                }
+            }
+            self.window_size = WindowSize::query();
+            self.width = self.window_size.columns;
+            self.height = self.window_size.rows;
+            self.needs_full_redraw = true;
+        }
+
         let stdout = io::stdout();
-        let mut w = BufWriter::new(stdout.lock());
+        let mut w = BufWriter::with_capacity(256 * 1024, stdout.lock());
         queue!(w, BeginSynchronizedUpdate)?;
 
         match self.mode {
@@ -1872,6 +1941,11 @@ impl Presenter {
     fn render_help_buf(&self, w: &mut impl Write) -> Result<()> {
         let tw = self.width as usize;
         let th = self.height as usize;
+
+        // Clear any Kitty images so they don't show through the help overlay
+        if self.image_protocol == ImageProtocol::Kitty {
+            write!(w, "\x1b_Ga=d,d=a,q=2\x1b\\")?;
+        }
 
         // Fill background for all rows
         for row in 0..th {
