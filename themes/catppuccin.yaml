@@ -1,0 +1,13 @@
+name: "Catppuccin"
+slug: "catppuccin"
+colors:
+  background: "#1e1e2e"
+  accent: "#cba6f7"
+  text: "#cdd6f4"
+  code_background: "#313244"
+fonts:
+  heading: "Inter"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "center"
+visual_style: "glass"

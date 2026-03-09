@@ -1,0 +1,13 @@
+name: "Amber Warning"
+slug: "amber_warning"
+colors:
+  background: "#0D0D0D"
+  accent: "#FFB000"
+  text: "#E0E0E0"
+  code_background: "#252525"
+fonts:
+  heading: "Cascadia Code"
+  body: "Cascadia Code"
+  code: "Cascadia Code"
+layout: "left"
+visual_style: "bold"

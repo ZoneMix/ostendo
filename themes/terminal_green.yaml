@@ -1,0 +1,13 @@
+name: "Terminal Green"
+slug: "terminal_green"
+colors:
+  background: "#0D0D0D"
+  accent: "#00FF88"
+  text: "#E0E0E0"
+  code_background: "#252525"
+fonts:
+  heading: "JetBrains Mono"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "left"
+visual_style: "bold"

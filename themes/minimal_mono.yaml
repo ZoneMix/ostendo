@@ -1,0 +1,13 @@
+name: "Minimal Mono"
+slug: "minimal_mono"
+colors:
+  background: "#FFFFFF"
+  accent: "#E63946"
+  text: "#1A1A1A"
+  code_background: "#E5E5E5"
+fonts:
+  heading: "JetBrains Mono"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "left"
+visual_style: "minimal"

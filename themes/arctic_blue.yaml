@@ -1,0 +1,13 @@
+name: "Arctic Blue"
+slug: "arctic_blue"
+colors:
+  background: "#0A0E17"
+  accent: "#00D4FF"
+  text: "#E0E0E0"
+  code_background: "#22262E"
+fonts:
+  heading: "Fira Code"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "left"
+visual_style: "glass"

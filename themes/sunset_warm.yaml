@@ -1,0 +1,13 @@
+name: "Sunset Warm"
+slug: "sunset_warm"
+colors:
+  background: "#1A0A0A"
+  accent: "#FF6B35"
+  text: "#E0E0E0"
+  code_background: "#302222"
+fonts:
+  heading: "Helvetica"
+  body: "Source Code Pro"
+  code: "Source Code Pro"
+layout: "split"
+visual_style: "gradient"

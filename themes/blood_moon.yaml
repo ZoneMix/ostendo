@@ -1,0 +1,13 @@
+name: "Blood Moon"
+slug: "blood_moon"
+colors:
+  background: "#1a0000"
+  accent: "#cc0000"
+  text: "#e0c0c0"
+  code_background: "#331C1C"
+fonts:
+  heading: "Inter"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "left"
+visual_style: "bold"

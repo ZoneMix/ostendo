@@ -1,0 +1,13 @@
+name: "Nord"
+slug: "nord"
+colors:
+  background: "#2e3440"
+  accent: "#88c0d0"
+  text: "#d8dee9"
+  code_background: "#3b4252"
+fonts:
+  heading: "Inter"
+  body: "Source Code Pro"
+  code: "Source Code Pro"
+layout: "left"
+visual_style: "minimal"

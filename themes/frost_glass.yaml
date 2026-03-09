@@ -1,0 +1,13 @@
+name: "Frost Glass"
+slug: "frost_glass"
+colors:
+  background: "#0f172a"
+  accent: "#38bdf8"
+  text: "#e2e8f0"
+  code_background: "#1e293b"
+fonts:
+  heading: "Inter"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "center"
+visual_style: "glass"

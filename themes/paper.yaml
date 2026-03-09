@@ -1,0 +1,13 @@
+name: "Paper"
+slug: "paper"
+colors:
+  background: "#faf8f5"
+  accent: "#6b4c3b"
+  text: "#2c2c2c"
+  code_background: "#E1DFDC"
+fonts:
+  heading: "Georgia"
+  body: "Source Code Pro"
+  code: "Source Code Pro"
+layout: "left"
+visual_style: "minimal"

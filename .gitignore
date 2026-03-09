@@ -1,0 +1,6 @@
+/target
+*.DS_Store
+.ostendo-state.*.json
+
+# Custom presentations (not distributed)
+presentations/dakotacon-2026/

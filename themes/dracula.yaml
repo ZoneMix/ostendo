@@ -1,0 +1,13 @@
+name: "Dracula"
+slug: "dracula"
+colors:
+  background: "#282a36"
+  accent: "#bd93f9"
+  text: "#f8f8f2"
+  code_background: "#44475a"
+fonts:
+  heading: "Inter"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "left"
+visual_style: "minimal"

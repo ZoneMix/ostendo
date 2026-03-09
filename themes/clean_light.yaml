@@ -1,0 +1,13 @@
+name: "Clean Light"
+slug: "clean_light"
+colors:
+  background: "#F5F5F0"
+  accent: "#2563EB"
+  text: "#1A1A1A"
+  code_background: "#DCDCD8"
+fonts:
+  heading: "Inter"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "center"
+visual_style: "minimal"

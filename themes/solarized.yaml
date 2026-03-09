@@ -1,0 +1,13 @@
+name: "Solarized"
+slug: "solarized"
+colors:
+  background: "#002b36"
+  accent: "#b58900"
+  text: "#839496"
+  code_background: "#163E48"
+fonts:
+  heading: "Source Code Pro"
+  body: "Source Code Pro"
+  code: "Source Code Pro"
+layout: "left"
+visual_style: "minimal"

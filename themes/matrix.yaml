@@ -1,0 +1,13 @@
+name: "Matrix"
+slug: "matrix"
+colors:
+  background: "#000000"
+  accent: "#00ff41"
+  text: "#33FF66"
+  code_background: "#1E1E1E"
+fonts:
+  heading: "JetBrains Mono"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "left"
+visual_style: "bold"

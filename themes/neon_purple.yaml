@@ -1,0 +1,13 @@
+name: "Neon Purple"
+slug: "neon_purple"
+colors:
+  background: "#13111C"
+  accent: "#A855F7"
+  text: "#E0E0E0"
+  code_background: "#282630"
+fonts:
+  heading: "Source Code Pro"
+  body: "Source Code Pro"
+  code: "Source Code Pro"
+layout: "center"
+visual_style: "gradient"

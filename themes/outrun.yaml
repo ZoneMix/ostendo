@@ -1,0 +1,13 @@
+name: "Outrun"
+slug: "outrun"
+colors:
+  background: "#1a0a2e"
+  accent: "#ff2975"
+  text: "#e0d0ff"
+  code_background: "#302242"
+fonts:
+  heading: "Space Mono"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "center"
+visual_style: "gradient"

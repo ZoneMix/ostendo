@@ -1,0 +1,40 @@
+[package]
+name = "ostendo"
+version = "0.1.0"
+edition = "2021"
+description = "AI-native terminal presentation tool — markdown to slides in your terminal"
+license = "GPL-3.0-only"
+repository = "https://github.com/ZoneMix/ostendo"
+
+[[bin]]
+name = "ostendo"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+comrak = { version = "0.34", default-features = false }
+crossterm = "0.28"
+dirs = "6"
+figlet-rs = "0.1"
+icy_sixel = "0.1"
+image = "0.25"
+indexmap = { version = "2", features = ["serde"] }
+portable-pty = "0.8"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+syntect = "5"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+unicode-width = "0.2"
+resvg = "0.47.0"
+
+[profile.release]
+opt-level = 3
+lto = true
