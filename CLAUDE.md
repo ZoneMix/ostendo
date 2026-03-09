@@ -4,7 +4,7 @@
 
 ```bash
 cargo build --release          # Release build
-cargo test                     # Run all tests (99 tests)
+cargo test                     # Run all tests (115 tests)
 cargo run --release -- --validate presentations/examples/test_presentation.md  # Validate presentation
 ```
 
@@ -13,7 +13,7 @@ cargo run --release -- --validate presentations/examples/test_presentation.md  #
 ```
 src/
   main.rs              # CLI (clap), entry point
-  render/engine.rs     # Core renderer, event loop, Presenter struct (~1700 lines)
+  render/engine.rs     # Core renderer, event loop, Presenter struct (~2800 lines)
   render/layout.rs     # WindowSize, terminal dimensions
   render/text.rs       # StyledLine/StyledSpan (virtual buffer)
   render/progress.rs   # Progress bar rendering
@@ -57,7 +57,7 @@ src/
 
 ## Test Presentation
 
-`presentations/examples/test_presentation.md` has 32 slides testing every feature. Each slide's speaker notes contain:
+`presentations/examples/test_presentation.md` has 99 slides testing every feature. Each slide's speaker notes contain:
 ```
 FEATURE: [name]
 EXPECTED: [expected visual]
@@ -106,3 +106,24 @@ Use `AGENTS.md` feedback format: `Slide N - [Feature]: PASS/FAIL - [description]
 - [x] Feature 8a: HTML export (self-contained, themed)
 - [x] Feature 8b: PDF export via headless Chrome/wkhtmltopdf
 - [x] Tests + verification
+
+## v0.2.1 Fixes & Enhancements
+
+- [x] Dissolve transition: per-character jumbling with random symbols
+- [x] Matrix animation: top-to-bottom rain with ASCII chars, full-width
+- [x] Bounce animation: ball overlays all content, full-width
+- [x] New loop animations: sparkle (twinkling stars), spin (ASCII ramp cycling)
+- [x] Multi-block code execution: Ctrl+E cycles through executable blocks per slide
+- [x] Column code blocks show +exec badge
+- [x] Per-slide footer bar at bottom of screen (not in top status bar)
+- [x] Footer alignment: `<!-- footer_align: left|center|right -->`
+- [x] Image scroll fix: proper viewport bounds check for protocol images
+- [x] Kitty image clear on scroll offset change
+- [x] PDF export fix: flex-direction column in @media print CSS
+- [x] Image scale caching: removed unnecessary cache clear on > < keys
+- [x] FIGlet + sparkle/spin/matrix/bounce/pulse animation combinations
+- [x] ASCII art image + sparkle/spin animation combinations
+- [x] Image color override: `<!-- image_color: #hex -->`
+- [x] Alignment variants: vcenter, hcenter (in addition to center/top)
+- [x] Auto-wrap code execution for Rust/Go/C (no main function needed)
+- [x] 99-slide test presentation covering every feature
