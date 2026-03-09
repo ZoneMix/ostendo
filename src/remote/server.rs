@@ -63,11 +63,14 @@ async fn handle_connection(
         let origin_ok = if let Some(origin_line) = request.lines()
             .find(|l| l.to_lowercase().starts_with("origin:"))
         {
-            let origin = origin_line.splitn(2, ':').nth(1).unwrap_or("").trim();
-            origin.is_empty()
-                || origin.contains("127.0.0.1")
-                || origin.contains("localhost")
-                || origin.starts_with("file://")
+            let origin = origin_line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            if origin.is_empty() || origin.starts_with("file://") {
+                true
+            } else if let Ok(url) = url::Url::parse(origin) {
+                matches!(url.host_str(), Some("127.0.0.1") | Some("localhost"))
+            } else {
+                false
+            }
         } else {
             true // No Origin header = non-browser client, allow
         };
@@ -144,6 +147,10 @@ async fn handle_websocket(
     while let Some(Ok(msg)) = ws_stream_rx.next().await {
         match msg {
             Message::Text(text) => {
+                // Drop oversized messages to prevent OOM from malicious clients
+                if text.len() > 4096 {
+                    continue;
+                }
                 if let Ok(cmd_msg) = serde_json::from_str::<RemoteCommandMsg>(&text) {
                     if cmd_msg.msg_type == "command" {
                         let command = match cmd_msg.action.as_str() {

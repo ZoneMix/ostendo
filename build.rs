@@ -25,9 +25,12 @@ fn main() {
 
     let mut code = String::from("pub const BUILTIN_THEMES: &[(&str, &str)] = &[\n");
     for (stem, rel) in &entries {
+        // Use forward slashes for include_str! paths — works on all platforms
+        // and avoids backslash escape interpretation on Windows
+        let rel_fwd = rel.replace('\\', "/");
         code.push_str(&format!(
             "    (\"{}\", include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{}\"))),\n",
-            stem, rel
+            stem, rel_fwd
         ));
     }
     code.push_str("];\n");

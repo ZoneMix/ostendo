@@ -68,6 +68,9 @@ pub fn scale_image_pixels(
     max_rows: usize,
 ) -> (RgbaImage, usize, usize) {
     let (iw, ih) = img.dimensions();
+    if iw == 0 || ih == 0 {
+        return (RgbaImage::new(1, 1), 1, 1);
+    }
     let aspect_ratio = ih as f64 / iw as f64;
 
     let ppc = window.pixels_per_column();

@@ -5,6 +5,8 @@ use std::time::Duration;
 
 /// Maximum code length allowed for execution (64 KB).
 const MAX_CODE_LENGTH: usize = 64 * 1024;
+/// Maximum output size allowed from execution (1 MB).
+const MAX_OUTPUT_SIZE: usize = 1024 * 1024;
 /// Default execution timeout in seconds.
 const EXEC_TIMEOUT_SECS: u64 = 30;
 
@@ -111,14 +113,10 @@ fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Pa
         match child.try_wait() {
             Ok(Some(_status)) => {
                 let stdout = child.stdout.take().map(|mut s| {
-                    let mut buf = String::new();
-                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                    buf
+                    read_limited(&mut s, MAX_OUTPUT_SIZE)
                 }).unwrap_or_default();
                 let stderr = child.stderr.take().map(|mut s| {
-                    let mut buf = String::new();
-                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                    buf
+                    read_limited(&mut s, MAX_OUTPUT_SIZE)
                 }).unwrap_or_default();
                 return Ok(ExecutionResult {
                     stdout,
@@ -139,4 +137,29 @@ fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Pa
             Err(e) => bail!("Failed to wait for process: {}", e),
         }
     }
+}
+
+/// Read from a stream up to `limit` bytes, returning as a String.
+/// If the output exceeds the limit, it is truncated with a message.
+fn read_limited(reader: &mut impl std::io::Read, limit: usize) -> String {
+    let mut buf = vec![0u8; limit + 1];
+    let mut total = 0;
+    loop {
+        match reader.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                total += n;
+                if total > limit {
+                    total = limit;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let mut s = String::from_utf8_lossy(&buf[..total]).into_owned();
+    if total == limit {
+        s.push_str("\n[output truncated at 1MB]");
+    }
+    s
 }

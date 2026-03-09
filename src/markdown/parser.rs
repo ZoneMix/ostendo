@@ -470,9 +470,16 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     (slide, current_section)
 }
 
+/// Maximum number of slides allowed in a presentation.
+const MAX_SLIDES: usize = 10_000;
+
 pub fn parse_presentation(source: &str, base_dir: Option<&Path>) -> Result<Vec<Slide>> {
     // Split on --- separators
     let blocks: Vec<&str> = SLIDE_SEPARATOR_RE.split(source).collect();
+
+    if blocks.len() > MAX_SLIDES + 2 {
+        anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
+    }
 
     let (_meta, slide_blocks) = if blocks.len() >= 3 && blocks[0].trim().is_empty() {
         // First block empty = file starts with ---, second is front matter

@@ -21,6 +21,47 @@ use crate::terminal::protocols::{self, ImageProtocol, FontSizeCapability};
 use crate::theme::colors::{hex_to_color, ensure_badge_contrast};
 use crate::theme::Theme;
 
+/// Strip terminal control characters from a string to prevent escape sequence injection.
+/// Preserves printable characters, spaces, and tabs. Removes ANSI escape sequences,
+/// and control characters (0x00-0x1F except \t, 0x7F).
+fn strip_control_chars(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1B' {
+            // Skip ANSI escape sequence: ESC followed by [ ... final byte
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() || next == '~' {
+                        break;
+                    }
+                }
+            }
+            // Also skip ESC ] (OSC) sequences terminated by BEL or ST
+            else if chars.peek() == Some(&']') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next == '\x07' {
+                        break;
+                    }
+                    if next == '\x1B' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if c == '\t' || (c >= ' ' && c != '\x7F') {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Get comment prefix for a programming language (used in code block labels).
 fn comment_prefix_for(lang: &str) -> &'static str {
     match lang {
@@ -1410,10 +1451,11 @@ impl Presenter {
             oh.push(StyledSpan::new("  Output:").with_fg(self.accent_color).bold());
             lines.push(oh);
             for ol in output.lines() {
+                let sanitized = strip_control_chars(ol);
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(pad));
                 line.push(StyledSpan::new("  "));
-                line.push(StyledSpan::new(ol).with_fg(self.text_color));
+                line.push(StyledSpan::new(&sanitized).with_fg(self.text_color));
                 lines.push(line);
             }
         }
