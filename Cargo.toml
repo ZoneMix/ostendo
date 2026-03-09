@@ -14,23 +14,23 @@ path = "src/main.rs"
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
-comrak = { version = "0.34", default-features = false }
-crossterm = "0.28"
+comrak = { version = "0.50", default-features = false }
+crossterm = "0.29"
 dirs = "6"
 figlet-rs = "0.1"
 icy_sixel = "0.1"
 image = "0.25"
 indexmap = { version = "2", features = ["serde"] }
-portable-pty = "0.8"
+portable-pty = "0.9"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+serde_yml = "0.0.12"
 syntect = "5"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.28"
 futures-util = "0.3"
 unicode-width = "0.2"
 url = "2"

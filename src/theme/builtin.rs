@@ -6,7 +6,7 @@ pub fn load_builtin_themes() -> Vec<Theme> {
     BUILTIN_THEMES
         .iter()
         .filter_map(|(slug, yaml)| {
-            let mut theme: Theme = serde_yaml::from_str(yaml).ok()?;
+            let mut theme: Theme = serde_yml::from_str(yaml).ok()?;
             if theme.slug.is_empty() {
                 theme.slug = slug.to_string();
             }
