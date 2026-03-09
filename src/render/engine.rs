@@ -993,10 +993,17 @@ impl Presenter {
             let stdout = io::stdout();
             let mut pre = stdout.lock();
 
-            if increasing && (target - current).abs() > 0.6 {
-                // Animate in 0.5pt steps — each is ~1 col of reflow, smooth
-                let step = 0.5_f64;
-                let num_steps = ((target - current) / step).ceil() as usize;
+            // Clear Kitty images before animation so stale overlays don't
+            // persist at the old size through the font transition
+            if self.image_protocol == ImageProtocol::Kitty {
+                pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
+                pre.flush()?;
+            }
+
+            if increasing && (target - current).abs() > 0.3 {
+                // Animate in 0.2pt steps for a smoother zoom effect
+                let step = 0.2_f64;
+                let num_steps = ((target - current) / step).round() as usize;
                 for i in 1..num_steps {
                     let intermediate = current + step * i as f64;
                     let json = format!(
@@ -1006,7 +1013,7 @@ impl Presenter {
                     let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
                     pre.write_all(esc.as_bytes())?;
                     pre.flush()?;
-                    std::thread::sleep(std::time::Duration::from_millis(12));
+                    std::thread::sleep(std::time::Duration::from_millis(8));
                 }
             }
 
