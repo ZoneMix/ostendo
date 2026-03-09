@@ -1,0 +1,14 @@
+name: "Terminal Green Light"
+slug: "terminal_green_light"
+colors:
+  background: "#F0F4F0"
+  accent: "#0A7B3E"
+  text: "#1A1A1A"
+  code_background: "#D8E0D8"
+fonts:
+  heading: "JetBrains Mono"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "left"
+visual_style: "bold"
+dark_variant: "terminal_green"

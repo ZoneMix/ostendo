@@ -1,4 +1,37 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Alignment for the per-slide footer bar.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FooterAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// Alignment for slide content.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum SlideAlignment {
+    #[default]
+    Top,
+    Center,
+    VCenter,
+    HCenter,
+}
+
+/// Metadata extracted from front matter (the YAML block between `---` delimiters).
+#[derive(Debug, Clone, Default)]
+pub struct PresentationMeta {
+    pub title: String,
+    pub author: String,
+    pub date: String,
+    pub accent: String,
+    pub default_alignment: Option<SlideAlignment>,
+    pub transition: String,
+    /// Raw key-value pairs from front matter for forward-compatibility.
+    pub pairs: Vec<(String, String)>,
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -17,6 +50,15 @@ pub struct Slide {
     pub tables: Vec<Table>,
     pub block_quotes: Vec<BlockQuote>,
     pub font_size: Option<u8>,
+    pub footer: Option<String>,
+    pub footer_align: FooterAlign,
+    pub alignment: Option<SlideAlignment>,
+    pub title_decoration: Option<String>,
+    pub transition: Option<String>,
+    pub entrance_animation: Option<String>,
+    pub loop_animation: Option<String>,
+    pub code_preambles: HashMap<String, String>,
+    pub mermaid_blocks: Vec<MermaidBlock>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +141,12 @@ pub struct BlockQuote {
     pub lines: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct MermaidBlock {
+    pub source: String,
+}
+
 impl Default for Slide {
     fn default() -> Self {
         Self {
@@ -116,6 +164,15 @@ impl Default for Slide {
             tables: Vec::new(),
             block_quotes: Vec::new(),
             font_size: None,
+            footer: None,
+            footer_align: FooterAlign::Left,
+            alignment: None,
+            title_decoration: None,
+            transition: None,
+            entrance_animation: None,
+            loop_animation: None,
+            code_preambles: HashMap::new(),
+            mermaid_blocks: Vec::new(),
         }
     }
 }

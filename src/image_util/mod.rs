@@ -1,4 +1,5 @@
 pub mod render;
+pub mod mermaid;
 
 use anyhow::Result;
 use image::RgbaImage;

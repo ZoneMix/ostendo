@@ -1,0 +1,14 @@
+name: "Dracula Light"
+slug: "dracula_light"
+colors:
+  background: "#F8F8F2"
+  accent: "#7C3AED"
+  text: "#282A36"
+  code_background: "#D8D8D0"
+fonts:
+  heading: "Inter"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "left"
+visual_style: "minimal"
+dark_variant: "dracula"

@@ -4,8 +4,9 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::presentation::{
-    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnLayout, ExecMode, ImagePosition,
-    ImageRenderMode, Slide, SlideImage, Table, TableAlign,
+    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnLayout, ExecMode, FooterAlign,
+    ImagePosition, ImageRenderMode, MermaidBlock, PresentationMeta, Slide, SlideAlignment,
+    SlideImage, Table, TableAlign,
 };
 
 static FENCE_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -58,9 +59,27 @@ static TABLE_SEP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)*\|\s*$").unwrap());
 static BLOCKQUOTE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^>\s?(.*)$").unwrap());
+static FOOTER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*footer:\s*(.*?)\s*-->").unwrap());
+static FOOTER_ALIGN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*footer_align:\s*(left|center|right)\s*-->").unwrap());
+static ALIGN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*align:\s*(top|center|vcenter|hcenter)\s*-->").unwrap());
+static TITLE_DECORATION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*title_decoration:\s*(underline|box|banner|none)\s*-->").unwrap());
+static TRANSITION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*transition:\s*(fade|slide|dissolve)\s*-->").unwrap());
+static ANIMATION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*animation:\s*(typewriter|fade_in|slide_down)\s*-->").unwrap());
+static LOOP_ANIMATION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*loop_animation:\s*(matrix|bounce|pulse|sparkle|spin)\s*-->").unwrap());
+static PREAMBLE_START_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*preamble_start:\s*(\w+)\s*-->").unwrap());
+static PREAMBLE_END_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*preamble_end\s*-->").unwrap());
 
-fn parse_front_matter(block: &str) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
+fn parse_front_matter(block: &str) -> PresentationMeta {
+    let mut meta = PresentationMeta::default();
     let kv_re = Regex::new(r"^(\w+)\s*:\s*(.+)$").unwrap();
     for line in block.lines() {
         let line = line.trim();
@@ -68,10 +87,29 @@ fn parse_front_matter(block: &str) -> Vec<(String, String)> {
             continue;
         }
         if let Some(caps) = kv_re.captures(line) {
-            pairs.push((caps[1].to_string(), caps[2].trim().to_string()));
+            let key = caps[1].to_string();
+            let val = caps[2].trim().trim_matches('"').to_string();
+            match key.as_str() {
+                "title" => meta.title = val.clone(),
+                "author" => meta.author = val.clone(),
+                "date" => meta.date = val.clone(),
+                "accent" => meta.accent = val.clone(),
+                "transition" => meta.transition = val.clone(),
+                "align" | "alignment" => {
+                    meta.default_alignment = match val.as_str() {
+                        "center" => Some(SlideAlignment::Center),
+                        "vcenter" => Some(SlideAlignment::VCenter),
+                        "hcenter" => Some(SlideAlignment::HCenter),
+                        "top" => Some(SlideAlignment::Top),
+                        _ => None,
+                    };
+                }
+                _ => {}
+            }
+            meta.pairs.push((key, val));
         }
     }
-    pairs
+    meta
 }
 
 struct TableParseState {
@@ -121,6 +159,17 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut image_color = String::new();
     let mut ascii_title = false;
     let mut font_size: Option<u8> = None;
+    let mut footer: Option<String> = None;
+    let mut footer_align = FooterAlign::Left;
+    let mut alignment: Option<SlideAlignment> = None;
+    let mut title_decoration: Option<String> = None;
+    let mut transition: Option<String> = None;
+    let mut entrance_animation: Option<String> = None;
+    let mut loop_animation: Option<String> = None;
+    let mut code_preambles: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut preamble_lang: Option<String> = None;
+    let mut preamble_lines: Vec<String> = Vec::new();
+    let mut mermaid_blocks: Vec<MermaidBlock> = Vec::new();
 
     let mut in_notes = false;
     let mut in_code = false;
@@ -156,18 +205,28 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         // Inside code block
         if in_code {
             if FENCE_CLOSE_RE.is_match(line) {
-                let block = CodeBlock {
-                    language: std::mem::take(&mut code_lang),
-                    code: code_lines.join("\n"),
-                    label: std::mem::take(&mut code_label),
-                    exec_mode: code_exec_mode.take(),
-                };
-                if let Some(col_idx) = current_column {
-                    if col_idx < column_contents.len() {
-                        column_contents[col_idx].code_blocks.push(block);
-                    }
+                if code_lang == "mermaid" {
+                    // Store as MermaidBlock instead of CodeBlock
+                    mermaid_blocks.push(MermaidBlock {
+                        source: code_lines.join("\n"),
+                    });
+                    code_lang.clear();
+                    code_label.clear();
+                    code_exec_mode = None;
                 } else {
-                    code_blocks.push(block);
+                    let block = CodeBlock {
+                        language: std::mem::take(&mut code_lang),
+                        code: code_lines.join("\n"),
+                        label: std::mem::take(&mut code_label),
+                        exec_mode: code_exec_mode.take(),
+                    };
+                    if let Some(col_idx) = current_column {
+                        if col_idx < column_contents.len() {
+                            column_contents[col_idx].code_blocks.push(block);
+                        }
+                    } else {
+                        code_blocks.push(block);
+                    }
                 }
                 in_code = false;
                 code_lines.clear();
@@ -211,6 +270,78 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         // Font size directive
         if let Some(caps) = FONT_SIZE_RE.captures(line) {
             font_size = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
+            continue;
+        }
+
+        // Footer directive
+        if let Some(caps) = FOOTER_RE.captures(line) {
+            footer = Some(caps[1].to_string());
+            continue;
+        }
+
+        // Footer alignment directive
+        if let Some(caps) = FOOTER_ALIGN_RE.captures(line) {
+            footer_align = match &caps[1] {
+                "center" => FooterAlign::Center,
+                "right" => FooterAlign::Right,
+                _ => FooterAlign::Left,
+            };
+            continue;
+        }
+
+        // Alignment directive
+        if let Some(caps) = ALIGN_RE.captures(line) {
+            alignment = match &caps[1] {
+                "center" => Some(SlideAlignment::Center),
+                "vcenter" => Some(SlideAlignment::VCenter),
+                "hcenter" => Some(SlideAlignment::HCenter),
+                "top" => Some(SlideAlignment::Top),
+                _ => None,
+            };
+            continue;
+        }
+
+        // Title decoration directive
+        if let Some(caps) = TITLE_DECORATION_RE.captures(line) {
+            title_decoration = Some(caps[1].to_string());
+            continue;
+        }
+
+        // Transition directive
+        if let Some(caps) = TRANSITION_RE.captures(line) {
+            transition = Some(caps[1].to_string());
+            continue;
+        }
+
+        // Entrance animation directive
+        if let Some(caps) = ANIMATION_RE.captures(line) {
+            entrance_animation = Some(caps[1].to_string());
+            continue;
+        }
+
+        // Loop animation directive
+        if let Some(caps) = LOOP_ANIMATION_RE.captures(line) {
+            loop_animation = Some(caps[1].to_string());
+            continue;
+        }
+
+        // Preamble start/end directives
+        if let Some(caps) = PREAMBLE_START_RE.captures(line) {
+            preamble_lang = Some(caps[1].to_string());
+            preamble_lines.clear();
+            continue;
+        }
+        if PREAMBLE_END_RE.is_match(line) {
+            if let Some(lang) = preamble_lang.take() {
+                code_preambles.insert(lang, preamble_lines.join("\n"));
+                preamble_lines.clear();
+            }
+            continue;
+        }
+        // Accumulate preamble content
+        if preamble_lang.is_some() {
+            // Lines between preamble_start and preamble_end are raw content (not HTML comments)
+            preamble_lines.push(line.to_string());
             continue;
         }
 
@@ -465,6 +596,15 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         tables,
         block_quotes,
         font_size,
+        footer,
+        footer_align,
+        alignment,
+        title_decoration,
+        transition,
+        entrance_animation,
+        loop_animation,
+        code_preambles,
+        mermaid_blocks,
     };
 
     (slide, current_section)
@@ -473,7 +613,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 /// Maximum number of slides allowed in a presentation.
 const MAX_SLIDES: usize = 10_000;
 
-pub fn parse_presentation(source: &str, base_dir: Option<&Path>) -> Result<Vec<Slide>> {
+pub fn parse_presentation(source: &str, base_dir: Option<&Path>) -> Result<(PresentationMeta, Vec<Slide>)> {
     // Split on --- separators
     let blocks: Vec<&str> = SLIDE_SEPARATOR_RE.split(source).collect();
 
@@ -481,12 +621,12 @@ pub fn parse_presentation(source: &str, base_dir: Option<&Path>) -> Result<Vec<S
         anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
     }
 
-    let (_meta, slide_blocks) = if blocks.len() >= 3 && blocks[0].trim().is_empty() {
+    let (meta, slide_blocks) = if blocks.len() >= 3 && blocks[0].trim().is_empty() {
         // First block empty = file starts with ---, second is front matter
-        let _meta = parse_front_matter(blocks[1]);
-        (_meta, &blocks[2..])
+        let meta = parse_front_matter(blocks[1]);
+        (meta, &blocks[2..])
     } else {
-        (Vec::new(), &blocks[..])
+        (PresentationMeta::default(), &blocks[..])
     };
 
     let mut slides = Vec::new();
@@ -503,7 +643,7 @@ pub fn parse_presentation(source: &str, base_dir: Option<&Path>) -> Result<Vec<S
         number += 1;
     }
 
-    Ok(slides)
+    Ok((meta, slides))
 }
 
 /// Parse inline markdown formatting into styled spans.
@@ -644,7 +784,8 @@ mod tests {
     use super::*;
 
     fn parse(src: &str) -> Vec<Slide> {
-        parse_presentation(src, None).unwrap()
+        let (_meta, slides) = parse_presentation(src, None).unwrap();
+        slides
     }
 
     #[test]
@@ -795,7 +936,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("presentation.md");
         if path.exists() {
             let source = std::fs::read_to_string(&path).unwrap();
-            let slides = parse_presentation(&source, path.parent()).unwrap();
+            let (_meta, slides) = parse_presentation(&source, path.parent()).unwrap();
             assert!(slides.len() >= 20, "Expected at least 20 slides, got {}", slides.len());
         }
     }
@@ -810,10 +951,10 @@ mod tests {
 
     #[test]
     fn test_test_presentation() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test_presentation.md");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("presentations/examples/test_presentation.md");
         if path.exists() {
             let source = std::fs::read_to_string(&path).unwrap();
-            let slides = parse_presentation(&source, path.parent()).unwrap();
+            let (_meta, slides) = parse_presentation(&source, path.parent()).unwrap();
             assert!(slides.len() >= 15, "Expected at least 15 slides, got {}", slides.len());
             // Verify tables parsed
             let table_slides: Vec<_> = slides.iter().filter(|s| !s.tables.is_empty()).collect();
@@ -915,5 +1056,73 @@ mod tests {
         let spans = parse_inline_formatting("no formatting here", Color::White, Color::DarkGrey);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].text, "no formatting here");
+    }
+
+    // ── Batch 1 tests ──
+
+    #[test]
+    fn test_front_matter_meta() {
+        let src = "---\ntitle: My Deck\nauthor: Alice\ndate: 2026-03-09\naccent: \"#FF5500\"\nalign: center\ntransition: fade\n---\n# First Slide";
+        let (meta, slides) = parse_presentation(src, None).unwrap();
+        assert_eq!(meta.title, "My Deck");
+        assert_eq!(meta.author, "Alice");
+        assert_eq!(meta.date, "2026-03-09");
+        assert_eq!(meta.accent, "#FF5500");
+        assert_eq!(meta.default_alignment, Some(crate::presentation::SlideAlignment::Center));
+        assert_eq!(meta.transition, "fade");
+        assert_eq!(slides.len(), 1);
+        assert_eq!(slides[0].title, "First Slide");
+    }
+
+    #[test]
+    fn test_footer_directive() {
+        let src = "# Slide\n<!-- footer: Custom Footer -->\n- bullet";
+        let slides = parse(src);
+        assert_eq!(slides[0].footer.as_deref(), Some("Custom Footer"));
+    }
+
+    #[test]
+    fn test_align_directive() {
+        let src = "<!-- align: center -->\n# Centered Slide";
+        let slides = parse(src);
+        assert_eq!(slides[0].alignment, Some(crate::presentation::SlideAlignment::Center));
+    }
+
+    #[test]
+    fn test_title_decoration_directive() {
+        let src = "<!-- title_decoration: box -->\n# Boxed";
+        let slides = parse(src);
+        assert_eq!(slides[0].title_decoration.as_deref(), Some("box"));
+    }
+
+    #[test]
+    fn test_transition_directive() {
+        let src = "<!-- transition: dissolve -->\n# Trans";
+        let slides = parse(src);
+        assert_eq!(slides[0].transition.as_deref(), Some("dissolve"));
+    }
+
+    #[test]
+    fn test_animation_directives() {
+        let src = "<!-- animation: typewriter -->\n<!-- loop_animation: matrix -->\n# Animated";
+        let slides = parse(src);
+        assert_eq!(slides[0].entrance_animation.as_deref(), Some("typewriter"));
+        assert_eq!(slides[0].loop_animation.as_deref(), Some("matrix"));
+    }
+
+    #[test]
+    fn test_preamble_directives() {
+        let src = "# Code\n<!-- preamble_start: python -->\nimport math\n<!-- preamble_end -->\n```python +exec\nprint(math.pi)\n```";
+        let slides = parse(src);
+        assert_eq!(slides[0].code_preambles.get("python").unwrap(), "import math");
+    }
+
+    #[test]
+    fn test_no_front_matter_default_meta() {
+        let src = "# Just a slide";
+        let (meta, slides) = parse_presentation(src, None).unwrap();
+        assert!(meta.author.is_empty());
+        assert!(meta.title.is_empty());
+        assert_eq!(slides.len(), 1);
     }
 }

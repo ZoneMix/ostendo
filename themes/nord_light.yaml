@@ -1,0 +1,14 @@
+name: "Nord Light"
+slug: "nord_light"
+colors:
+  background: "#ECEFF4"
+  accent: "#5E81AC"
+  text: "#2E3440"
+  code_background: "#C8CEDB"
+fonts:
+  heading: "Inter"
+  body: "Source Code Pro"
+  code: "Source Code Pro"
+layout: "left"
+visual_style: "minimal"
+dark_variant: "nord"

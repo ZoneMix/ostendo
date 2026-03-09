@@ -11,3 +11,4 @@ fonts:
   code: "JetBrains Mono"
 layout: "left"
 visual_style: "bold"
+light_variant: "terminal_green_light"

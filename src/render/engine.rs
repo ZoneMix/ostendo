@@ -12,13 +12,18 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::code::highlight::Highlighter;
+use crate::render::animation::{
+    AnimationState, AnimationKind, parse_transition, parse_entrance,
+    parse_loop_animation, render_transition_frame, render_entrance_frame,
+    render_loop_frame,
+};
 use crate::image_util::render::{RenderedImage, render_slide_image};
-use crate::presentation::{ExecMode, Slide, StateManager};
+use crate::presentation::{ExecMode, PresentationMeta, Slide, SlideAlignment, StateManager};
 use crate::render::layout::WindowSize;
 use crate::render::progress::render_progress_bar;
 use crate::render::text::{StyledLine, StyledSpan};
 use crate::terminal::protocols::{self, ImageProtocol, FontSizeCapability};
-use crate::theme::colors::{hex_to_color, ensure_badge_contrast};
+use crate::theme::colors::{hex_to_color, ensure_badge_contrast, interpolate_color};
 use crate::theme::Theme;
 
 /// Strip terminal control characters from a string to prevent escape sequence injection.
@@ -65,11 +70,11 @@ fn strip_control_chars(s: &str) -> String {
 /// Get comment prefix for a programming language (used in code block labels).
 fn comment_prefix_for(lang: &str) -> &'static str {
     match lang {
-        "python" | "bash" | "sh" | "ruby" | "yaml" | "toml" | "r" => "# ",
+        "python" | "python3" | "py" | "bash" | "sh" | "ruby" | "rb" | "yaml" | "toml" | "r" => "# ",
         "html" | "xml" => "<!-- ",
         "css" => "/* ",
         "sql" | "lua" | "haskell" => "-- ",
-        "c" | "cpp" | "java" | "javascript" | "typescript" | "go" | "rust"
+        "c" | "cpp" | "c++" | "java" | "javascript" | "js" | "typescript" | "go" | "golang" | "rust"
         | "swift" | "kotlin" | "scala" | "php" | "dart" | "zig" => "// ",
         _ => "// ",
     }
@@ -92,6 +97,7 @@ enum CachedImage {
 
 pub struct Presenter {
     slides: Vec<Slide>,
+    meta: PresentationMeta,
     theme: Theme,
     current: usize,
     mode: Mode,
@@ -108,6 +114,7 @@ pub struct Presenter {
     highlighter: Highlighter,
     exec_output: Option<String>,
     exec_rx: Option<std::sync::mpsc::Receiver<Option<String>>>,
+    exec_block_index: usize,
     state: StateManager,
     image_protocol: ImageProtocol,
     image_cache: HashMap<(PathBuf, usize, u8), CachedImage>,
@@ -126,6 +133,14 @@ pub struct Presenter {
     original_font_size: Option<String>,
     file_watcher: Option<crate::watch::FileWatcher>,
     presentation_path: PathBuf,
+    gradient_from: Option<Color>,
+    gradient_to: Option<Color>,
+    gradient_vertical: bool,
+    is_light_variant: bool,
+    active_animation: Option<crate::render::animation::AnimationState>,
+    active_loop: Option<(crate::render::animation::LoopAnimation, u64)>,
+    last_rendered_buffer: Vec<StyledLine>,
+    mermaid_renderer: Option<crate::image_util::mermaid::MermaidRenderer>,
     // Font change deferred until inside BeginSynchronizedUpdate
     pending_font_size: Option<f64>,
     last_applied_font_size: Option<f64>,
@@ -144,6 +159,7 @@ pub struct Presenter {
 impl Presenter {
     pub fn new(
         slides: Vec<Slide>,
+        meta: PresentationMeta,
         theme: Theme,
         start: usize,
         presentation_path: &Path,
@@ -154,10 +170,25 @@ impl Presenter {
         )>,
     ) -> Self {
         let bg = hex_to_color(&theme.colors.background).unwrap_or(Color::Black);
-        let accent = hex_to_color(&theme.colors.accent).unwrap_or(Color::Green);
+        let mut accent = hex_to_color(&theme.colors.accent).unwrap_or(Color::Green);
+        // Presentation-level accent override from front matter
+        if !meta.accent.is_empty() {
+            if let Some(c) = hex_to_color(&meta.accent) {
+                accent = c;
+            }
+        }
         let text = hex_to_color(&theme.colors.text).unwrap_or(Color::White);
         let code_bg = hex_to_color(&theme.colors.code_background).unwrap_or(Color::DarkGrey);
         let help_badge_bg = ensure_badge_contrast(code_bg, bg);
+        // Parse gradient colors from theme
+        let (gradient_from, gradient_to, gradient_vertical) = if let Some(ref grad) = theme.gradient {
+            let from = hex_to_color(&grad.from);
+            let to = hex_to_color(&grad.to);
+            let vertical = grad.direction != "horizontal";
+            (from, to, vertical)
+        } else {
+            (None, None, true)
+        };
         let font_capability = protocols::detect_font_capability();
         let original_font_size = if font_capability == FontSizeCapability::KittyRemote {
             Self::query_kitty_font_size()
@@ -210,9 +241,10 @@ impl Presenter {
             }
         }
 
-        Self {
+        let mut presenter = Self {
             current: restored_slide.min(slides.len().saturating_sub(1)),
             slides,
+            meta,
             theme,
             mode: Mode::Normal,
             command_buf: String::new(),
@@ -228,6 +260,7 @@ impl Presenter {
             highlighter: Highlighter::new(),
             exec_output: None,
             exec_rx: None,
+            exec_block_index: 0,
             state,
             image_protocol,
             image_cache: HashMap::new(),
@@ -255,9 +288,23 @@ impl Presenter {
             last_rendered_image_scale: 0,
             needs_full_redraw: true,
             image_scale_offset: 0,
+            gradient_from,
+            gradient_to,
+            gradient_vertical,
+            is_light_variant: false,
+            active_animation: None,
+            active_loop: None,
+            last_rendered_buffer: Vec::new(),
+            mermaid_renderer: None,
             pending_font_size: None,
             last_applied_font_size: None,
+        };
+        // Initialize mermaid renderer if any slide has mermaid blocks
+        let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
+        if has_mermaid && crate::image_util::mermaid::MermaidRenderer::is_available() {
+            presenter.mermaid_renderer = Some(crate::image_util::mermaid::MermaidRenderer::new());
         }
+        presenter
     }
 
     pub fn set_fullscreen(&mut self, fs: bool) { self.show_fullscreen = fs; }
@@ -349,45 +396,77 @@ impl Presenter {
         self.render_frame()?;
         self.broadcast_state();
         loop {
-            if event::poll(std::time::Duration::from_millis(100))? {
-                match event::read()? {
-                    Event::Key(key) => {
-                        if self.handle_key(key)? {
-                            break;
+            // Dynamic poll timeout: 33ms when animation active (~30fps), 100ms otherwise
+            let poll_ms = if self.active_animation.is_some() || self.active_loop.is_some() { 33 } else { 100 };
+            let mut had_input = false;
+            if event::poll(std::time::Duration::from_millis(poll_ms))? {
+                // Drain ALL pending events before rendering (prevents mouse event flooding)
+                loop {
+                    match event::read()? {
+                        Event::Key(key) => {
+                            if self.handle_key(key)? {
+                                return Ok(());
+                            }
+                            had_input = true;
                         }
-                        self.render_frame()?;
-                        self.broadcast_state();
-                    }
-                    Event::Mouse(mouse) => {
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => self.scroll_up(3),
-                            MouseEventKind::ScrollDown => self.scroll_down(3),
-                            _ => continue,
-                        }
-                        self.render_frame()?;
-                    }
-                    Event::Resize(w, h) => {
-                        self.width = w;
-                        self.height = h;
-                        // Drain any queued resize events (font changes in Kitty
-                        // can produce bursts of resizes — only render the final one)
-                        while event::poll(std::time::Duration::from_millis(20))? {
-                            if let Event::Resize(w2, h2) = event::read()? {
-                                self.width = w2;
-                                self.height = h2;
-                            } else {
-                                break;
+                        Event::Mouse(mouse) => {
+                            match mouse.kind {
+                                MouseEventKind::ScrollUp => { self.scroll_up(3); had_input = true; }
+                                MouseEventKind::ScrollDown => { self.scroll_down(3); had_input = true; }
+                                _ => {} // ignore move/drag events
                             }
                         }
-                        self.window_size = WindowSize::query();
-                        self.needs_full_redraw = true;
-                        self.render_frame()?;
+                        Event::Resize(w, h) => {
+                            self.width = w;
+                            self.height = h;
+                            self.window_size = WindowSize::query();
+                            self.needs_full_redraw = true;
+                            had_input = true;
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                    // Drain remaining events without blocking
+                    if !event::poll(std::time::Duration::from_millis(0))? {
+                        break;
+                    }
+                }
+                if had_input {
+                    self.render_frame()?;
+                    self.broadcast_state();
                 }
             } else if self.timer_start.is_some() && self.mode == Mode::Normal {
                 self.render_frame()?;
                 self.broadcast_state();
+            }
+
+            // Tick active animation
+            if let Some(ref mut anim) = self.active_animation {
+                anim.tick();
+                if anim.is_done() {
+                    // Chain: transition -> entrance animation if slide has one
+                    if matches!(anim.kind, AnimationKind::Transition(_)) {
+                        let slide = &self.slides[self.current];
+                        if let Some(ea) = slide.entrance_animation.as_deref().and_then(parse_entrance) {
+                            self.active_animation = Some(AnimationState::new_entrance(ea, Vec::new()));
+                        } else {
+                            self.active_animation = None;
+                        }
+                    } else {
+                        self.active_animation = None;
+                    }
+                }
+                self.needs_full_redraw = true;
+                self.render_frame()?;
+            }
+
+            // Tick loop animation
+            if let Some((_, ref mut frame)) = self.active_loop {
+                *frame += 1;
+                self.needs_full_redraw = true;
+                // Only render loop when no transition/entrance is active
+                if self.active_animation.is_none() {
+                    self.render_frame()?;
+                }
             }
 
             // Poll for streaming code execution output (only re-render in Normal mode)
@@ -407,7 +486,6 @@ impl Presenter {
             // Poll for remote commands
             self.poll_remote()?;
         }
-        Ok(())
     }
 
     fn poll_remote(&mut self) -> Result<()> {
@@ -512,14 +590,34 @@ impl Presenter {
             }
             Mode::Overview => {
                 match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => {
                         self.mode = Mode::Normal;
+                        self.needs_full_redraw = true;
                     }
-                    KeyCode::Char('h') | KeyCode::Left => {
+                    KeyCode::Enter => {
+                        self.mode = Mode::Normal;
+                        self.needs_full_redraw = true;
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if self.current < self.slides.len() - 1 { self.current += 1; }
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
                         if self.current > 0 { self.current -= 1; }
                     }
+                    KeyCode::Char('h') | KeyCode::Left => {
+                        // Jump to same position in previous column
+                        let th = self.height as usize;
+                        let rows_per_col = (th.saturating_sub(5)) / 2;
+                        if rows_per_col > 0 && self.current >= rows_per_col {
+                            self.current -= rows_per_col;
+                        }
+                    }
                     KeyCode::Char('l') | KeyCode::Right => {
-                        if self.current < self.slides.len() - 1 { self.current += 1; }
+                        let th = self.height as usize;
+                        let rows_per_col = (th.saturating_sub(5)) / 2;
+                        if rows_per_col > 0 && self.current + rows_per_col < self.slides.len() {
+                            self.current += rows_per_col;
+                        }
                     }
                     _ => {}
                 }
@@ -560,6 +658,14 @@ impl Presenter {
             }
             KeyCode::Char('f') => { self.show_fullscreen = !self.show_fullscreen; self.needs_full_redraw = true; }
             KeyCode::Char('T') => { self.show_theme_name = !self.show_theme_name; self.needs_full_redraw = true; }
+            KeyCode::Char('D') => {
+                // Toggle light/dark theme variant
+                let registry = crate::theme::ThemeRegistry::load();
+                if let Some(variant) = registry.get_variant(&self.theme, !self.is_light_variant) {
+                    self.is_light_variant = !self.is_light_variant;
+                    self.apply_theme(variant);
+                }
+            }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 self.global_scale = (self.global_scale + 5).min(200);
                 self.needs_full_redraw = true;
@@ -570,12 +676,10 @@ impl Presenter {
             }
             KeyCode::Char('>') => {
                 self.image_scale_offset = (self.image_scale_offset + 10).min(100);
-                self.image_cache.clear();
                 self.needs_full_redraw = true;
             }
             KeyCode::Char('<') => {
                 self.image_scale_offset = (self.image_scale_offset - 10).max(-90);
-                self.image_cache.clear();
                 self.needs_full_redraw = true;
             }
             KeyCode::Char(']') if self.font_capability == FontSizeCapability::KittyRemote => {
@@ -603,6 +707,7 @@ impl Presenter {
                 self.needs_full_redraw = true;
                 self.save_state();
             }
+            KeyCode::Char('o') => { self.mode = Mode::Overview; self.needs_full_redraw = true; }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char(':') => {
                 self.mode = Mode::Command;
@@ -650,14 +755,7 @@ impl Presenter {
                 if let Some(slug) = parts.get(1) {
                     let registry = crate::theme::ThemeRegistry::load();
                     if let Some(new_theme) = registry.get(slug.trim()) {
-                        self.bg_color = hex_to_color(&new_theme.colors.background).unwrap_or(Color::Black);
-                        self.accent_color = hex_to_color(&new_theme.colors.accent).unwrap_or(Color::Green);
-                        self.text_color = hex_to_color(&new_theme.colors.text).unwrap_or(Color::White);
-                        self.code_bg_color = hex_to_color(&new_theme.colors.code_background).unwrap_or(Color::DarkGrey);
-                        self.help_badge_bg = ensure_badge_contrast(self.code_bg_color, self.bg_color);
-                        Self::set_terminal_bg(self.bg_color);
-                        self.theme = new_theme;
-                        self.needs_full_redraw = true;
+                        self.apply_theme(new_theme);
                     }
                 }
             }
@@ -683,6 +781,44 @@ impl Presenter {
 
     fn current_scale(&self) -> u8 {
         self.global_scale
+    }
+
+    /// Apply a theme, updating all cached color fields.
+    fn apply_theme(&mut self, new_theme: Theme) {
+        self.bg_color = hex_to_color(&new_theme.colors.background).unwrap_or(Color::Black);
+        self.accent_color = hex_to_color(&new_theme.colors.accent).unwrap_or(Color::Green);
+        self.text_color = hex_to_color(&new_theme.colors.text).unwrap_or(Color::White);
+        self.code_bg_color = hex_to_color(&new_theme.colors.code_background).unwrap_or(Color::DarkGrey);
+        // Presentation-level accent override persists across theme switches
+        if !self.meta.accent.is_empty() {
+            if let Some(c) = hex_to_color(&self.meta.accent) {
+                self.accent_color = c;
+            }
+        }
+        // Parse gradient
+        if let Some(ref grad) = new_theme.gradient {
+            self.gradient_from = hex_to_color(&grad.from);
+            self.gradient_to = hex_to_color(&grad.to);
+            self.gradient_vertical = grad.direction != "horizontal";
+        } else {
+            self.gradient_from = None;
+            self.gradient_to = None;
+        }
+        self.help_badge_bg = ensure_badge_contrast(self.code_bg_color, self.bg_color);
+        Self::set_terminal_bg(self.bg_color);
+        self.theme = new_theme;
+        self.image_cache.clear();
+        self.needs_full_redraw = true;
+    }
+
+    /// Compute the background color for a given row, applying gradient if configured.
+    fn row_bg_color(&self, row: usize, total_rows: usize) -> Color {
+        if let (Some(from), Some(to)) = (self.gradient_from, self.gradient_to) {
+            let t = if total_rows <= 1 { 0.0 } else { row as f64 / (total_rows - 1) as f64 };
+            interpolate_color(from, to, t)
+        } else {
+            self.bg_color
+        }
     }
 
     /// Send a Kitty set_font_size command directly via escape sequences.
@@ -800,38 +936,61 @@ impl Presenter {
         self.pending_font_size = Some(target);
     }
 
+    /// Start animations for a slide change: transition, entrance, and/or loop.
+    fn start_slide_animations(&mut self) {
+        let slide = &self.slides[self.current];
+        let old_buffer = self.last_rendered_buffer.clone();
+
+        // Determine transition: per-slide directive overrides global meta
+        let transition_str = slide.transition.as_deref()
+            .or(if self.meta.transition.is_empty() { None } else { Some(self.meta.transition.as_str()) });
+
+        if let Some(tt) = transition_str.and_then(parse_transition) {
+            self.active_animation = Some(AnimationState::new_transition(tt, old_buffer, Vec::new()));
+        } else if let Some(ea) = slide.entrance_animation.as_deref().and_then(parse_entrance) {
+            self.active_animation = Some(AnimationState::new_entrance(ea, Vec::new()));
+        }
+
+        // Set up loop animation (runs independently after transition/entrance complete)
+        self.active_loop = slide.loop_animation.as_deref()
+            .and_then(parse_loop_animation)
+            .map(|la| (la, 0));
+
+        self.needs_full_redraw = true;
+    }
+
+    /// Reset transient state after changing slides.
+    fn on_slide_changed(&mut self) {
+        self.scroll_offset = 0;
+        self.notes_scroll = 0;
+        self.exec_output = None;
+        self.exec_rx = None;
+        self.exec_block_index = 0;
+        self.apply_slide_font();
+        self.start_slide_animations();
+    }
+
     fn next_slide(&mut self) {
         if self.timer_start.is_none() {
             self.timer_start = Some(Instant::now());
         }
         if self.current < self.slides.len() - 1 {
             self.current += 1;
-            self.scroll_offset = 0;
-            self.notes_scroll = 0;
-            self.exec_output = None;
-            self.exec_rx = None;
-            self.apply_slide_font();
+            self.on_slide_changed();
         }
     }
 
     fn prev_slide(&mut self) {
         if self.current > 0 {
             self.current -= 1;
-            self.scroll_offset = 0;
-            self.notes_scroll = 0;
-            self.exec_output = None;
-            self.exec_rx = None;
-            self.apply_slide_font();
+            self.on_slide_changed();
         }
     }
 
     fn goto_slide(&mut self, idx: usize) {
         if idx < self.slides.len() {
             self.current = idx;
-            self.scroll_offset = 0;
-            self.exec_output = None;
-            self.exec_rx = None;
-            self.apply_slide_font();
+            self.on_slide_changed();
         }
     }
 
@@ -840,10 +999,7 @@ impl Presenter {
         for i in (self.current + 1)..self.slides.len() {
             if self.slides[i].section != *current_section {
                 self.current = i;
-                self.scroll_offset = 0;
-                self.exec_output = None;
-                self.exec_rx = None;
-                self.apply_slide_font();
+                self.on_slide_changed();
                 return;
             }
         }
@@ -862,9 +1018,7 @@ impl Presenter {
             target -= 1;
         }
         self.current = target;
-        self.scroll_offset = 0;
-        self.exec_output = None;
-        self.apply_slide_font();
+        self.on_slide_changed();
     }
 
     fn scroll_down(&mut self, n: usize) {
@@ -876,20 +1030,43 @@ impl Presenter {
     }
 
     fn execute_code(&mut self) -> Result<()> {
+        // If previous execution completed, advance to next block
+        if self.exec_output.is_some() && self.exec_rx.is_none() {
+            self.exec_block_index += 1;
+            self.exec_output = None;
+        }
+
         let slide = &self.slides[self.current];
-        // Find first executable code block: check slide-level first, then columns
-        let exec_cb = slide.code_blocks.iter()
-            .find(|cb| cb.exec_mode.is_some())
-            .or_else(|| {
-                slide.columns.as_ref().and_then(|cols| {
-                    cols.contents.iter().flat_map(|c| c.code_blocks.iter())
-                        .find(|cb| cb.exec_mode.is_some())
-                })
-            })
-            .or_else(|| slide.code_blocks.first());
-        if let Some(cb) = exec_cb {
+        // Collect all executable code blocks: slide-level first, then columns
+        let exec_blocks: Vec<&crate::presentation::CodeBlock> = slide.code_blocks.iter()
+            .filter(|cb| cb.exec_mode.is_some())
+            .chain(
+                slide.columns.as_ref()
+                    .map(|cols| cols.contents.iter().flat_map(|c| c.code_blocks.iter())
+                        .filter(|cb| cb.exec_mode.is_some())
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default()
+            )
+            .collect();
+        // Fallback: if no exec blocks, try first code block
+        let exec_blocks: Vec<&crate::presentation::CodeBlock> = if exec_blocks.is_empty() {
+            slide.code_blocks.first().into_iter().collect()
+        } else {
+            exec_blocks
+        };
+        // Wrap around if past the last block
+        if !exec_blocks.is_empty() && self.exec_block_index >= exec_blocks.len() {
+            self.exec_block_index = 0;
+        }
+        if let Some(cb) = exec_blocks.get(self.exec_block_index) {
+            // Prepend preamble if one exists for this language
+            let code = if let Some(preamble) = slide.code_preambles.get(&cb.language) {
+                format!("{}\n{}", preamble, cb.code)
+            } else {
+                cb.code.clone()
+            };
             let pres_dir = self.presentation_path.parent();
-            let rx = crate::code::executor::execute_code_streaming(&cb.language, &cb.code, pres_dir)?;
+            let rx = crate::code::executor::execute_code_streaming(&cb.language, &code, pres_dir)?;
             self.exec_output = Some(String::new());
             self.exec_rx = Some(rx);
         }
@@ -909,7 +1086,7 @@ impl Presenter {
                         got_output = true;
                     }
                     None => {
-                        // Execution complete
+                        // Execution complete — advance to next block
                         self.exec_rx = None;
                         got_output = true;
                         break;
@@ -924,7 +1101,7 @@ impl Presenter {
     fn try_reload(&mut self) {
         if let Ok(source) = std::fs::read_to_string(&self.presentation_path) {
             let base_dir = self.presentation_path.parent();
-            if let Ok(new_slides) = crate::markdown::parse_presentation(&source, base_dir) {
+            if let Ok((new_meta, new_slides)) = crate::markdown::parse_presentation(&source, base_dir) {
                 if !new_slides.is_empty() {
                     // Preload images for new slides
                     for slide in &new_slides {
@@ -936,6 +1113,13 @@ impl Presenter {
                             }
                         }
                     }
+                    // Apply accent override from refreshed meta
+                    if !new_meta.accent.is_empty() {
+                        if let Some(c) = hex_to_color(&new_meta.accent) {
+                            self.accent_color = c;
+                        }
+                    }
+                    self.meta = new_meta;
                     // Clamp current slide to new count
                     self.current = self.current.min(new_slides.len().saturating_sub(1));
                     self.slides = new_slides;
@@ -1076,7 +1260,9 @@ impl Presenter {
 
         // Track whether we need to clear old Kitty images (slide change or redraw)
         let need_kitty_clear = self.image_protocol == ImageProtocol::Kitty
-            && (self.last_rendered_slide != Some(self.current) || self.needs_full_redraw);
+            && (self.last_rendered_slide != Some(self.current)
+                || self.needs_full_redraw
+                || self.last_rendered_scroll != self.scroll_offset);
 
         let slide = self.slides[self.current].clone();
         let tw = self.width as usize;
@@ -1100,10 +1286,14 @@ impl Presenter {
             lines.push(StyledLine::empty());
         }
 
-        // Title
+        // Title (with optional decoration)
         if !slide.title.is_empty() {
+            let decoration = slide.title_decoration.as_deref()
+                .or(self.theme.title_decoration.as_deref());
             if slide.ascii_title {
                 self.render_ascii_title(&slide.title, &pad, &mut lines);
+            } else if let Some(dec) = decoration {
+                self.render_title_decorated(&slide.title, dec, content_width, &pad, &mut lines);
             } else {
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(&pad));
@@ -1164,15 +1354,25 @@ impl Presenter {
         if let Some(ref cols) = slide.columns {
             self.render_columns(cols, content_width, &pad, &mut lines);
             // Show exec output if columns have executable code blocks
-            let has_column_exec = cols.contents.iter()
-                .any(|c| c.code_blocks.iter().any(|cb| cb.exec_mode.is_some()));
-            if has_column_exec {
-                self.render_exec_output(&pad, &mut lines);
+            // Column exec blocks come after slide-level exec blocks in index order
+            let slide_exec_count = slide.code_blocks.iter()
+                .filter(|cb| cb.exec_mode.is_some()).count();
+            let col_exec_blocks: Vec<&crate::presentation::CodeBlock> = cols.contents.iter()
+                .flat_map(|c| c.code_blocks.iter())
+                .filter(|cb| cb.exec_mode.is_some())
+                .collect();
+            if !col_exec_blocks.is_empty() {
+                // Column exec block index starts after slide-level exec blocks
+                let col_local_idx = self.exec_block_index.saturating_sub(slide_exec_count);
+                if self.exec_block_index >= slide_exec_count && col_local_idx < col_exec_blocks.len() {
+                    self.render_exec_output(&pad, &mut lines);
+                }
             }
             lines.push(StyledLine::empty());
         }
 
         // Code blocks (presenterm-style: background rect with padding, no borders)
+        let mut exec_render_idx: usize = 0;
         for cb in slide.code_blocks.iter() {
             let label = if cb.label.is_empty() { cb.language.clone() } else { cb.label.clone() };
             let inner_pad = 4; // 2 left + 2 right padding inside block
@@ -1256,9 +1456,12 @@ impl Presenter {
                 lines.push(el);
             }
 
-            // Execution output (show under the executable code block)
+            // Execution output (show only under the currently-executed block)
             if cb.exec_mode.is_some() {
-                self.render_exec_output(&pad, &mut lines);
+                if exec_render_idx == self.exec_block_index {
+                    self.render_exec_output(&pad, &mut lines);
+                }
+                exec_render_idx += 1;
             }
             lines.push(StyledLine::empty());
         }
@@ -1293,8 +1496,93 @@ impl Presenter {
             }
         }
 
+        // Protocol images (Kitty/iTerm2) need escape data written after buffer flush
+        let mut pending_protocol_images: Vec<(String, usize)> = Vec::new();
+
+        // Mermaid diagrams
+        for mermaid_block in &slide.mermaid_blocks {
+            if let Some(ref mut renderer) = self.mermaid_renderer {
+                // Use actual pixel width if available, else estimate at 2x for quality
+                let pixel_width = if self.window_size.pixel_width > 0 {
+                    self.window_size.pixel_width as usize
+                } else {
+                    content_width * 16
+                };
+                match renderer.render(&mermaid_block.source, pixel_width) {
+                    Ok(png_path) => {
+                        // Load and render the PNG as an image
+                        let mermaid_img = crate::presentation::SlideImage {
+                            path: png_path,
+                            alt_text: String::from("Mermaid diagram"),
+                            position: crate::presentation::ImagePosition::Below,
+                            render_mode: crate::presentation::ImageRenderMode::Auto,
+                            scale: 80,
+                            color_override: String::new(),
+                        };
+                        let effective_protocol = self.image_protocol;
+                        let img_max_height = th / 2;
+                        let preloaded = self.preloaded_images.get(&mermaid_img.path);
+                        let rendered = render_slide_image(
+                            &mermaid_img, content_width, img_max_height, &pad,
+                            self.accent_color, self.text_color,
+                            effective_protocol, self.bg_color,
+                            &self.window_size, preloaded,
+                        );
+                        match rendered {
+                            RenderedImage::Lines(l) => lines.extend(l),
+                            RenderedImage::Protocol { escape_data, placeholder_height } => {
+                                let image_line_offset = lines.len();
+                                for _ in 0..placeholder_height {
+                                    lines.push(StyledLine::empty());
+                                }
+                                pending_protocol_images.push((escape_data, image_line_offset));
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Fallback: show source as visible code block with warning
+                        lines.push(StyledLine::empty());
+                        let mut warn = StyledLine::empty();
+                        warn.push(StyledSpan::new(&pad));
+                        warn.push(StyledSpan::new("  ┌─ Mermaid Diagram (render failed) ─┐").with_fg(self.accent_color));
+                        lines.push(warn);
+                        lines.push(StyledLine::empty());
+                        let code_fg = Color::Rgb { r: 130, g: 200, b: 130 };
+                        for src_line in mermaid_block.source.lines() {
+                            let mut line = StyledLine::empty();
+                            line.push(StyledSpan::new(&pad));
+                            line.push(StyledSpan::new("  │ "));
+                            line.push(StyledSpan::new(src_line).with_fg(code_fg));
+                            lines.push(line);
+                        }
+                    }
+                }
+            } else {
+                // No renderer available — show source as a visible code-like block
+                lines.push(StyledLine::empty());
+                let mut header = StyledLine::empty();
+                header.push(StyledSpan::new(&pad));
+                header.push(StyledSpan::new("  ┌─ Mermaid Diagram (install mmdc to render) ─┐").with_fg(self.accent_color));
+                lines.push(header);
+                lines.push(StyledLine::empty());
+                let code_fg = Color::Rgb { r: 130, g: 200, b: 130 }; // green-ish for diagram source
+                for src_line in mermaid_block.source.lines() {
+                    let mut line = StyledLine::empty();
+                    line.push(StyledSpan::new(&pad));
+                    line.push(StyledSpan::new("  │ "));
+                    line.push(StyledSpan::new(src_line).with_fg(code_fg));
+                    lines.push(line);
+                }
+                lines.push(StyledLine::empty());
+                let mut footer = StyledLine::empty();
+                footer.push(StyledSpan::new(&pad));
+                footer.push(StyledSpan::new("  └─ npm install -g @mermaid-js/mermaid-cli ──┘").with_fg(self.accent_color).dim());
+                lines.push(footer);
+            }
+            lines.push(StyledLine::empty());
+        }
+
         // Image rendering (cached)
-        let mut pending_protocol_image: Option<(String, usize)> = None;
         if let Some(ref img) = slide.image {
             // Per-image render mode override from markdown directives
             let effective_protocol = match img.render_mode {
@@ -1341,7 +1629,7 @@ impl Presenter {
                     for _ in 0..*placeholder_height {
                         lines.push(StyledLine::empty());
                     }
-                    pending_protocol_image = Some((escape_data.clone(), image_line_offset));
+                    pending_protocol_images.push((escape_data.clone(), image_line_offset));
                 }
                 None => {}
             }
@@ -1349,10 +1637,94 @@ impl Presenter {
         }
 
         // Calculate available display area (excluding status bar rows)
+        let has_slide_footer = slide.footer.is_some();
         let reserved_bottom =
             if self.show_notes && !slide.notes.is_empty() { 7 } else { 0 }
-            + if self.mode == Mode::Command || self.mode == Mode::Goto { 1 } else { 0 };
+            + if self.mode == Mode::Command || self.mode == Mode::Goto { 1 } else { 0 }
+            + if has_slide_footer { 1 } else { 0 };
         let content_area = th.saturating_sub(status_bar_rows + reserved_bottom);
+
+        // Vertical centering: per-slide alignment overrides global default_alignment
+        let effective_alignment = slide.alignment
+            .or(self.meta.default_alignment)
+            .unwrap_or(SlideAlignment::Top);
+        let do_vcenter = matches!(effective_alignment, SlideAlignment::Center | SlideAlignment::VCenter);
+        let do_hcenter = matches!(effective_alignment, SlideAlignment::Center | SlideAlignment::HCenter);
+
+        if do_vcenter && lines.len() < content_area {
+            let padding_rows = (content_area - lines.len()) / 2;
+            if padding_rows > 0 {
+                let mut padded = Vec::with_capacity(lines.len() + padding_rows);
+                for _ in 0..padding_rows {
+                    padded.push(StyledLine::empty());
+                }
+                padded.append(&mut lines);
+                lines = padded;
+            }
+        }
+
+        // Horizontal centering: center each line's content within the terminal width.
+        // Lines already start with `margin` spaces (the pad), so we subtract that
+        // to get the actual content width, then compute the correct left offset.
+        if do_hcenter {
+            for line in &mut lines {
+                let line_width: usize = line.spans.iter()
+                    .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
+                    .sum();
+                // Content width is the line minus the existing left margin
+                let content_text_width = line_width.saturating_sub(margin);
+                if content_text_width > 0 && content_text_width < tw {
+                    let desired_left = (tw.saturating_sub(content_text_width)) / 2;
+                    if desired_left > margin {
+                        let extra = desired_left - margin;
+                        let mut centered = StyledLine::empty();
+                        centered.push(StyledSpan::new(&" ".repeat(extra)));
+                        for span in &line.spans {
+                            centered.push(span.clone());
+                        }
+                        *line = centered;
+                    }
+                }
+            }
+        }
+
+        // Apply animations to the buffer
+        if let Some(ref mut anim) = self.active_animation {
+            match anim.kind {
+                AnimationKind::Transition(tt) => {
+                    // Update new_buffer with current content
+                    anim.new_buffer = lines.clone();
+                    let progress = anim.progress();
+                    lines = render_transition_frame(
+                        &anim.old_buffer, &anim.new_buffer,
+                        progress, tt, self.bg_color, content_width,
+                    );
+                }
+                AnimationKind::Entrance(ea) => {
+                    anim.new_buffer = lines.clone();
+                    let progress = anim.progress();
+                    lines = render_entrance_frame(&anim.new_buffer, progress, ea, self.bg_color);
+                }
+                AnimationKind::Loop(_) => {
+                    // Loops are handled below (separate from active_animation)
+                }
+            }
+        }
+
+        // Apply loop animation (runs independently, only when no transition/entrance active)
+        // Use full terminal width (tw) so matrix/bounce fill edge-to-edge
+        if self.active_animation.is_none() {
+            if let Some((la, frame)) = self.active_loop {
+                lines = render_loop_frame(
+                    &lines, la, frame,
+                    self.accent_color, self.bg_color,
+                    tw, content_area,
+                );
+            }
+        }
+
+        // Cache current buffer for transition source on next slide change
+        self.last_rendered_buffer = lines.clone();
 
         // Clamp scroll
         if lines.len() > content_area {
@@ -1384,19 +1756,60 @@ impl Presenter {
             write!(w, "{}", " ".repeat(tw))?;
         }
 
-        // Render visible content lines (offset by status_bar_rows)
+        // Render visible content lines (offset by status_bar_rows), with per-row gradient
+        let has_gradient = self.gradient_from.is_some() && self.gradient_to.is_some();
         for (i, line) in lines[visible_start..visible_end].iter().enumerate() {
             let row = (status_bar_rows + i) as u16;
             queue!(w, cursor::MoveTo(0, row))?;
-            self.queue_styled_line(&mut w, line, tw)?;
+            if has_gradient {
+                let screen_row = visible_start + i;
+                let total = content_area.max(1);
+                let row_bg = self.row_bg_color(screen_row, total);
+                self.queue_styled_line_with_bg(&mut w, line, tw, row_bg)?;
+            } else {
+                self.queue_styled_line(&mut w, line, tw)?;
+            }
         }
 
         // Fill remaining rows below content
         let content_rows_drawn = visible_end - visible_start;
         for i in content_rows_drawn..content_area {
             let row = (status_bar_rows + i) as u16;
-            queue!(w, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+            let fill_bg = if has_gradient {
+                self.row_bg_color(visible_start + content_rows_drawn + (i - content_rows_drawn), content_area.max(1))
+            } else {
+                self.bg_color
+            };
+            queue!(w, cursor::MoveTo(0, row), SetBackgroundColor(fill_bg))?;
             write!(w, "{}", " ".repeat(tw))?;
+        }
+
+        // Per-slide custom footer bar (rendered at bottom of content area)
+        if has_slide_footer {
+            if let Some(ref footer_text) = slide.footer {
+                use crate::presentation::FooterAlign;
+                let footer_row = (status_bar_rows + content_area) as u16;
+                let footer_bg = self.bg_color;
+                queue!(w, cursor::MoveTo(0, footer_row), SetBackgroundColor(footer_bg))?;
+                let text = footer_text.as_str();
+                let text_width = unicode_width::UnicodeWidthStr::width(text);
+                queue!(w, SetForegroundColor(self.accent_color))?;
+                match slide.footer_align {
+                    FooterAlign::Left => {
+                        let pad_right = tw.saturating_sub(text_width + 1);
+                        write!(w, " {}{}", text, " ".repeat(pad_right))?;
+                    }
+                    FooterAlign::Center => {
+                        let pad_left = tw.saturating_sub(text_width) / 2;
+                        let pad_right = tw.saturating_sub(pad_left + text_width);
+                        write!(w, "{}{}{}", " ".repeat(pad_left), text, " ".repeat(pad_right))?;
+                    }
+                    FooterAlign::Right => {
+                        let pad_left = tw.saturating_sub(text_width + 1);
+                        write!(w, "{}{} ", " ".repeat(pad_left), text)?;
+                    }
+                }
+            }
         }
 
         // Notes panel (fills entire reserved area with background)
@@ -1462,9 +1875,10 @@ impl Presenter {
         // Write protocol image data after line rendering (Kitty/iTerm2/Sixel).
         // Must re-send every frame since line rendering overwrites the image area.
         // Synchronized update (BeginSynchronizedUpdate/EndSynchronizedUpdate) prevents flicker.
-        if let Some((escape_data, line_offset)) = pending_protocol_image {
-            let display_row = line_offset.saturating_sub(visible_start);
-            if display_row < content_area {
+        for (escape_data, line_offset) in &pending_protocol_images {
+            // Only render if the image line is within the visible scroll range
+            if *line_offset >= visible_start && *line_offset < visible_end {
+                let display_row = line_offset - visible_start;
                 let screen_row = (status_bar_rows + display_row) as u16;
                 queue!(w, cursor::MoveTo(0, screen_row))?;
                 write!(w, "{}", escape_data)?;
@@ -1510,8 +1924,31 @@ impl Presenter {
             String::new()
         };
 
+        // Global author/date — always present in top bar
+        let footer_part = if !self.meta.author.is_empty() || !self.meta.date.is_empty() {
+            let parts: Vec<&str> = [self.meta.author.as_str(), self.meta.date.as_str()]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .copied()
+                .collect();
+            format!(" {} ", parts.join(" · "))
+        } else {
+            String::new()
+        };
+
+        // Cap footer to prevent overflow
+        let max_footer_len = width.saturating_sub(slide_info.len() + timer.len() + theme_part.len() + 10);
+        let footer_part = if footer_part.len() > max_footer_len && max_footer_len > 4 {
+            format!(" {}… ", &footer_part[1..max_footer_len.saturating_sub(2)])
+        } else if footer_part.len() > max_footer_len {
+            String::new()
+        } else {
+            footer_part
+        };
+
         // Progress bar fills remaining space
-        let fixed_len = slide_info.len() + timer.len() + theme_part.len() + 2; // 2 for [] brackets
+        let footer_sep = if footer_part.is_empty() { 0 } else { 3 }; // " · "
+        let fixed_len = slide_info.len() + timer.len() + theme_part.len() + footer_part.len() + footer_sep + 2;
         let bar_width = width.saturating_sub(fixed_len);
         let progress = render_progress_bar(self.current + 1, self.slides.len(), bar_width);
 
@@ -1522,17 +1959,23 @@ impl Presenter {
             line.push(StyledSpan::new(&theme_part).with_fg(self.text_color).with_bg(self.code_bg_color).dim());
         }
         line.push(StyledSpan::new(&progress).with_fg(self.accent_color).with_bg(self.code_bg_color));
+        if !footer_part.is_empty() {
+            line.push(StyledSpan::new(" · ").with_fg(self.text_color).with_bg(self.code_bg_color).dim());
+            line.push(StyledSpan::new(&footer_part).with_fg(self.text_color).with_bg(self.code_bg_color).dim());
+        }
         // Fill any remaining space
-        let used: usize = slide_info.len() + timer.len() + theme_part.len() + progress.len();
+        let used: usize = slide_info.len() + timer.len() + theme_part.len() + progress.len() + footer_part.len() + footer_sep;
         if used < width {
             line.push(StyledSpan::new(&" ".repeat(width - used)).with_bg(self.code_bg_color));
         }
         line
     }
 
-    /// Render exec output lines into the buffer.
+    /// Render exec output lines into the buffer, wrapping long lines.
     fn render_exec_output(&self, pad: &str, lines: &mut Vec<StyledLine>) {
         if let Some(ref output) = self.exec_output {
+            let prefix_width = pad.len() + 2; // pad + "  "
+            let wrap_width = (self.width as usize).saturating_sub(prefix_width + 1);
             lines.push(StyledLine::empty());
             let mut oh = StyledLine::empty();
             oh.push(StyledSpan::new(pad));
@@ -1540,11 +1983,33 @@ impl Presenter {
             lines.push(oh);
             for ol in output.lines() {
                 let sanitized = strip_control_chars(ol);
-                let mut line = StyledLine::empty();
-                line.push(StyledSpan::new(pad));
-                line.push(StyledSpan::new("  "));
-                line.push(StyledSpan::new(&sanitized).with_fg(self.text_color));
-                lines.push(line);
+                if wrap_width > 0 && unicode_width::UnicodeWidthStr::width(sanitized.as_str()) > wrap_width {
+                    // Wrap long lines by character width
+                    let chars: Vec<char> = sanitized.chars().collect();
+                    let mut pos = 0;
+                    while pos < chars.len() {
+                        let mut line = StyledLine::empty();
+                        line.push(StyledSpan::new(pad));
+                        line.push(StyledSpan::new("  "));
+                        let mut chunk = String::new();
+                        let mut w = 0;
+                        while pos < chars.len() {
+                            let cw = unicode_width::UnicodeWidthChar::width(chars[pos]).unwrap_or(0);
+                            if w + cw > wrap_width { break; }
+                            chunk.push(chars[pos]);
+                            w += cw;
+                            pos += 1;
+                        }
+                        line.push(StyledSpan::new(&chunk).with_fg(self.text_color));
+                        lines.push(line);
+                    }
+                } else {
+                    let mut line = StyledLine::empty();
+                    line.push(StyledSpan::new(pad));
+                    line.push(StyledSpan::new("  "));
+                    line.push(StyledSpan::new(&sanitized).with_fg(self.text_color));
+                    lines.push(line);
+                }
             }
         }
     }
@@ -1617,6 +2082,60 @@ impl Presenter {
         line.push(StyledSpan::new(pad));
         line.push(StyledSpan::new(title).with_fg(self.accent_color).bold());
         lines.push(line);
+    }
+
+    /// Render a decorated title. Decoration styles: "underline", "box", "banner".
+    fn render_title_decorated(
+        &self,
+        title: &str,
+        decoration: &str,
+        content_width: usize,
+        pad: &str,
+        lines: &mut Vec<StyledLine>,
+    ) {
+        let title_width = unicode_width::UnicodeWidthStr::width(title);
+        match decoration {
+            "underline" => {
+                let mut tl = StyledLine::empty();
+                tl.push(StyledSpan::new(pad));
+                tl.push(StyledSpan::new(title).with_fg(self.accent_color).bold());
+                lines.push(tl);
+                let mut ul = StyledLine::empty();
+                ul.push(StyledSpan::new(pad));
+                ul.push(StyledSpan::new(&"─".repeat(title_width)).with_fg(self.accent_color));
+                lines.push(ul);
+            }
+            "box" => {
+                let box_w = title_width + 4; // 2 padding each side
+                let top = format!("┌{}┐", "─".repeat(box_w.saturating_sub(2)));
+                let mid = format!("│ {} │", title);
+                let bot = format!("└{}┘", "─".repeat(box_w.saturating_sub(2)));
+                for s in [&top, &mid, &bot] {
+                    let mut line = StyledLine::empty();
+                    line.push(StyledSpan::new(pad));
+                    line.push(StyledSpan::new(s).with_fg(self.accent_color).bold());
+                    lines.push(line);
+                }
+            }
+            "banner" => {
+                let banner_w = content_width;
+                let text_pad = banner_w.saturating_sub(title_width + 2);
+                let left = text_pad / 2;
+                let right = text_pad - left;
+                let banner_text = format!("{}{}{}", " ".repeat(left + 1), title, " ".repeat(right + 1));
+                let mut line = StyledLine::empty();
+                line.push(StyledSpan::new(pad));
+                line.push(StyledSpan::new(&banner_text).with_fg(self.bg_color).with_bg(self.accent_color).bold());
+                lines.push(line);
+            }
+            _ => {
+                // "none" or unknown — plain title
+                let mut line = StyledLine::empty();
+                line.push(StyledSpan::new(pad));
+                line.push(StyledSpan::new(title).with_fg(self.accent_color).bold());
+                lines.push(line);
+            }
+        }
     }
 
     /// Render column layout content side-by-side
@@ -1846,6 +2365,18 @@ impl Presenter {
 
                 // Vertical padding bottom
                 col_rows.push((vec![StyledSpan::new(&" ".repeat(cw)).with_bg(self.code_bg_color)], true));
+
+                // Exec mode indicator for column code blocks
+                if cb.exec_mode.is_some() {
+                    let mode_str = match cb.exec_mode {
+                        Some(ExecMode::Exec) => "  [Ctrl+E to execute]",
+                        Some(ExecMode::Pty) => "  [Ctrl+E to run in PTY]",
+                        None => "",
+                    };
+                    col_rows.push((vec![
+                        StyledSpan::new(mode_str).with_fg(self.accent_color).dim(),
+                    ], false));
+                }
             }
             col_lines.push(col_rows);
         }
@@ -1892,9 +2423,14 @@ impl Presenter {
 
     /// Write a styled line to a buffered writer, filling to full terminal width
     fn queue_styled_line(&self, w: &mut impl Write, line: &StyledLine, term_width: usize) -> Result<()> {
+        self.queue_styled_line_with_bg(w, line, term_width, self.bg_color)
+    }
+
+    /// Write a styled line with a custom default background (used for gradient rows).
+    fn queue_styled_line_with_bg(&self, w: &mut impl Write, line: &StyledLine, term_width: usize, default_bg: Color) -> Result<()> {
         let mut chars_written = 0usize;
         // Set default background for the entire line
-        queue!(w, SetBackgroundColor(self.bg_color))?;
+        queue!(w, SetBackgroundColor(default_bg))?;
         for span in &line.spans {
             if chars_written >= term_width {
                 break;
@@ -1910,7 +2446,8 @@ impl Presenter {
             } else {
                 queue!(w, SetForegroundColor(self.text_color))?;
             }
-            let bg = span.bg.unwrap_or(self.bg_color);
+            // Spans with explicit bg keep theirs; default bg follows gradient
+            let bg = span.bg.unwrap_or(default_bg);
             queue!(w, SetBackgroundColor(bg))?;
             if span.bold {
                 queue!(w, SetAttribute(Attribute::Bold))?;
@@ -1950,7 +2487,7 @@ impl Presenter {
             }
         }
         // Reset attributes and fill rest of line with background
-        queue!(w, SetAttribute(Attribute::Reset), SetBackgroundColor(self.bg_color))?;
+        queue!(w, SetAttribute(Attribute::Reset), SetBackgroundColor(default_bg))?;
         if chars_written < term_width {
             write!(w, "{}", " ".repeat(term_width - chars_written))?;
         }
@@ -2009,7 +2546,13 @@ impl Presenter {
         let right_col: Vec<(&str, &str, &str)> = vec![
             ("H", "Code Execution", ""),
             ("K", "Ctrl+E", "Execute code block (+exec)"),
-            ("K", "", "Output streams in real-time"),
+            ("K", "", "Auto-wrap: rust, c, c++, go"),
+            ("K", "", "Also: python, bash, ruby, js"),
+            ("S", "", ""),
+            ("H", "Animations", ""),
+            ("K", "<!-- transition: fade -->", "fade|slide|dissolve"),
+            ("K", "<!-- animation: typewriter -->", "typewriter|fade_in|slide_down"),
+            ("K", "<!-- loop_animation: pulse -->", "matrix|bounce|pulse|sparkle|spin"),
             ("S", "", ""),
             ("H", "Commands (: mode)", ""),
             ("K", ":theme <slug>", "Switch theme"),
@@ -2174,24 +2717,38 @@ impl Presenter {
         let tw = self.width as usize;
         let th = self.height as usize;
 
+        // Clear entire screen (this also clears any lingering protocol images)
         for row in 0..th {
             queue!(w, cursor::MoveTo(0, row as u16), SetBackgroundColor(self.bg_color))?;
             write!(w, "{}", " ".repeat(tw))?;
+        }
+
+        // Clear Kitty images if applicable
+        if self.image_protocol == ImageProtocol::Kitty {
+            write!(w, "\x1b_Ga=d\x1b\\")?;
         }
 
         queue!(w, cursor::MoveTo(2, 1), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
         write!(w, "Slide Overview")?;
         queue!(w, SetAttribute(Attribute::Reset))?;
 
-        let cols = 3usize;
-        let col_width = (tw - 4) / cols;
+        // Two-column layout, reading top-down per column
+        let num_cols = 2usize;
+        let col_width = (tw - 6) / num_cols;
         let start_y = 3u16;
+        let rows_per_col = (th.saturating_sub(5)) / 2; // 2 rows per entry (label + blank)
+        let total_slots = rows_per_col * num_cols;
 
         for (i, slide) in self.slides.iter().enumerate() {
-            let col = i % cols;
-            let row = i / cols;
-            let x = 2 + col * col_width;
-            let y = start_y + row as u16 * 2;
+            if i >= total_slots { break; }
+
+            // Top-down then left-to-right: column fills vertically first
+            let col = i / rows_per_col;
+            let row_in_col = i % rows_per_col;
+            if col >= num_cols { break; }
+
+            let x = 2 + col * (col_width + 2);
+            let y = start_y + row_in_col as u16 * 2;
             if y >= self.height - 2 { break; }
 
             queue!(w, cursor::MoveTo(x as u16, y))?;
@@ -2201,13 +2758,20 @@ impl Presenter {
                 queue!(w, SetBackgroundColor(self.bg_color), SetForegroundColor(self.text_color))?;
             }
 
-            let label = format!(" {:>2}. {} ", i + 1, truncate_str(&slide.title, col_width.saturating_sub(8)));
-            write!(w, "{:<width$}", label, width = col_width.min(label.len() + 2))?;
+            let section = slide.section.as_str();
+            let section_tag = if section.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", truncate_str(section, 10))
+            };
+            let max_title = col_width.saturating_sub(8 + section_tag.len());
+            let label = format!(" {:>2}. {}{} ", i + 1, truncate_str(&slide.title, max_title), section_tag);
+            write!(w, "{:<width$}", label, width = col_width)?;
             queue!(w, SetAttribute(Attribute::Reset))?;
         }
 
         queue!(w, cursor::MoveTo(2, self.height - 1), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Dim))?;
-        write!(w, "h/l: navigate  Enter: select  Esc: close")?;
+        write!(w, "j/k: navigate  Enter: select  Esc: close")?;
         queue!(w, SetAttribute(Attribute::Reset), EndSynchronizedUpdate, ResetColor)?;
         w.flush()?;
         Ok(())

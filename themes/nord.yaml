@@ -11,3 +11,4 @@ fonts:
   code: "Source Code Pro"
 layout: "left"
 visual_style: "minimal"
+light_variant: "nord_light"

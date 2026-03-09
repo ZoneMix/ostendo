@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeGradient {
+    pub from: String,
+    pub to: String,
+    #[serde(default = "default_gradient_direction")]
+    pub direction: String,
+}
+
+fn default_gradient_direction() -> String { "vertical".to_string() }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
     pub name: String,
     #[serde(default)]
@@ -12,6 +22,14 @@ pub struct Theme {
     pub layout: String,
     #[serde(default = "default_visual_style")]
     pub visual_style: String,
+    #[serde(default)]
+    pub gradient: Option<ThemeGradient>,
+    #[serde(default)]
+    pub title_decoration: Option<String>,
+    #[serde(default)]
+    pub dark_variant: Option<String>,
+    #[serde(default)]
+    pub light_variant: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

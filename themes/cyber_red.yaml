@@ -11,3 +11,7 @@ fonts:
   code: "Fira Code"
 layout: "center"
 visual_style: "gradient"
+gradient:
+  from: "#1A0000"
+  to: "#0A0000"
+  direction: "vertical"

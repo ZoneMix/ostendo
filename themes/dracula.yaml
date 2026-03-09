@@ -11,3 +11,4 @@ fonts:
   code: "Fira Code"
 layout: "left"
 visual_style: "minimal"
+light_variant: "dracula_light"

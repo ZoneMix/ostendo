@@ -49,6 +49,18 @@ pub fn ensure_badge_contrast(badge_bg: Color, page_bg: Color) -> Color {
     }
 }
 
+/// Linearly interpolate between two RGB colors. `t` ranges from 0.0 (= `from`) to 1.0 (= `to`).
+pub fn interpolate_color(from: Color, to: Color, t: f64) -> Color {
+    let (r1, g1, b1) = color_to_rgb(from).unwrap_or((0, 0, 0));
+    let (r2, g2, b2) = color_to_rgb(to).unwrap_or((0, 0, 0));
+    let t = t.clamp(0.0, 1.0);
+    Color::Rgb {
+        r: (r1 as f64 + (r2 as f64 - r1 as f64) * t) as u8,
+        g: (g1 as f64 + (g2 as f64 - g1 as f64) * t) as u8,
+        b: (b1 as f64 + (b2 as f64 - b1 as f64) * t) as u8,
+    }
+}
+
 pub fn hex_to_color(hex: &str) -> Option<Color> {
     let hex = hex.trim_start_matches('#');
     if hex.len() != 6 {
@@ -84,5 +96,21 @@ mod tests {
     #[test]
     fn test_hex_to_color_invalid_chars() {
         assert!(hex_to_color("#gggggg").is_none());
+    }
+
+    #[test]
+    fn test_interpolate_color_endpoints() {
+        let black = Color::Rgb { r: 0, g: 0, b: 0 };
+        let white = Color::Rgb { r: 255, g: 255, b: 255 };
+        assert_eq!(interpolate_color(black, white, 0.0), black);
+        assert_eq!(interpolate_color(black, white, 1.0), white);
+    }
+
+    #[test]
+    fn test_interpolate_color_midpoint() {
+        let black = Color::Rgb { r: 0, g: 0, b: 0 };
+        let white = Color::Rgb { r: 254, g: 254, b: 254 };
+        let mid = interpolate_color(black, white, 0.5);
+        assert_eq!(mid, Color::Rgb { r: 127, g: 127, b: 127 });
     }
 }

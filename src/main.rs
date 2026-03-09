@@ -7,6 +7,7 @@ mod theme;
 mod code;
 mod third_party;
 mod image_util;
+mod export;
 mod watch;
 
 use anyhow::Result;
@@ -70,6 +71,14 @@ pub struct Cli {
     /// Start with timer running
     #[arg(long)]
     pub timer: bool,
+
+    /// Export presentation to HTML or PDF
+    #[arg(long, value_name = "FORMAT")]
+    pub export: Option<String>,
+
+    /// Output path for export (default: presentation name with new extension)
+    #[arg(short, long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -101,7 +110,7 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| registry.get("terminal_green").expect("default theme missing"));
 
     let source = std::fs::read_to_string(&file)?;
-    let slides = markdown::parse_presentation(&source, file.parent())?;
+    let (meta, slides) = markdown::parse_presentation(&source, file.parent())?;
 
     if slides.is_empty() {
         anyhow::bail!("No slides found in {:?}", file);
@@ -151,6 +160,36 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Export mode
+    if let Some(ref format) = cli.export {
+        let output_path = cli.output.clone().unwrap_or_else(|| {
+            let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+            match format.as_str() {
+                "pdf" => PathBuf::from(format!("{}.pdf", stem)),
+                _ => PathBuf::from(format!("{}.html", stem)),
+            }
+        });
+        match format.as_str() {
+            "html" => {
+                export::html::export_html(&slides, &theme, &output_path)?;
+                println!("Exported HTML to {:?}", output_path);
+            }
+            "pdf" => {
+                // First export to HTML, then convert to PDF
+                let html_path = std::env::temp_dir().join("ostendo_export.html");
+                export::html::export_html(&slides, &theme, &html_path)?;
+                export::pdf::export_pdf(&html_path, &output_path)?;
+                let _ = std::fs::remove_file(&html_path);
+                println!("Exported PDF to {:?}", output_path);
+            }
+            _ => {
+                eprintln!("Unknown export format: {}. Use 'html' or 'pdf'.", format);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     // Start remote control server if requested
     let remote_channels = if cli.remote {
         eprintln!("Remote control: http://127.0.0.1:{}", cli.remote_port);
@@ -161,7 +200,7 @@ fn main() -> Result<()> {
     };
 
     let mut presenter = render::Presenter::new(
-        slides, theme, cli.slide.saturating_sub(1), &file, &cli.image_mode, remote_channels,
+        slides, meta, theme, cli.slide.saturating_sub(1), &file, &cli.image_mode, remote_channels,
     );
     if cli.fullscreen {
         presenter.set_fullscreen(true);

@@ -4,8 +4,8 @@
 
 ```bash
 cargo build --release          # Release build
-cargo test                     # Run all tests (77 tests)
-cargo run --release -- --validate presentations/test_presentation.md  # Validate presentation
+cargo test                     # Run all tests (99 tests)
+cargo run --release -- --validate presentations/examples/test_presentation.md  # Validate presentation
 ```
 
 ## Architecture
@@ -23,7 +23,10 @@ src/
   theme/               # Theme registry, schema, color utilities
   code/                # Syntax highlighting, code execution
   image_util/          # Image loading, rendering (protocol-specific)
-  image_util/mod.rs    # Image utility module
+  image_util/mermaid.rs # Mermaid diagram rendering via mmdc CLI
+  export/html.rs       # Self-contained HTML export
+  export/pdf.rs        # PDF export via headless Chrome/wkhtmltopdf
+  render/animation.rs  # Slide transitions + entrance/looping animations
   watch.rs             # File watcher for hot reload
   remote/              # WebSocket remote control server
 ```
@@ -45,7 +48,7 @@ src/
 
 ## Theme System
 
-- 20 built-in themes in `themes/*.yaml`
+- 23 built-in themes in `themes/*.yaml` (20 original + 3 light variants)
 - All themes must pass contrast ratio tests (WCAG 2.0):
   - text:bg >= 4.5:1
   - accent:bg >= 3.0:1
@@ -54,7 +57,7 @@ src/
 
 ## Test Presentation
 
-`test_presentation.md` has 32 slides testing every feature. Each slide's speaker notes contain:
+`presentations/examples/test_presentation.md` has 32 slides testing every feature. Each slide's speaker notes contain:
 ```
 FEATURE: [name]
 EXPECTED: [expected visual]
@@ -69,3 +72,37 @@ Use `AGENTS.md` feedback format: `Slide N - [Feature]: PASS/FAIL - [description]
 - FIGlet ASCII titles overflow on narrow terminals with long text
 - Font sizing via Kitty remote control protocol — Kitty terminal only
 - Protocol images in tmux may have latency on first display
+
+## Feature Batches (v0.2.0)
+
+### Batch 1: Quick Wins (author footer, alignment, accent override)
+- [x] Create PresentationMeta struct + change parser return type
+- [x] Feature 9: author/date in status bar + per-slide footer directive
+- [x] Feature 6: per-slide vertical centering via <!-- align: center -->
+- [x] Feature 11a: front matter accent color override
+- [x] Tests + verification
+
+### Batch 2: Theme System (gradients, title decorations, light/dark)
+- [x] Feature 11b: gradient backgrounds (ThemeGradient, per-row interpolation)
+- [x] Feature 11c: decorated title bars (underline/box/banner)
+- [x] Feature 11d: light/dark theme variants + D keybinding
+- [x] Create 3 light variant theme files
+- [x] Tests + verification
+
+### Batch 3: Animation System (transitions + entrance/looping)
+- [x] Create src/render/animation.rs module
+- [x] Feature 2: slide transitions (fade, slide-left, dissolve)
+- [x] Feature 1a: entrance animations (typewriter, fade_in, slide_down)
+- [x] Feature 1b: looping animations (matrix, bounce, pulse)
+- [x] Tests + verification
+
+### Batch 4: Code Execution (C/C++/Go/Ruby + preambles)
+- [x] Feature 5a: C/C++/Go/Ruby language support + compiler detection
+- [x] Feature 5b: code preamble directives
+- [x] Tests + verification
+
+### Batch 5: External Integrations (Mermaid + export)
+- [x] Feature 7: Mermaid rendering via mmdc CLI
+- [x] Feature 8a: HTML export (self-contained, themed)
+- [x] Feature 8b: PDF export via headless Chrome/wkhtmltopdf
+- [x] Tests + verification
