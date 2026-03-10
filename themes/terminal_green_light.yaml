@@ -1,10 +1,10 @@
 name: "Terminal Green Light"
 slug: "terminal_green_light"
 colors:
-  background: "#F0F4F0"
-  accent: "#0A7B3E"
+  background: "#F4F5F0"
+  accent: "#1A7D42"
   text: "#1A1A1A"
-  code_background: "#D8E0D8"
+  code_background: "#D8DAD2"
 fonts:
   heading: "JetBrains Mono"
   body: "JetBrains Mono"

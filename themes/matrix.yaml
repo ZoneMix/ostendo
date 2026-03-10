@@ -3,8 +3,8 @@ slug: "matrix"
 colors:
   background: "#000000"
   accent: "#00ff41"
-  text: "#33FF66"
-  code_background: "#1E1E1E"
+  text: "#C8E6C8"
+  code_background: "#0E1E0E"
 fonts:
   heading: "JetBrains Mono"
   body: "JetBrains Mono"

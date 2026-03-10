@@ -1,10 +1,10 @@
 name: "Clean Light"
 slug: "clean_light"
 colors:
-  background: "#F5F5F0"
-  accent: "#2563EB"
+  background: "#F7F5F0"
+  accent: "#3B6EC2"
   text: "#1A1A1A"
-  code_background: "#DCDCD8"
+  code_background: "#E0DCD4"
 fonts:
   heading: "Inter"
   body: "Fira Code"

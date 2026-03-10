@@ -1,10 +1,10 @@
 name: "Minimal Mono"
 slug: "minimal_mono"
 colors:
-  background: "#FFFFFF"
-  accent: "#E63946"
+  background: "#FAFAF8"
+  accent: "#C4384A"
   text: "#1A1A1A"
-  code_background: "#E5E5E5"
+  code_background: "#E0E0DE"
 fonts:
   heading: "JetBrains Mono"
   body: "JetBrains Mono"

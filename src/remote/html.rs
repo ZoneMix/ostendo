@@ -524,6 +524,54 @@ function setTheme(slug) {
   if (slug) send("set_theme", slug);
 }
 
+function applyThemeColors(bg, accent, text) {
+  var r = document.documentElement.style;
+  // Parse hex to RGB
+  function hexRgb(h) {
+    h = h.replace("#","");
+    return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
+  }
+  function rgbHex(rgb) {
+    return "#" + rgb.map(function(c){ return Math.max(0,Math.min(255,Math.round(c))).toString(16).padStart(2,"0"); }).join("");
+  }
+  function lum(rgb) {
+    var c = rgb.map(function(v){ v=v/255; return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4); });
+    return 0.2126*c[0]+0.7152*c[1]+0.0722*c[2];
+  }
+  function mix(a,b,t) { return a.map(function(v,i){ return v+(b[i]-v)*t; }); }
+
+  var bgRgb = hexRgb(bg), acRgb = hexRgb(accent), txRgb = hexRgb(text);
+  var bgLum = lum(bgRgb);
+  var isDark = bgLum < 0.15;
+
+  // Derive surface/elevated/hover by shifting bg toward text slightly
+  var surface = rgbHex(mix(bgRgb, isDark ? [255,255,255] : [0,0,0], isDark ? 0.06 : 0.04));
+  var elevated = rgbHex(mix(bgRgb, isDark ? [255,255,255] : [0,0,0], isDark ? 0.09 : 0.06));
+  var hover = rgbHex(mix(bgRgb, isDark ? [255,255,255] : [0,0,0], isDark ? 0.12 : 0.08));
+  var border = rgbHex(mix(bgRgb, isDark ? [255,255,255] : [0,0,0], isDark ? 0.18 : 0.14));
+  var borderSubtle = rgbHex(mix(bgRgb, isDark ? [255,255,255] : [0,0,0], isDark ? 0.13 : 0.10));
+  var textSec = rgbHex(mix(txRgb, bgRgb, 0.35));
+  var textTer = rgbHex(mix(txRgb, bgRgb, 0.60));
+  var accentHover = rgbHex(mix(acRgb, isDark ? [255,255,255] : [0,0,0], 0.15));
+
+  r.setProperty("--bg", bg);
+  r.setProperty("--bg-surface", surface);
+  r.setProperty("--bg-elevated", elevated);
+  r.setProperty("--bg-hover", hover);
+  r.setProperty("--border", border);
+  r.setProperty("--border-subtle", borderSubtle);
+  r.setProperty("--text", text);
+  r.setProperty("--text-secondary", textSec);
+  r.setProperty("--text-tertiary", textTer);
+  r.setProperty("--accent", accent);
+  r.setProperty("--accent-hover", accentHover);
+  r.setProperty("--accent-subtle", "rgba("+acRgb[0]+","+acRgb[1]+","+acRgb[2]+",0.12)");
+
+  // Nav next button text: use bg or text depending on accent luminance
+  var navNext = document.querySelector(".nav-next");
+  if (navNext) navNext.style.color = lum(acRgb) > 0.4 ? bg : text;
+}
+
 function updateUI(d) {
   // Slide info
   document.getElementById("slide-counter").textContent = d.slide + " / " + d.total;
@@ -585,6 +633,11 @@ function updateUI(d) {
     }
   }
   if (d.theme_slug) sel.value = d.theme_slug;
+
+  // Dynamic theme colors
+  if (d.theme_bg && d.theme_accent && d.theme_text) {
+    applyThemeColors(d.theme_bg, d.theme_accent, d.theme_text);
+  }
 
   // Execute button visibility
   var execBtn = document.getElementById("btn-exec");

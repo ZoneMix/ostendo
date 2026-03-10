@@ -1,0 +1,17 @@
+name: "Ocean Deep"
+slug: "ocean_deep"
+colors:
+  background: "#0A1628"
+  accent: "#4DB8D4"
+  text: "#D4E4EE"
+  code_background: "#1C2A40"
+fonts:
+  heading: "JetBrains Mono"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "left"
+visual_style: "glass"
+gradient:
+  from: "#0E1E36"
+  to: "#050C18"
+  direction: "vertical"

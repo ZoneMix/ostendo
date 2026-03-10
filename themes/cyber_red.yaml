@@ -1,10 +1,10 @@
 name: "Cyber Red"
 slug: "cyber_red"
 colors:
-  background: "#1A1A2E"
+  background: "#1A1018"
   accent: "#FF4444"
   text: "#E0E0E0"
-  code_background: "#2E2E40"
+  code_background: "#32242C"
 fonts:
   heading: "Inter"
   body: "Fira Code"

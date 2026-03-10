@@ -70,6 +70,9 @@ pub struct StateMessage {
     pub has_executable_code: bool,
     pub timer_running: bool,
     pub themes: Vec<String>,
+    pub theme_bg: String,
+    pub theme_accent: String,
+    pub theme_text: String,
 }
 
 #[cfg(test)]
@@ -124,6 +127,9 @@ mod tests {
             has_executable_code: false,
             timer_running: true,
             themes: vec!["dracula".to_string(), "nord".to_string()],
+            theme_bg: "#282a36".to_string(),
+            theme_accent: "#bd93f9".to_string(),
+            theme_text: "#f8f8f2".to_string(),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"state\""));

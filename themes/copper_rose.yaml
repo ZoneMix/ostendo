@@ -1,0 +1,17 @@
+name: "Copper Rose"
+slug: "copper_rose"
+colors:
+  background: "#1A1214"
+  accent: "#D4836B"
+  text: "#E4D4CC"
+  code_background: "#30242A"
+fonts:
+  heading: "Source Code Pro"
+  body: "Source Code Pro"
+  code: "Source Code Pro"
+layout: "left"
+visual_style: "minimal"
+gradient:
+  from: "#1E140E"
+  to: "#0C0806"
+  direction: "vertical"

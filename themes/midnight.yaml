@@ -1,0 +1,17 @@
+name: "Midnight Sapphire"
+slug: "midnight"
+colors:
+  background: "#080C1A"
+  accent: "#5B8DEF"
+  text: "#C8D4E8"
+  code_background: "#1A2438"
+fonts:
+  heading: "Fira Code"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "center"
+visual_style: "glass"
+gradient:
+  from: "#0C1428"
+  to: "#04060E"
+  direction: "vertical"

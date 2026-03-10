@@ -1,0 +1,17 @@
+name: "Twilight"
+slug: "twilight"
+colors:
+  background: "#14101E"
+  accent: "#A78BDA"
+  text: "#D8D0E8"
+  code_background: "#2A2238"
+fonts:
+  heading: "JetBrains Mono"
+  body: "JetBrains Mono"
+  code: "JetBrains Mono"
+layout: "center"
+visual_style: "gradient"
+gradient:
+  from: "#1C1430"
+  to: "#0A0812"
+  direction: "vertical"

@@ -724,6 +724,9 @@ impl Presenter {
                 has_executable_code: has_exec,
                 timer_running: self.timer_start.is_some(),
                 themes: self.theme_slugs.clone(),
+                theme_bg: self.theme.colors.background.clone(),
+                theme_accent: self.theme.colors.accent.clone(),
+                theme_text: self.theme.colors.text.clone(),
             };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = tx.send(json);

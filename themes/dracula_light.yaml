@@ -1,10 +1,10 @@
 name: "Dracula Light"
 slug: "dracula_light"
 colors:
-  background: "#F8F8F2"
-  accent: "#7C3AED"
+  background: "#FAF9F6"
+  accent: "#7C5AC7"
   text: "#282A36"
-  code_background: "#D8D8D0"
+  code_background: "#E2DED6"
 fonts:
   heading: "Inter"
   body: "Fira Code"

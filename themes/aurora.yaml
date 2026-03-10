@@ -1,0 +1,17 @@
+name: "Aurora"
+slug: "aurora"
+colors:
+  background: "#0C1A14"
+  accent: "#47D4A0"
+  text: "#D0E8DC"
+  code_background: "#20342A"
+fonts:
+  heading: "Fira Code"
+  body: "Fira Code"
+  code: "Fira Code"
+layout: "center"
+visual_style: "glass"
+gradient:
+  from: "#0A2418"
+  to: "#040E0A"
+  direction: "vertical"
