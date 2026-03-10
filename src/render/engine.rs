@@ -522,6 +522,91 @@ impl Presenter {
                 crate::remote::RemoteCommand::Next => self.next_slide(),
                 crate::remote::RemoteCommand::Prev => self.prev_slide(),
                 crate::remote::RemoteCommand::Goto(n) => self.goto_slide(n.saturating_sub(1)),
+                crate::remote::RemoteCommand::NextSection => self.next_section(),
+                crate::remote::RemoteCommand::PrevSection => self.prev_section(),
+                crate::remote::RemoteCommand::ScrollUp => self.scroll_up(3),
+                crate::remote::RemoteCommand::ScrollDown => self.scroll_down(3),
+                crate::remote::RemoteCommand::ToggleFullscreen => {
+                    self.show_fullscreen = !self.show_fullscreen;
+                    self.user_fullscreen_override = Some(self.show_fullscreen);
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::ToggleNotes => {
+                    self.show_notes = !self.show_notes;
+                    self.notes_scroll = 0;
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::ToggleThemeName => {
+                    self.show_theme_name = !self.show_theme_name;
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::ToggleSections => {
+                    self.show_sections = !self.show_sections;
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::ToggleDarkMode => {
+                    let registry = crate::theme::ThemeRegistry::load();
+                    if let Some(variant) = registry.get_variant(&self.theme, !self.is_light_variant) {
+                        self.is_light_variant = !self.is_light_variant;
+                        self.apply_theme(variant);
+                    }
+                }
+                crate::remote::RemoteCommand::ScaleUp => {
+                    self.global_scale = (self.global_scale + 5).min(200);
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::ScaleDown => {
+                    self.global_scale = self.global_scale.saturating_sub(5).max(50);
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::ImageScaleUp => {
+                    self.image_scale_offset = (self.image_scale_offset + 10).min(100);
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::ImageScaleDown => {
+                    self.image_scale_offset = (self.image_scale_offset - 10).max(-90);
+                    self.needs_full_redraw = true;
+                }
+                crate::remote::RemoteCommand::FontUp => {
+                    if self.font_capability.is_available() {
+                        let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
+                        if cur < 20 {
+                            self.slide_font_offsets.insert(self.current, cur + 1);
+                            self.font_change_is_slide_transition = false;
+                            self.apply_slide_font();
+                            self.needs_full_redraw = true;
+                            self.save_state();
+                        }
+                    }
+                }
+                crate::remote::RemoteCommand::FontDown => {
+                    if self.font_capability.is_available() {
+                        let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
+                        if cur > -20 {
+                            self.slide_font_offsets.insert(self.current, cur - 1);
+                            self.font_change_is_slide_transition = false;
+                            self.apply_slide_font();
+                            self.needs_full_redraw = true;
+                            self.save_state();
+                        }
+                    }
+                }
+                crate::remote::RemoteCommand::FontReset => {
+                    if self.font_capability.is_available() {
+                        self.slide_font_offsets.remove(&self.current);
+                        self.font_change_is_slide_transition = false;
+                        self.apply_slide_font();
+                        self.needs_full_redraw = true;
+                        self.save_state();
+                    }
+                }
+                crate::remote::RemoteCommand::ExecuteCode => { let _ = self.execute_code(); }
+                crate::remote::RemoteCommand::TimerStart => {
+                    if self.timer_start.is_none() {
+                        self.timer_start = Some(std::time::Instant::now());
+                    }
+                }
+                crate::remote::RemoteCommand::TimerReset => { self.timer_start = None; }
             }
             got_command = true;
         }
@@ -588,14 +673,32 @@ impl Presenter {
                     }
                 }
             }
-            let msg = crate::remote::StateMessage::new(
-                self.current + 1,
-                self.slides.len(),
-                &slide.title,
-                &slide.notes,
-                &self.format_timer(),
-                content,
-            );
+            let has_exec = slide.code_blocks.iter().any(|cb| cb.exec_mode.is_some())
+                || slide.columns.as_ref().map_or(false, |cols|
+                    cols.contents.iter().any(|c| c.code_blocks.iter().any(|cb| cb.exec_mode.is_some()))
+                );
+            let font_offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
+            let msg = crate::remote::StateMessage {
+                msg_type: "state".to_string(),
+                slide: self.current + 1,
+                total: self.slides.len(),
+                slide_title: slide.title.clone(),
+                notes: slide.notes.clone(),
+                timer: self.format_timer(),
+                slide_content: content,
+                section: slide.section.clone(),
+                is_fullscreen: self.show_fullscreen,
+                is_notes_visible: self.show_notes,
+                is_dark_mode: !self.is_light_variant,
+                show_theme_name: self.show_theme_name,
+                show_sections: self.show_sections,
+                theme_name: self.theme.name.clone(),
+                scale: self.global_scale,
+                image_scale: self.image_scale_offset,
+                font_offset,
+                has_executable_code: has_exec,
+                timer_running: self.timer_start.is_some(),
+            };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = tx.send(json);
             }

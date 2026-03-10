@@ -100,7 +100,7 @@ async fn handle_connection(
              Connection: close\r\n\
              X-Content-Type-Options: nosniff\r\n\
              X-Frame-Options: DENY\r\n\
-             Content-Security-Policy: default-src 'self' 'unsafe-inline'; connect-src ws://127.0.0.1:* ws://localhost:*\r\n\
+             Content-Security-Policy: default-src 'self' 'unsafe-inline'; connect-src ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com\r\n\
              \r\n{}",
             REMOTE_HTML.len(),
             REMOTE_HTML
@@ -157,6 +157,25 @@ async fn handle_websocket(
                             "next" => Some(RemoteCommand::Next),
                             "prev" => Some(RemoteCommand::Prev),
                             "goto" => cmd_msg.slide.map(RemoteCommand::Goto),
+                            "next_section" => Some(RemoteCommand::NextSection),
+                            "prev_section" => Some(RemoteCommand::PrevSection),
+                            "scroll_up" => Some(RemoteCommand::ScrollUp),
+                            "scroll_down" => Some(RemoteCommand::ScrollDown),
+                            "toggle_fullscreen" => Some(RemoteCommand::ToggleFullscreen),
+                            "toggle_notes" => Some(RemoteCommand::ToggleNotes),
+                            "toggle_theme_name" => Some(RemoteCommand::ToggleThemeName),
+                            "toggle_sections" => Some(RemoteCommand::ToggleSections),
+                            "toggle_dark_mode" => Some(RemoteCommand::ToggleDarkMode),
+                            "scale_up" => Some(RemoteCommand::ScaleUp),
+                            "scale_down" => Some(RemoteCommand::ScaleDown),
+                            "image_scale_up" => Some(RemoteCommand::ImageScaleUp),
+                            "image_scale_down" => Some(RemoteCommand::ImageScaleDown),
+                            "font_up" => Some(RemoteCommand::FontUp),
+                            "font_down" => Some(RemoteCommand::FontDown),
+                            "font_reset" => Some(RemoteCommand::FontReset),
+                            "execute_code" => Some(RemoteCommand::ExecuteCode),
+                            "timer_start" => Some(RemoteCommand::TimerStart),
+                            "timer_reset" => Some(RemoteCommand::TimerReset),
                             _ => None,
                         };
                         if let Some(cmd) = command {

@@ -14,9 +14,32 @@ pub struct RemoteCommandMsg {
 
 #[derive(Debug)]
 pub enum RemoteCommand {
+    // Navigation
     Next,
     Prev,
     Goto(usize),
+    NextSection,
+    PrevSection,
+    ScrollUp,
+    ScrollDown,
+    // Display toggles
+    ToggleFullscreen,
+    ToggleNotes,
+    ToggleThemeName,
+    ToggleSections,
+    ToggleDarkMode,
+    // Scale
+    ScaleUp,
+    ScaleDown,
+    ImageScaleUp,
+    ImageScaleDown,
+    FontUp,
+    FontDown,
+    FontReset,
+    // Actions
+    ExecuteCode,
+    TimerStart,
+    TimerReset,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,20 +52,18 @@ pub struct StateMessage {
     pub notes: String,
     pub timer: String,
     pub slide_content: Vec<String>,
-}
-
-impl StateMessage {
-    pub fn new(slide: usize, total: usize, title: &str, notes: &str, timer: &str, content: Vec<String>) -> Self {
-        Self {
-            msg_type: "state".to_string(),
-            slide,
-            total,
-            slide_title: title.to_string(),
-            notes: notes.to_string(),
-            timer: timer.to_string(),
-            slide_content: content,
-        }
-    }
+    pub section: String,
+    pub is_fullscreen: bool,
+    pub is_notes_visible: bool,
+    pub is_dark_mode: bool,
+    pub show_theme_name: bool,
+    pub show_sections: bool,
+    pub theme_name: String,
+    pub scale: u8,
+    pub image_scale: i8,
+    pub font_offset: i8,
+    pub has_executable_code: bool,
+    pub timer_running: bool,
 }
 
 #[cfg(test)]
@@ -66,12 +87,44 @@ mod tests {
     }
 
     #[test]
+    fn test_remote_command_toggle() {
+        let json = r#"{"type":"command","action":"toggle_fullscreen"}"#;
+        let msg: RemoteCommandMsg = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.action, "toggle_fullscreen");
+        assert_eq!(msg.msg_type, "command");
+    }
+
+    #[test]
     fn test_state_message_serialization() {
-        let msg = StateMessage::new(3, 10, "Test Title", "Some notes", "00:05:30", vec!["Bullet 1".to_string(), "Bullet 2".to_string()]);
+        let msg = StateMessage {
+            msg_type: "state".to_string(),
+            slide: 3,
+            total: 10,
+            slide_title: "Test Title".to_string(),
+            notes: "Some notes".to_string(),
+            timer: "00:05:30".to_string(),
+            slide_content: vec!["Bullet 1".to_string(), "Bullet 2".to_string()],
+            section: "intro".to_string(),
+            is_fullscreen: false,
+            is_notes_visible: true,
+            is_dark_mode: true,
+            show_theme_name: false,
+            show_sections: true,
+            theme_name: "dracula".to_string(),
+            scale: 100,
+            image_scale: 0,
+            font_offset: 0,
+            has_executable_code: false,
+            timer_running: true,
+        };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"state\""));
         assert!(json.contains("\"slide\":3"));
         assert!(json.contains("\"total\":10"));
         assert!(json.contains("\"slide_title\":\"Test Title\""));
+        assert!(json.contains("\"section\":\"intro\""));
+        assert!(json.contains("\"is_dark_mode\":true"));
+        assert!(json.contains("\"theme_name\":\"dracula\""));
+        assert!(json.contains("\"timer_running\":true"));
     }
 }
