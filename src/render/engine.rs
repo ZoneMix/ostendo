@@ -153,6 +153,8 @@ pub struct Presenter {
     /// OSC 66 text scaling capability (disabled pending rendering fix, but kept for detection)
     #[allow(dead_code)]
     text_scale_cap: TextScaleCapability,
+    /// When true, the next render will dissolve-in the new content after flush.
+    pending_dissolve_in: bool,
     // Smart redraw tracking
     last_rendered_slide: Option<usize>,
     last_rendered_scroll: usize,
@@ -311,6 +313,7 @@ impl Presenter {
             last_applied_font_size: None,
             font_change_is_slide_transition: false,
             text_scale_cap: protocols::detect_text_scale_capability(),
+            pending_dissolve_in: false,
         };
         // Initialize mermaid renderer if any slide has mermaid blocks
         let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
@@ -1283,111 +1286,222 @@ end tell"#,
         // Font change BEFORE the sync block — the terminal resize triggered
         // by font changes must settle before we query dimensions and render.
         if let Some(target) = font_changing {
-            // Fade out old content before font change so reflow is invisible.
-            // Only fade on slide transitions — not on interactive ] / [ adjustments.
+            let mut font_applied = false;
+
+            // ── Slide transition: scatter-dissolve interleaved with font stepping ──
+            // The dissolve plays DURING the font change so the screen is never
+            // blank.  Each 2-column group gets a pseudo-random dissolve time;
+            // surviving characters dim progressively.  Font step batches are
+            // sent between dissolve frames so the zoom and dissolve overlap.
             if self.font_change_is_slide_transition {
                 let old_buf = self.last_rendered_buffer.clone();
                 if !old_buf.is_empty() {
-                    let fade_steps = 10u32;
-                    let tw = self.width as usize;
-                    let padding = " ".repeat(tw);
-                    for step in 1..=fade_steps {
-                        let t = step as f64 / fade_steps as f64;
-                        let stdout = io::stdout();
-                        let mut fw = BufWriter::with_capacity(64 * 1024, stdout.lock());
-                        queue!(fw, BeginSynchronizedUpdate)?;
-                        // Fade the entire screen (including status bar) to prevent
-                        // the old status bar from wrapping at the new narrower width.
-                        for row in 0..self.height {
-                            queue!(fw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
-                            // Content lines get faded text; other rows just get bg fill
-                            let status_rows = if self.show_fullscreen { 0u16 } else { 2 };
-                            if row >= status_rows {
-                                let buf_idx = (row - status_rows) as usize;
-                                if let Some(line) = old_buf.get(buf_idx) {
-                                    let mut chars = 0;
-                                    for span in &line.spans {
-                                        if chars >= tw { break; }
-                                        let fg = span.fg.unwrap_or(self.text_color);
-                                        let faded = interpolate_color(fg, self.bg_color, t);
-                                        queue!(fw, SetForegroundColor(faded))?;
-                                        let span_w = unicode_width::UnicodeWidthStr::width(span.text.as_str());
-                                        let remaining = tw.saturating_sub(chars);
-                                        if span_w <= remaining {
-                                            write!(fw, "{}", span.text)?;
-                                            chars += span_w;
-                                        } else {
-                                            let truncated = truncate_to_width(&span.text, remaining);
-                                            let trunc_w = unicode_width::UnicodeWidthStr::width(truncated.as_str());
-                                            write!(fw, "{}", truncated)?;
-                                            chars += trunc_w;
-                                        }
-                                    }
-                                    if chars < tw {
-                                        write!(fw, "{}", &padding[..tw - chars])?;
-                                    }
-                                    continue;
-                                }
-                            }
-                            // Status bar rows and any rows beyond content: fill with bg
-                            write!(fw, "{}", &padding)?;
-                        }
-                        queue!(fw, EndSynchronizedUpdate, ResetColor)?;
-                        fw.flush()?;
-                        std::thread::sleep(std::time::Duration::from_millis(20));
-                    }
-                }
-                self.font_change_is_slide_transition = false;
-            }
-
-            match self.font_capability {
-                FontSizeCapability::KittyRemote => {
-                    let current = self.last_applied_font_size.unwrap_or(target);
-                    let increasing = target > current;
-
-                    let stdout = io::stdout();
-                    let mut pre = stdout.lock();
-
-                    // Clear Kitty images before animation so stale overlays don't
-                    // persist at the old size through the font transition
+                    // Clear Kitty images before the transition
                     if self.image_protocol == ImageProtocol::Kitty {
+                        let stdout = io::stdout();
+                        let mut pre = stdout.lock();
                         pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
                         pre.flush()?;
                     }
 
-                    if increasing && (target - current).abs() > 0.3 {
-                        // Animate in 0.2pt steps for a smoother zoom effect
-                        let step = 0.2_f64;
-                        let num_steps = ((target - current) / step).round() as usize;
-                        for i in 1..num_steps {
-                            let intermediate = current + step * i as f64;
-                            let json = format!(
-                                r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                                intermediate
-                            );
-                            let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-                            pre.write_all(esc.as_bytes())?;
-                            pre.flush()?;
-                            std::thread::sleep(std::time::Duration::from_millis(8));
+                    // For Ghostty, fire the keystrokes now — the dissolve
+                    // animation covers the processing delay.
+                    if matches!(self.font_capability, FontSizeCapability::GhosttyKeystroke) {
+                        self.ghostty_set_font_size(target);
+                    }
+
+                    // Build a full-screen buffer: status bar + separator + content.
+                    // This lets the dissolve affect the entire screen uniformly.
+                    let status_rows = if self.show_fullscreen { 0u16 } else { 2 };
+                    let mut screen_buf: Vec<StyledLine> = Vec::new();
+                    if status_rows > 0 {
+                        let bar = self.build_status_bar(self.width as usize);
+                        screen_buf.push(bar);
+                        screen_buf.push(StyledLine::empty()); // separator
+                    }
+                    for line in &old_buf {
+                        screen_buf.push(line.clone());
+                    }
+
+                    // Calculate Kitty font stepping parameters
+                    let current_font = self.last_applied_font_size.unwrap_or(target);
+                    let font_delta = target - current_font;
+                    let num_font_steps = if font_delta.abs() > 0.3 {
+                        (font_delta.abs() / 0.2).round() as usize
+                    } else {
+                        0
+                    };
+                    let font_dir = if font_delta >= 0.0 { 1.0_f64 } else { -1.0_f64 };
+
+                    // Scale dissolve to cover font stepping, with a minimum
+                    // duration so small font changes don't feel too abrupt.
+                    // Target: ~400ms minimum, scaling up for large changes.
+                    let font_step_time_ms = num_font_steps as u32 * 8;
+                    let target_duration_ms = font_step_time_ms.max(400);
+                    let dissolve_frames = (target_duration_ms / 30).clamp(12, 20);
+                    let mut font_steps_sent = 0usize;
+
+                    for frame in 1..=dissolve_frames {
+                        let progress = frame as f64 / dissolve_frames as f64;
+
+                        // Re-query terminal dimensions (font steps resize the terminal)
+                        if frame > 1 && num_font_steps > 0 {
+                            self.window_size = WindowSize::query();
+                            self.width = self.window_size.columns;
+                            self.height = self.window_size.rows;
+                        }
+                        let tw = self.width as usize;
+
+                        // ── Render one dissolve frame ──
+                        {
+                            let stdout = io::stdout();
+                            let mut fw = BufWriter::with_capacity(64 * 1024, stdout.lock());
+                            queue!(fw, BeginSynchronizedUpdate)?;
+                            for row in 0..self.height {
+                                queue!(fw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                                if let Some(line) = screen_buf.get(row as usize) {
+                                    let mut col = 0usize;
+                                    for span in &line.spans {
+                                        if col >= tw { break; }
+                                        let span_bg = span.bg.unwrap_or(self.bg_color);
+                                        let fg = span.fg.unwrap_or(self.text_color);
+                                        // Fade fg toward span's own bg (handles inverted badges)
+                                        let dimmed_fg = interpolate_color(fg, span_bg, progress * 0.7);
+                                        // Fade span bg toward screen bg
+                                        let dimmed_bg = interpolate_color(span_bg, self.bg_color, progress * 0.7);
+                                        for ch in span.text.chars() {
+                                            if col >= tw { break; }
+                                            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                                            let group = col / 2;
+                                            let hash = (row as u64).wrapping_mul(31)
+                                                .wrapping_add(group as u64)
+                                                .wrapping_mul(7919) % 1000;
+                                            let threshold = hash as f64 / 1000.0;
+                                            if threshold < progress {
+                                                queue!(fw, SetBackgroundColor(self.bg_color))?;
+                                                for _ in 0..cw { write!(fw, " ")?; }
+                                            } else {
+                                                queue!(fw, SetBackgroundColor(dimmed_bg))?;
+                                                queue!(fw, SetForegroundColor(dimmed_fg))?;
+                                                write!(fw, "{}", ch)?;
+                                            }
+                                            col += cw;
+                                        }
+                                    }
+                                    if col < tw {
+                                        for _ in 0..tw - col { write!(fw, " ")?; }
+                                    }
+                                } else {
+                                    for _ in 0..tw { write!(fw, " ")?; }
+                                }
+                            }
+                            queue!(fw, EndSynchronizedUpdate, ResetColor)?;
+                            fw.flush()?;
+                        }
+
+                        // ── Interleave Kitty font step batch + pace the frame ──
+                        let frame_target_ms = target_duration_ms / dissolve_frames;
+                        let frame_start = std::time::Instant::now();
+
+                        if num_font_steps > 0 && matches!(self.font_capability, FontSizeCapability::KittyRemote) {
+                            let target_steps = ((num_font_steps as f64 * progress).round() as usize)
+                                .min(num_font_steps);
+                            let batch = target_steps - font_steps_sent;
+                            if batch > 0 {
+                                let stdout = io::stdout();
+                                let mut pre = stdout.lock();
+                                for s in 0..batch {
+                                    let step_idx = font_steps_sent + s + 1;
+                                    let intermediate = current_font + font_dir * 0.2 * step_idx as f64;
+                                    let json = format!(
+                                        r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                                        intermediate
+                                    );
+                                    let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+                                    pre.write_all(esc.as_bytes())?;
+                                    pre.flush()?;
+                                    std::thread::sleep(std::time::Duration::from_millis(8));
+                                }
+                                font_steps_sent = target_steps;
+                            }
+                        }
+
+                        // Pad remaining time so the dissolve isn't too fast
+                        let elapsed = frame_start.elapsed().as_millis() as u32;
+                        if elapsed < frame_target_ms {
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                (frame_target_ms - elapsed) as u64,
+                            ));
                         }
                     }
 
-                    // Final step — land exactly on target
-                    let json = format!(
-                        r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                        target
-                    );
-                    let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-                    pre.write_all(esc.as_bytes())?;
-                    pre.flush()?;
-                    drop(pre);
+                    // Final font step — land exactly on target
+                    match self.font_capability {
+                        FontSizeCapability::KittyRemote => {
+                            let json = format!(
+                                r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                                target
+                            );
+                            let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+                            let stdout = io::stdout();
+                            let mut pre = stdout.lock();
+                            pre.write_all(esc.as_bytes())?;
+                            pre.flush()?;
+                        }
+                        _ => {} // Ghostty keystrokes already sent above
+                    }
+                    font_applied = true;
+                    self.pending_dissolve_in = true;
                 }
-                FontSizeCapability::GhosttyKeystroke => {
-                    self.ghostty_set_font_size(target);
-                    // Give Ghostty time to process the keystrokes and resize
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                self.font_change_is_slide_transition = false;
+            }
+
+            // ── Interactive ] / [ — plain font stepping, no dissolve ──
+            if !font_applied {
+                match self.font_capability {
+                    FontSizeCapability::KittyRemote => {
+                        let current = self.last_applied_font_size.unwrap_or(target);
+                        let increasing = target > current;
+
+                        let stdout = io::stdout();
+                        let mut pre = stdout.lock();
+
+                        if self.image_protocol == ImageProtocol::Kitty {
+                            pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
+                            pre.flush()?;
+                        }
+
+                        if increasing && (target - current).abs() > 0.3 {
+                            let step = 0.2_f64;
+                            let num_steps = ((target - current) / step).round() as usize;
+                            for i in 1..num_steps {
+                                let intermediate = current + step * i as f64;
+                                let json = format!(
+                                    r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                                    intermediate
+                                );
+                                let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+                                pre.write_all(esc.as_bytes())?;
+                                pre.flush()?;
+                                std::thread::sleep(std::time::Duration::from_millis(8));
+                            }
+                        }
+
+                        let json = format!(
+                            r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                            target
+                        );
+                        let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+                        pre.write_all(esc.as_bytes())?;
+                        pre.flush()?;
+                        drop(pre);
+                    }
+                    FontSizeCapability::GhosttyKeystroke => {
+                        self.ghostty_set_font_size(target);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    FontSizeCapability::None => {}
                 }
-                FontSizeCapability::None => {}
             }
 
             self.last_applied_font_size = Some(target);
@@ -1424,6 +1538,7 @@ end tell"#,
 
         // Smart redraw: skip full re-render when nothing changed (timer-only ticks)
         let state_changed = self.needs_full_redraw
+            || self.pending_dissolve_in
             || self.last_rendered_slide != Some(self.current)
             || self.last_rendered_scroll != self.scroll_offset
             || self.last_rendered_width != self.width
@@ -1943,21 +2058,28 @@ end tell"#,
         }
 
         // Render visible content lines (offset by status_bar_rows), with per-row gradient.
-        // Skip scale_placeholder lines — they reserve space in the buffer for OSC 66
-        // multicell blocks but must not be written to the terminal (would overwrite
-        // the scaled text above).
+        // When dissolve-in is pending, render blank content (the dissolve loop
+        // will progressively reveal it after this frame flushes).
         let has_gradient = self.gradient_from.is_some() && self.gradient_to.is_some();
-        for (i, line) in lines[visible_start..visible_end].iter().enumerate() {
-            if line.is_scale_placeholder { continue; }
-            let row = (status_bar_rows + i) as u16;
-            queue!(w, cursor::MoveTo(0, row))?;
-            if has_gradient {
-                let screen_row = visible_start + i;
-                let total = content_area.max(1);
-                let row_bg = self.row_bg_color(screen_row, total);
-                self.queue_styled_line_with_bg(&mut w, line, tw, row_bg)?;
-            } else {
-                self.queue_styled_line(&mut w, line, tw)?;
+        if self.pending_dissolve_in {
+            for i in 0..content_area {
+                let row = (status_bar_rows + i) as u16;
+                queue!(w, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                write!(w, "{}", " ".repeat(tw))?;
+            }
+        } else {
+            for (i, line) in lines[visible_start..visible_end].iter().enumerate() {
+                if line.is_scale_placeholder { continue; }
+                let row = (status_bar_rows + i) as u16;
+                queue!(w, cursor::MoveTo(0, row))?;
+                if has_gradient {
+                    let screen_row = visible_start + i;
+                    let total = content_area.max(1);
+                    let row_bg = self.row_bg_color(screen_row, total);
+                    self.queue_styled_line_with_bg(&mut w, line, tw, row_bg)?;
+                } else {
+                    self.queue_styled_line(&mut w, line, tw)?;
+                }
             }
         }
 
@@ -2063,15 +2185,15 @@ end tell"#,
         }
 
         // Write protocol image data after line rendering (Kitty/iTerm2/Sixel).
-        // Must re-send every frame since line rendering overwrites the image area.
-        // Synchronized update (BeginSynchronizedUpdate/EndSynchronizedUpdate) prevents flicker.
-        for (escape_data, line_offset) in &pending_protocol_images {
-            // Only render if the image line is within the visible scroll range
-            if *line_offset >= visible_start && *line_offset < visible_end {
-                let display_row = line_offset - visible_start;
-                let screen_row = (status_bar_rows + display_row) as u16;
-                queue!(w, cursor::MoveTo(0, screen_row))?;
-                write!(w, "{}", escape_data)?;
+        // Skip during dissolve-in — images will render on the next normal frame.
+        if !self.pending_dissolve_in {
+            for (escape_data, line_offset) in &pending_protocol_images {
+                if *line_offset >= visible_start && *line_offset < visible_end {
+                    let display_row = line_offset - visible_start;
+                    let screen_row = (status_bar_rows + display_row) as u16;
+                    queue!(w, cursor::MoveTo(0, screen_row))?;
+                    write!(w, "{}", escape_data)?;
+                }
             }
         }
 
@@ -2087,6 +2209,82 @@ end tell"#,
         self.last_rendered_scale = self.global_scale;
         self.last_rendered_image_scale = self.image_scale_offset;
         self.needs_full_redraw = false;
+
+        // ── Dissolve-in: scatter-reveal new content after font transition ──
+        // Mirrors the dissolve-out so the transition feels symmetric.
+        if self.pending_dissolve_in {
+            self.pending_dissolve_in = false;
+            let dissolve_lines = &self.last_rendered_buffer.clone();
+            if !dissolve_lines.is_empty() {
+                let dis_frames = 12u32;
+                let dis_tw = self.width as usize;
+                let dis_status = if self.show_fullscreen { 0u16 } else { 2 };
+                let dis_content_rows = (self.height - dis_status) as usize;
+                let dis_visible = dissolve_lines.len().min(dis_content_rows);
+                for frame in 1..=dis_frames {
+                    let progress = frame as f64 / dis_frames as f64;
+                    let dim = (1.0 - progress) * 0.4; // newly appeared chars start slightly dim
+                    let stdout = io::stdout();
+                    let mut dw = BufWriter::with_capacity(64 * 1024, stdout.lock());
+                    queue!(dw, BeginSynchronizedUpdate)?;
+                    // Status bar at full brightness
+                    if dis_status > 0 {
+                        let bar = self.build_status_bar(dis_tw);
+                        queue!(dw, cursor::MoveTo(0, 0))?;
+                        self.queue_styled_line(&mut dw, &bar, dis_tw)?;
+                        queue!(dw, cursor::MoveTo(0, 1), SetBackgroundColor(self.bg_color))?;
+                        for _ in 0..dis_tw { write!(dw, " ")?; }
+                    }
+                    // Content: per-cell scatter reveal
+                    for (i, line) in dissolve_lines[..dis_visible].iter().enumerate() {
+                        if line.is_scale_placeholder { continue; }
+                        let row = (dis_status as usize + i) as u16;
+                        queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                        let mut col = 0usize;
+                        for span in &line.spans {
+                            if col >= dis_tw { break; }
+                            let span_bg = span.bg.unwrap_or(self.bg_color);
+                            let fg = span.fg.unwrap_or(self.text_color);
+                            let dimmed_fg = interpolate_color(fg, span_bg, dim);
+                            let dimmed_bg = interpolate_color(span_bg, self.bg_color, dim);
+                            for ch in span.text.chars() {
+                                if col >= dis_tw { break; }
+                                let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                                let group = col / 2;
+                                let hash = (row as u64).wrapping_mul(31)
+                                    .wrapping_add(group as u64)
+                                    .wrapping_mul(7919) % 1000;
+                                let threshold = hash as f64 / 1000.0;
+                                if threshold < progress {
+                                    // Revealed
+                                    queue!(dw, SetBackgroundColor(dimmed_bg),
+                                               SetForegroundColor(dimmed_fg))?;
+                                    write!(dw, "{}", ch)?;
+                                } else {
+                                    // Still hidden
+                                    queue!(dw, SetBackgroundColor(self.bg_color))?;
+                                    for _ in 0..cw { write!(dw, " ")?; }
+                                }
+                                col += cw;
+                            }
+                        }
+                        if col < dis_tw {
+                            queue!(dw, SetBackgroundColor(self.bg_color))?;
+                            for _ in 0..dis_tw - col { write!(dw, " ")?; }
+                        }
+                    }
+                    // Fill remaining rows
+                    for i in dis_visible..dis_content_rows {
+                        let row = (dis_status as usize + i) as u16;
+                        queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                        for _ in 0..dis_tw { write!(dw, " ")?; }
+                    }
+                    queue!(dw, EndSynchronizedUpdate, ResetColor)?;
+                    dw.flush()?;
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+            }
+        }
 
         Ok(())
     }
@@ -2631,13 +2829,9 @@ end tell"#,
                       SetAttribute(Attribute::NormalIntensity),
                       SetAttribute(Attribute::NotCrossedOut),
                       SetAttribute(Attribute::NoUnderline))?;
-            if let Some(fg) = span.fg {
-                queue!(w, SetForegroundColor(fg))?;
-            } else {
-                queue!(w, SetForegroundColor(self.text_color))?;
-            }
-            // Spans with explicit bg keep theirs; default bg follows gradient
             let bg = span.bg.unwrap_or(default_bg);
+            let fg = span.fg.unwrap_or(self.text_color);
+            queue!(w, SetForegroundColor(fg))?;
             queue!(w, SetBackgroundColor(bg))?;
             if span.bold {
                 queue!(w, SetAttribute(Attribute::Bold))?;
