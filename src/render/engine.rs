@@ -325,6 +325,82 @@ impl Presenter {
 
     pub fn set_fullscreen(&mut self, fs: bool) { self.show_fullscreen = fs; }
     pub fn start_timer(&mut self) { self.timer_start = Some(Instant::now()); }
+    fn reset_timer(&mut self) { self.timer_start = None; }
+
+    fn toggle_fullscreen(&mut self) {
+        self.show_fullscreen = !self.show_fullscreen;
+        self.user_fullscreen_override = Some(self.show_fullscreen);
+        self.needs_full_redraw = true;
+    }
+
+    fn toggle_notes(&mut self) {
+        self.show_notes = !self.show_notes;
+        self.notes_scroll = 0;
+        self.needs_full_redraw = true;
+    }
+
+    fn toggle_theme_name(&mut self) {
+        self.show_theme_name = !self.show_theme_name;
+        self.needs_full_redraw = true;
+    }
+
+    fn toggle_sections(&mut self) {
+        self.show_sections = !self.show_sections;
+        self.needs_full_redraw = true;
+    }
+
+    fn toggle_dark_mode(&mut self) {
+        let registry = crate::theme::ThemeRegistry::load();
+        if let Some(variant) = registry.get_variant(&self.theme, !self.is_light_variant) {
+            self.is_light_variant = !self.is_light_variant;
+            self.apply_theme(variant);
+        }
+    }
+
+    fn scale_up(&mut self) {
+        self.global_scale = (self.global_scale + 5).min(200);
+        self.needs_full_redraw = true;
+    }
+
+    fn scale_down(&mut self) {
+        self.global_scale = self.global_scale.saturating_sub(5).max(50);
+        self.needs_full_redraw = true;
+    }
+
+    fn image_scale_up(&mut self) {
+        self.image_scale_offset = (self.image_scale_offset + 10).min(100);
+        self.needs_full_redraw = true;
+    }
+
+    fn image_scale_down(&mut self) {
+        self.image_scale_offset = (self.image_scale_offset - 10).max(-90);
+        self.needs_full_redraw = true;
+    }
+
+    fn adjust_font_offset(&mut self, delta: i8) {
+        if self.font_capability.is_available() {
+            let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
+            let new = cur + delta;
+            if (-20..=20).contains(&new) {
+                self.slide_font_offsets.insert(self.current, new);
+                self.font_change_is_slide_transition = false;
+                self.apply_slide_font();
+                self.needs_full_redraw = true;
+                self.save_state();
+            }
+        }
+    }
+
+    fn reset_font_offset(&mut self) {
+        if self.font_capability.is_available() {
+            self.slide_font_offsets.remove(&self.current);
+            self.font_change_is_slide_transition = false;
+            self.apply_slide_font();
+            self.needs_full_redraw = true;
+            self.save_state();
+        }
+    }
+
     pub fn set_default_scale(&mut self, scale: u8) {
         self.global_scale = scale;
     }
@@ -526,87 +602,23 @@ impl Presenter {
                 crate::remote::RemoteCommand::PrevSection => self.prev_section(),
                 crate::remote::RemoteCommand::ScrollUp => self.scroll_up(3),
                 crate::remote::RemoteCommand::ScrollDown => self.scroll_down(3),
-                crate::remote::RemoteCommand::ToggleFullscreen => {
-                    self.show_fullscreen = !self.show_fullscreen;
-                    self.user_fullscreen_override = Some(self.show_fullscreen);
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::ToggleNotes => {
-                    self.show_notes = !self.show_notes;
-                    self.notes_scroll = 0;
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::ToggleThemeName => {
-                    self.show_theme_name = !self.show_theme_name;
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::ToggleSections => {
-                    self.show_sections = !self.show_sections;
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::ToggleDarkMode => {
-                    let registry = crate::theme::ThemeRegistry::load();
-                    if let Some(variant) = registry.get_variant(&self.theme, !self.is_light_variant) {
-                        self.is_light_variant = !self.is_light_variant;
-                        self.apply_theme(variant);
-                    }
-                }
-                crate::remote::RemoteCommand::ScaleUp => {
-                    self.global_scale = (self.global_scale + 5).min(200);
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::ScaleDown => {
-                    self.global_scale = self.global_scale.saturating_sub(5).max(50);
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::ImageScaleUp => {
-                    self.image_scale_offset = (self.image_scale_offset + 10).min(100);
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::ImageScaleDown => {
-                    self.image_scale_offset = (self.image_scale_offset - 10).max(-90);
-                    self.needs_full_redraw = true;
-                }
-                crate::remote::RemoteCommand::FontUp => {
-                    if self.font_capability.is_available() {
-                        let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
-                        if cur < 20 {
-                            self.slide_font_offsets.insert(self.current, cur + 1);
-                            self.font_change_is_slide_transition = false;
-                            self.apply_slide_font();
-                            self.needs_full_redraw = true;
-                            self.save_state();
-                        }
-                    }
-                }
-                crate::remote::RemoteCommand::FontDown => {
-                    if self.font_capability.is_available() {
-                        let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
-                        if cur > -20 {
-                            self.slide_font_offsets.insert(self.current, cur - 1);
-                            self.font_change_is_slide_transition = false;
-                            self.apply_slide_font();
-                            self.needs_full_redraw = true;
-                            self.save_state();
-                        }
-                    }
-                }
-                crate::remote::RemoteCommand::FontReset => {
-                    if self.font_capability.is_available() {
-                        self.slide_font_offsets.remove(&self.current);
-                        self.font_change_is_slide_transition = false;
-                        self.apply_slide_font();
-                        self.needs_full_redraw = true;
-                        self.save_state();
-                    }
-                }
+                crate::remote::RemoteCommand::ToggleFullscreen => self.toggle_fullscreen(),
+                crate::remote::RemoteCommand::ToggleNotes => self.toggle_notes(),
+                crate::remote::RemoteCommand::ToggleThemeName => self.toggle_theme_name(),
+                crate::remote::RemoteCommand::ToggleSections => self.toggle_sections(),
+                crate::remote::RemoteCommand::ToggleDarkMode => self.toggle_dark_mode(),
+                crate::remote::RemoteCommand::ScaleUp => self.scale_up(),
+                crate::remote::RemoteCommand::ScaleDown => self.scale_down(),
+                crate::remote::RemoteCommand::ImageScaleUp => self.image_scale_up(),
+                crate::remote::RemoteCommand::ImageScaleDown => self.image_scale_down(),
+                crate::remote::RemoteCommand::FontUp => self.adjust_font_offset(1),
+                crate::remote::RemoteCommand::FontDown => self.adjust_font_offset(-1),
+                crate::remote::RemoteCommand::FontReset => self.reset_font_offset(),
                 crate::remote::RemoteCommand::ExecuteCode => { let _ = self.execute_code(); }
                 crate::remote::RemoteCommand::TimerStart => {
-                    if self.timer_start.is_none() {
-                        self.timer_start = Some(std::time::Instant::now());
-                    }
+                    if self.timer_start.is_none() { self.start_timer(); }
                 }
-                crate::remote::RemoteCommand::TimerReset => { self.timer_start = None; }
+                crate::remote::RemoteCommand::TimerReset => self.reset_timer(),
             }
             got_command = true;
         }
@@ -621,6 +633,9 @@ impl Presenter {
 
     fn broadcast_state(&self) {
         if let Some(ref tx) = self.state_broadcast {
+            if tx.receiver_count() == 0 {
+                return;
+            }
             let slide = &self.slides[self.current];
             let mut content: Vec<String> = Vec::new();
             // Subtitle
@@ -772,7 +787,7 @@ impl Presenter {
                 self.mode = Mode::Goto;
                 self.goto_buf.clear();
             }
-            KeyCode::Char('n') => { self.show_notes = !self.show_notes; self.notes_scroll = 0; self.needs_full_redraw = true; }
+            KeyCode::Char('n') => self.toggle_notes(),
             KeyCode::Char('N') if self.show_notes => {
                 self.notes_scroll += 1;
                 self.needs_full_redraw = true;
@@ -781,66 +796,18 @@ impl Presenter {
                 self.notes_scroll = self.notes_scroll.saturating_sub(1);
                 self.needs_full_redraw = true;
             }
-            KeyCode::Char('f') => {
-                self.show_fullscreen = !self.show_fullscreen;
-                // Track user toggle so slide directives don't override it
-                self.user_fullscreen_override = Some(self.show_fullscreen);
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Char('T') => { self.show_theme_name = !self.show_theme_name; self.needs_full_redraw = true; }
-            KeyCode::Char('S') => { self.show_sections = !self.show_sections; self.needs_full_redraw = true; }
-            KeyCode::Char('D') => {
-                // Toggle light/dark theme variant
-                let registry = crate::theme::ThemeRegistry::load();
-                if let Some(variant) = registry.get_variant(&self.theme, !self.is_light_variant) {
-                    self.is_light_variant = !self.is_light_variant;
-                    self.apply_theme(variant);
-                }
-            }
-            KeyCode::Char('+') | KeyCode::Char('=') => {
-                self.global_scale = (self.global_scale + 5).min(200);
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Char('-') => {
-                self.global_scale = self.global_scale.saturating_sub(5).max(50);
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Char('>') => {
-                self.image_scale_offset = (self.image_scale_offset + 10).min(100);
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Char('<') => {
-                self.image_scale_offset = (self.image_scale_offset - 10).max(-90);
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Char(']') if self.font_capability.is_available() => {
-                let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
-                if cur < 20 {
-                    self.slide_font_offsets.insert(self.current, cur + 1);
-                    self.font_change_is_slide_transition = false;
-                    self.apply_slide_font();
-                    self.needs_full_redraw = true;
-                    self.save_state();
-                }
-            }
-            KeyCode::Char('[') if self.font_capability.is_available() => {
-                let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
-                if cur > -20 {
-                    self.slide_font_offsets.insert(self.current, cur - 1);
-                    self.font_change_is_slide_transition = false;
-                    self.apply_slide_font();
-                    self.needs_full_redraw = true;
-                    self.save_state();
-                }
-            }
+            KeyCode::Char('f') => self.toggle_fullscreen(),
+            KeyCode::Char('T') => self.toggle_theme_name(),
+            KeyCode::Char('S') => self.toggle_sections(),
+            KeyCode::Char('D') => self.toggle_dark_mode(),
+            KeyCode::Char('+') | KeyCode::Char('=') => self.scale_up(),
+            KeyCode::Char('-') => self.scale_down(),
+            KeyCode::Char('>') => self.image_scale_up(),
+            KeyCode::Char('<') => self.image_scale_down(),
+            KeyCode::Char(']') if self.font_capability.is_available() => self.adjust_font_offset(1),
+            KeyCode::Char('[') if self.font_capability.is_available() => self.adjust_font_offset(-1),
             KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::SUPER) => {
-                self.slide_font_offsets.remove(&self.current);
-                self.font_change_is_slide_transition = false;
-                self.apply_slide_font();
-                self.needs_full_redraw = true;
-                self.save_state();
-            }
+                || key.modifiers.contains(KeyModifiers::SUPER) => self.reset_font_offset(),
             KeyCode::Char('o') => { self.mode = Mode::Overview; self.needs_full_redraw = true; }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char(':') => {
@@ -898,12 +865,12 @@ impl Presenter {
                     self.goto_slide(n.saturating_sub(1));
                 }
             }
-            Some("notes") => self.show_notes = !self.show_notes,
+            Some("notes") => self.toggle_notes(),
             Some("timer") => {
                 if parts.get(1).map(|s| s.trim()) == Some("reset") {
-                    self.timer_start = None;
+                    self.reset_timer();
                 } else if self.timer_start.is_none() {
-                    self.timer_start = Some(Instant::now());
+                    self.start_timer();
                 }
             }
             Some("overview") => self.mode = Mode::Overview,
@@ -1209,7 +1176,7 @@ end tell"#,
 
     fn next_slide(&mut self) {
         if self.timer_start.is_none() {
-            self.timer_start = Some(Instant::now());
+            self.start_timer();
         }
         if self.current < self.slides.len() - 1 {
             self.current += 1;
