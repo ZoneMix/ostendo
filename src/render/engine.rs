@@ -470,9 +470,15 @@ impl Presenter {
                     } else {
                         self.active_animation = None;
                     }
+                    // Don't render now — the previous tick already showed a
+                    // near-final frame.  Rendering immediately would cause a
+                    // visible "pop" from ~97% brightness to 100%.  The next
+                    // event-loop iteration will do a clean render instead.
+                    self.needs_full_redraw = true;
+                } else {
+                    self.needs_full_redraw = true;
+                    self.render_frame()?;
                 }
-                self.needs_full_redraw = true;
-                self.render_frame()?;
             }
 
             // Tick loop animation
@@ -1558,11 +1564,17 @@ end tell"#,
             return self.render_status_bar_only(&mut w);
         }
 
-        // Track whether we need to clear old Kitty images (slide change or redraw)
+        // Track whether we need to clear old Kitty images.  Only clear when
+        // images actually need re-positioning/re-sizing — NOT on every
+        // needs_full_redraw (which fires on animation ticks and would cause
+        // visible flicker from the clear+re-emit cycle).
         let need_kitty_clear = self.image_protocol == ImageProtocol::Kitty
             && (self.last_rendered_slide != Some(self.current)
-                || self.needs_full_redraw
-                || self.last_rendered_scroll != self.scroll_offset);
+                || self.last_rendered_scroll != self.scroll_offset
+                || self.last_rendered_width != self.width
+                || self.last_rendered_height != self.height
+                || self.last_rendered_scale != self.global_scale
+                || self.last_rendered_image_scale != self.image_scale_offset);
 
         let slide = self.slides[self.current].clone();
         let tw = self.width as usize;
@@ -2192,8 +2204,14 @@ end tell"#,
         }
 
         // Write protocol image data after line rendering (Kitty/iTerm2/Sixel).
-        // Skip during dissolve-in — images will render on the next normal frame.
-        if !self.pending_dissolve_in {
+        // Skip during transitions/entrance animations and dissolve-in — emitting
+        // images on every animation frame causes visible flicker from rapid
+        // re-placement.  Images appear cleanly once the animation completes.
+        let animation_active = matches!(
+            self.active_animation,
+            Some(ref a) if matches!(a.kind, AnimationKind::Transition(_) | AnimationKind::Entrance(_))
+        );
+        if !self.pending_dissolve_in && !animation_active {
             for (escape_data, line_offset) in &pending_protocol_images {
                 if *line_offset >= visible_start && *line_offset < visible_end {
                     let display_row = line_offset - visible_start;
