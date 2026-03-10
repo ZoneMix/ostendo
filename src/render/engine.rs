@@ -22,7 +22,7 @@ use crate::presentation::{ExecMode, PresentationMeta, Slide, SlideAlignment, Sta
 use crate::render::layout::WindowSize;
 use crate::render::progress::render_progress_bar;
 use crate::render::text::{StyledLine, StyledSpan};
-use crate::terminal::protocols::{self, ImageProtocol, FontSizeCapability};
+use crate::terminal::protocols::{self, ImageProtocol, FontSizeCapability, TextScaleCapability};
 use crate::theme::colors::{hex_to_color, ensure_badge_contrast, interpolate_color};
 use crate::theme::Theme;
 
@@ -107,6 +107,7 @@ pub struct Presenter {
     notes_scroll: usize,
     show_fullscreen: bool,
     show_theme_name: bool,
+    show_sections: bool,
     scroll_offset: usize,
     timer_start: Option<Instant>,
     width: u16,
@@ -141,9 +142,17 @@ pub struct Presenter {
     active_loop: Option<(crate::render::animation::LoopAnimation, u64)>,
     last_rendered_buffer: Vec<StyledLine>,
     mermaid_renderer: Option<crate::image_util::mermaid::MermaidRenderer>,
+    /// True when fullscreen was toggled by user (f key), not by a slide directive.
+    user_fullscreen_override: Option<bool>,
     // Font change deferred until inside BeginSynchronizedUpdate
     pending_font_size: Option<f64>,
     last_applied_font_size: Option<f64>,
+    /// True when font change was triggered by slide navigation (fade out old content).
+    /// False when triggered by `]`/`[` interactive adjustment (no fade).
+    font_change_is_slide_transition: bool,
+    /// OSC 66 text scaling capability (disabled pending rendering fix, but kept for detection)
+    #[allow(dead_code)]
+    text_scale_cap: TextScaleCapability,
     // Smart redraw tracking
     last_rendered_slide: Option<usize>,
     last_rendered_scroll: usize,
@@ -190,10 +199,10 @@ impl Presenter {
             (None, None, true)
         };
         let font_capability = protocols::detect_font_capability();
-        let original_font_size = if font_capability == FontSizeCapability::KittyRemote {
-            Self::query_kitty_font_size()
-        } else {
-            None
+        let original_font_size = match font_capability {
+            FontSizeCapability::KittyRemote => Self::query_kitty_font_size(),
+            FontSizeCapability::GhosttyKeystroke => Self::query_ghostty_font_size(),
+            FontSizeCapability::None => None,
         };
         let window_size = WindowSize::query();
         let (w, h) = (window_size.columns, window_size.rows);
@@ -253,6 +262,7 @@ impl Presenter {
             notes_scroll: 0,
             show_fullscreen: false,
             show_theme_name: false,
+            show_sections: true,
             scroll_offset: 0,
             timer_start: None,
             width: w,
@@ -296,8 +306,11 @@ impl Presenter {
             active_loop: None,
             last_rendered_buffer: Vec::new(),
             mermaid_renderer: None,
+            user_fullscreen_override: None,
             pending_font_size: None,
             last_applied_font_size: None,
+            font_change_is_slide_transition: false,
+            text_scale_cap: protocols::detect_text_scale_capability(),
         };
         // Initialize mermaid renderer if any slide has mermaid blocks
         let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
@@ -320,7 +333,7 @@ impl Presenter {
         let scale = self.current_scale();
         let content_width = ((tw as f64 * scale as f64 / 100.0) as usize).min(tw);
 
-        for slide in &self.slides.clone() {
+        for slide in &self.slides {
             if let Some(ref img) = slide.image {
                 let effective_protocol = match img.render_mode {
                     crate::presentation::ImageRenderMode::Kitty => ImageProtocol::Kitty,
@@ -656,8 +669,14 @@ impl Presenter {
                 self.notes_scroll = self.notes_scroll.saturating_sub(1);
                 self.needs_full_redraw = true;
             }
-            KeyCode::Char('f') => { self.show_fullscreen = !self.show_fullscreen; self.needs_full_redraw = true; }
+            KeyCode::Char('f') => {
+                self.show_fullscreen = !self.show_fullscreen;
+                // Track user toggle so slide directives don't override it
+                self.user_fullscreen_override = Some(self.show_fullscreen);
+                self.needs_full_redraw = true;
+            }
             KeyCode::Char('T') => { self.show_theme_name = !self.show_theme_name; self.needs_full_redraw = true; }
+            KeyCode::Char('S') => { self.show_sections = !self.show_sections; self.needs_full_redraw = true; }
             KeyCode::Char('D') => {
                 // Toggle light/dark theme variant
                 let registry = crate::theme::ThemeRegistry::load();
@@ -682,19 +701,21 @@ impl Presenter {
                 self.image_scale_offset = (self.image_scale_offset - 10).max(-90);
                 self.needs_full_redraw = true;
             }
-            KeyCode::Char(']') if self.font_capability == FontSizeCapability::KittyRemote => {
+            KeyCode::Char(']') if self.font_capability.is_available() => {
                 let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
                 if cur < 20 {
                     self.slide_font_offsets.insert(self.current, cur + 1);
+                    self.font_change_is_slide_transition = false;
                     self.apply_slide_font();
                     self.needs_full_redraw = true;
                     self.save_state();
                 }
             }
-            KeyCode::Char('[') if self.font_capability == FontSizeCapability::KittyRemote => {
+            KeyCode::Char('[') if self.font_capability.is_available() => {
                 let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
                 if cur > -20 {
                     self.slide_font_offsets.insert(self.current, cur - 1);
+                    self.font_change_is_slide_transition = false;
                     self.apply_slide_font();
                     self.needs_full_redraw = true;
                     self.save_state();
@@ -703,6 +724,7 @@ impl Presenter {
             KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER) => {
                 self.slide_font_offsets.remove(&self.current);
+                self.font_change_is_slide_transition = false;
                 self.apply_slide_font();
                 self.needs_full_redraw = true;
                 self.save_state();
@@ -846,6 +868,51 @@ impl Presenter {
         }
     }
 
+    /// Set Ghostty's font size to an absolute value via AppleScript keystroke
+    /// simulation.  Resets to the config default first (Cmd+0), then sends
+    /// the right number of Cmd+= or Cmd+- keystrokes to reach `target`.
+    fn ghostty_set_font_size(&self, target: f64) {
+        let base = self.original_font_size
+            .as_ref()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(13.0);
+        let delta = target - base;
+        // Each Ghostty keystroke changes font by 1pt (default keybinding)
+        let steps = delta.round() as i32;
+        if steps == 0 {
+            // Just reset to default
+            let _ = std::process::Command::new("osascript")
+                .args(["-e", r#"tell application "System Events" to keystroke "0" using {command down}"#])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            return;
+        }
+        let (key, count) = if steps > 0 {
+            ("=", steps as u32)
+        } else {
+            ("-", (-steps) as u32)
+        };
+        // Build a single AppleScript that resets then sends N keystrokes
+        let script = format!(
+            r#"tell application "System Events"
+  keystroke "0" using {{command down}}
+  delay 0.02
+  repeat {} times
+    keystroke "{}" using {{command down}}
+  end repeat
+end tell"#,
+            count, key
+        );
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
     /// Query Kitty's current font size at startup so we can restore it on exit.
     /// Tries `kitten @ get-font-size` first, then falls back to reading kitty.conf.
     fn query_kitty_font_size() -> Option<String> {
@@ -883,17 +950,55 @@ impl Presenter {
         None
     }
 
-    /// Restore font to original size captured at startup (Kitty only).
-    /// Flushed immediately since this is called on exit.
-    fn reset_font_size(&self) {
-        if let Some(ref size) = self.original_font_size {
-            if let Ok(s) = size.parse::<f64>() {
-                self.kitty_font_size_absolute(s, true);
-            } else {
-                self.kitty_font_size_absolute(0.0, true);
+    /// Query Ghostty's configured font size by reading the config file.
+    /// Ghostty config is at ~/.config/ghostty/config (key=value format).
+    /// Default font size is 13pt if not configured.
+    fn query_ghostty_font_size() -> Option<String> {
+        if let Some(home) = std::env::var_os("HOME") {
+            let conf = std::path::Path::new(&home).join(".config/ghostty/config");
+            if let Ok(content) = std::fs::read_to_string(conf) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("font-size") {
+                        // Ghostty uses "font-size = N" or "font-size=N"
+                        if let Some(val) = trimmed.strip_prefix("font-size") {
+                            let val = val.trim().trim_start_matches('=').trim();
+                            if val.parse::<f64>().is_ok() {
+                                return Some(val.to_string());
+                            }
+                        }
+                    }
+                }
             }
-        } else {
-            self.kitty_font_size_absolute(0.0, true);
+        }
+        // Ghostty default is 13pt
+        Some("13".to_string())
+    }
+
+    /// Restore font to original size captured at startup.
+    fn reset_font_size(&self) {
+        match self.font_capability {
+            FontSizeCapability::KittyRemote => {
+                if let Some(ref size) = self.original_font_size {
+                    if let Ok(s) = size.parse::<f64>() {
+                        self.kitty_font_size_absolute(s, true);
+                    } else {
+                        self.kitty_font_size_absolute(0.0, true);
+                    }
+                } else {
+                    self.kitty_font_size_absolute(0.0, true);
+                }
+            }
+            FontSizeCapability::GhosttyKeystroke => {
+                // Cmd+0 resets to config default
+                let _ = std::process::Command::new("osascript")
+                    .args(["-e", r#"tell application "System Events" to keystroke "0" using {command down}"#])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+            FontSizeCapability::None => {}
         }
     }
 
@@ -920,7 +1025,7 @@ impl Presenter {
     /// BeginSynchronizedUpdate block so the font change and content arrive
     /// atomically, preventing flicker.
     fn apply_slide_font(&mut self) {
-        if self.font_capability != FontSizeCapability::KittyRemote {
+        if !self.font_capability.is_available() {
             return;
         }
         let offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
@@ -966,6 +1071,20 @@ impl Presenter {
         self.exec_output = None;
         self.exec_rx = None;
         self.exec_block_index = 0;
+        self.font_change_is_slide_transition = true;
+        // Apply per-slide fullscreen directive. User toggle (f key) is sticky
+        // until the next slide change, then directives take control again.
+        self.user_fullscreen_override = None;
+        if let Some(fs) = self.slides[self.current].fullscreen {
+            self.show_fullscreen = fs;
+            self.needs_full_redraw = true;
+        } else {
+            // No directive: revert to non-fullscreen (default)
+            if self.show_fullscreen {
+                self.show_fullscreen = false;
+                self.needs_full_redraw = true;
+            }
+        }
         self.apply_slide_font();
         self.start_slide_animations();
     }
@@ -1161,58 +1280,118 @@ impl Presenter {
             None
         };
 
-        // Font change BEFORE the sync block.  Kitty's set_font_size RC
-        // command is out-of-band — it triggers an immediate terminal resize.
-        //
-        // A single large font jump causes a jarring visual glitch because
-        // Kitty reflows all on-screen content at the new dimensions in one
-        // frame.  Instead, we animate the change in 0.5pt steps — each step
-        // produces a tiny, barely-perceptible reflow that looks like a
-        // smooth zoom.  For decrease (more cols) there is no reflow issue,
-        // so we send the change in one shot.
+        // Font change BEFORE the sync block — the terminal resize triggered
+        // by font changes must settle before we query dimensions and render.
         if let Some(target) = font_changing {
-            let current = self.last_applied_font_size.unwrap_or(target);
-            let increasing = target > current;
-
-            let stdout = io::stdout();
-            let mut pre = stdout.lock();
-
-            // Clear Kitty images before animation so stale overlays don't
-            // persist at the old size through the font transition
-            if self.image_protocol == ImageProtocol::Kitty {
-                pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
-                pre.flush()?;
+            // Fade out old content before font change so reflow is invisible.
+            // Only fade on slide transitions — not on interactive ] / [ adjustments.
+            if self.font_change_is_slide_transition {
+                let old_buf = self.last_rendered_buffer.clone();
+                if !old_buf.is_empty() {
+                    let fade_steps = 10u32;
+                    let tw = self.width as usize;
+                    let padding = " ".repeat(tw);
+                    for step in 1..=fade_steps {
+                        let t = step as f64 / fade_steps as f64;
+                        let stdout = io::stdout();
+                        let mut fw = BufWriter::with_capacity(64 * 1024, stdout.lock());
+                        queue!(fw, BeginSynchronizedUpdate)?;
+                        // Fade the entire screen (including status bar) to prevent
+                        // the old status bar from wrapping at the new narrower width.
+                        for row in 0..self.height {
+                            queue!(fw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                            // Content lines get faded text; other rows just get bg fill
+                            let status_rows = if self.show_fullscreen { 0u16 } else { 2 };
+                            if row >= status_rows {
+                                let buf_idx = (row - status_rows) as usize;
+                                if let Some(line) = old_buf.get(buf_idx) {
+                                    let mut chars = 0;
+                                    for span in &line.spans {
+                                        if chars >= tw { break; }
+                                        let fg = span.fg.unwrap_or(self.text_color);
+                                        let faded = interpolate_color(fg, self.bg_color, t);
+                                        queue!(fw, SetForegroundColor(faded))?;
+                                        let span_w = unicode_width::UnicodeWidthStr::width(span.text.as_str());
+                                        let remaining = tw.saturating_sub(chars);
+                                        if span_w <= remaining {
+                                            write!(fw, "{}", span.text)?;
+                                            chars += span_w;
+                                        } else {
+                                            let truncated = truncate_to_width(&span.text, remaining);
+                                            let trunc_w = unicode_width::UnicodeWidthStr::width(truncated.as_str());
+                                            write!(fw, "{}", truncated)?;
+                                            chars += trunc_w;
+                                        }
+                                    }
+                                    if chars < tw {
+                                        write!(fw, "{}", &padding[..tw - chars])?;
+                                    }
+                                    continue;
+                                }
+                            }
+                            // Status bar rows and any rows beyond content: fill with bg
+                            write!(fw, "{}", &padding)?;
+                        }
+                        queue!(fw, EndSynchronizedUpdate, ResetColor)?;
+                        fw.flush()?;
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+                self.font_change_is_slide_transition = false;
             }
 
-            if increasing && (target - current).abs() > 0.3 {
-                // Animate in 0.2pt steps for a smoother zoom effect
-                let step = 0.2_f64;
-                let num_steps = ((target - current) / step).round() as usize;
-                for i in 1..num_steps {
-                    let intermediate = current + step * i as f64;
+            match self.font_capability {
+                FontSizeCapability::KittyRemote => {
+                    let current = self.last_applied_font_size.unwrap_or(target);
+                    let increasing = target > current;
+
+                    let stdout = io::stdout();
+                    let mut pre = stdout.lock();
+
+                    // Clear Kitty images before animation so stale overlays don't
+                    // persist at the old size through the font transition
+                    if self.image_protocol == ImageProtocol::Kitty {
+                        pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
+                        pre.flush()?;
+                    }
+
+                    if increasing && (target - current).abs() > 0.3 {
+                        // Animate in 0.2pt steps for a smoother zoom effect
+                        let step = 0.2_f64;
+                        let num_steps = ((target - current) / step).round() as usize;
+                        for i in 1..num_steps {
+                            let intermediate = current + step * i as f64;
+                            let json = format!(
+                                r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                                intermediate
+                            );
+                            let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+                            pre.write_all(esc.as_bytes())?;
+                            pre.flush()?;
+                            std::thread::sleep(std::time::Duration::from_millis(8));
+                        }
+                    }
+
+                    // Final step — land exactly on target
                     let json = format!(
                         r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                        intermediate
+                        target
                     );
                     let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
                     pre.write_all(esc.as_bytes())?;
                     pre.flush()?;
-                    std::thread::sleep(std::time::Duration::from_millis(8));
+                    drop(pre);
                 }
+                FontSizeCapability::GhosttyKeystroke => {
+                    self.ghostty_set_font_size(target);
+                    // Give Ghostty time to process the keystrokes and resize
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                FontSizeCapability::None => {}
             }
 
-            // Final step — land exactly on target
-            let json = format!(
-                r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                target
-            );
-            let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-            pre.write_all(esc.as_bytes())?;
-            pre.flush()?;
-            drop(pre);
-
             self.last_applied_font_size = Some(target);
-            // Drain all resize events from the animation steps
+            // Drain all resize events from the font change
             while event::poll(std::time::Duration::from_millis(10))? {
                 if let Event::Resize(w2, h2) = event::read()? {
                     self.width = w2;
@@ -1277,8 +1456,9 @@ impl Presenter {
         let mut lines: Vec<StyledLine> = Vec::new();
         let status_bar_rows: usize = if !self.show_fullscreen { 2 } else { 0 };
 
-        // Section
-        if !slide.section.is_empty() {
+        // Section (respects per-slide directive and global toggle)
+        let show_section = slide.show_section.unwrap_or(self.show_sections);
+        if show_section && !slide.section.is_empty() {
             let mut line = StyledLine::empty();
             line.push(StyledSpan::new(&pad));
             line.push(StyledSpan::new(&format!("Section: {}", slide.section)).with_fg(self.text_color).dim());
@@ -1297,7 +1477,12 @@ impl Presenter {
             } else {
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(&pad));
-                line.push(StyledSpan::new(&slide.title).with_fg(self.accent_color).bold());
+                // OSC 66 title scaling is disabled for now — multicell blocks get
+                // destroyed during full redraws (e.g. fullscreen toggle). The data
+                // model and parser support remain; re-enable by applying
+                // slide.title_scale here when the rendering path is fixed.
+                let title_span = StyledSpan::new(&slide.title).with_fg(self.accent_color).bold();
+                line.push(title_span);
                 lines.push(line);
             }
             lines.push(StyledLine::empty());
@@ -1307,6 +1492,7 @@ impl Presenter {
         if !slide.subtitle.is_empty() {
             let sub_width = content_width.saturating_sub(2);
             let wrapped_sub = textwrap_simple(&slide.subtitle, sub_width);
+            // OSC 66 subtitle scaling disabled (same reason as title — see above).
             for wline in &wrapped_sub {
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(&pad));
@@ -1756,9 +1942,13 @@ impl Presenter {
             write!(w, "{}", " ".repeat(tw))?;
         }
 
-        // Render visible content lines (offset by status_bar_rows), with per-row gradient
+        // Render visible content lines (offset by status_bar_rows), with per-row gradient.
+        // Skip scale_placeholder lines — they reserve space in the buffer for OSC 66
+        // multicell blocks but must not be written to the terminal (would overwrite
+        // the scaled text above).
         let has_gradient = self.gradient_from.is_some() && self.gradient_to.is_some();
         for (i, line) in lines[visible_start..visible_end].iter().enumerate() {
+            if line.is_scale_placeholder { continue; }
             let row = (status_bar_rows + i) as u16;
             queue!(w, cursor::MoveTo(0, row))?;
             if has_gradient {
@@ -2465,25 +2655,19 @@ impl Presenter {
                 queue!(w, SetAttribute(Attribute::Underlined))?;
             }
             // Truncate span text to fit within terminal width
-            let span_width = unicode_width::UnicodeWidthStr::width(span.text.as_str());
+            let base_width = unicode_width::UnicodeWidthStr::width(span.text.as_str());
+            let scale_factor = if span.text_scale >= 2 { span.text_scale as usize } else { 1 };
+            let effective_width = base_width * scale_factor;
             let remaining = term_width.saturating_sub(chars_written);
-            if span_width <= remaining {
-                write!(w, "{}", span.text)?;
-                chars_written += span_width;
+            if effective_width <= remaining {
+                write_span_text(w, span.text_scale, &span.text)?;
+                chars_written += effective_width;
             } else {
-                // Truncate: take only enough characters to fill remaining columns
-                let mut truncated = String::new();
-                let mut tw = 0;
-                for ch in span.text.chars() {
-                    let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                    if tw + cw > remaining {
-                        break;
-                    }
-                    truncated.push(ch);
-                    tw += cw;
-                }
-                write!(w, "{}", truncated)?;
-                chars_written += tw;
+                let char_budget = remaining / scale_factor;
+                let truncated = truncate_to_width(&span.text, char_budget);
+                let trunc_w = unicode_width::UnicodeWidthStr::width(truncated.as_str());
+                write_span_text(w, span.text_scale, &truncated)?;
+                chars_written += trunc_w * scale_factor;
             }
         }
         // Reset attributes and fill rest of line with background
@@ -2532,6 +2716,7 @@ impl Presenter {
             ("K", "n", "Toggle speaker notes"),
             ("K", "f", "Toggle fullscreen (hide status bar)"),
             ("K", "T", "Toggle theme name in status"),
+            ("K", "S", "Toggle section labels"),
             ("K", "?", "Show/hide this help"),
             ("K", "o", "Slide overview"),
             ("S", "", ""),
@@ -2553,6 +2738,14 @@ impl Presenter {
             ("K", "<!-- transition: fade -->", "fade|slide|dissolve"),
             ("K", "<!-- animation: typewriter -->", "typewriter|fade_in|slide_down"),
             ("K", "<!-- loop_animation: pulse -->", "matrix|bounce|pulse|sparkle|spin"),
+            ("S", "", ""),
+            ("H", "Text Scaling (OSC 66)", ""),
+            ("K", "<!-- title_scale: 3 -->", "Scale title (2-7x, Kitty)"),
+            ("K", "<!-- text_scale: 2 -->", "Scale title+subtitle"),
+            ("S", "", ""),
+            ("H", "Layout Directives", ""),
+            ("K", "<!-- fullscreen -->", "Hide status bar on slide"),
+            ("K", "<!-- show_section: false -->", "Hide section label"),
             ("S", "", ""),
             ("H", "Commands (: mode)", ""),
             ("K", ":theme <slug>", "Switch theme"),
@@ -2789,6 +2982,16 @@ fn truncate_str(s: &str, max: usize) -> String {
 }
 
 /// Truncate a string to fit within `max_cols` display columns.
+/// Write text, wrapping with OSC 66 when `scale >= 2`.
+fn write_span_text(w: &mut impl Write, scale: u8, text: &str) -> Result<()> {
+    if scale >= 2 {
+        write!(w, "\x1b]66;s={};{}\x07", scale, text)?;
+    } else {
+        write!(w, "{}", text)?;
+    }
+    Ok(())
+}
+
 fn truncate_to_width(s: &str, max_cols: usize) -> String {
     use unicode_width::UnicodeWidthChar;
     let mut result = String::new();

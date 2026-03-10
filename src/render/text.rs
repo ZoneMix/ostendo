@@ -12,6 +12,9 @@ pub struct StyledSpan {
     pub dim: bool,
     pub strikethrough: bool,
     pub underline: bool,
+    /// OSC 66 text scale (0 = normal, 2-7 = scaled). Only effective when
+    /// the terminal supports TextScaleCapability::Osc66.
+    pub text_scale: u8,
 }
 
 #[allow(dead_code)]
@@ -26,6 +29,7 @@ impl StyledSpan {
             dim: false,
             strikethrough: false,
             underline: false,
+            text_scale: 0,
         }
     }
 
@@ -64,36 +68,70 @@ impl StyledSpan {
         self
     }
 
+    pub fn text_scale(mut self, scale: u8) -> Self {
+        self.text_scale = scale;
+        self
+    }
+
     pub fn width(&self) -> usize {
-        UnicodeWidthStr::width(self.text.as_str())
+        let base = UnicodeWidthStr::width(self.text.as_str());
+        if self.text_scale >= 2 {
+            base * self.text_scale as usize
+        } else {
+            base
+        }
+    }
+
+    /// Number of terminal rows this span occupies (1 for normal, scale for scaled).
+    pub fn height(&self) -> usize {
+        if self.text_scale >= 2 {
+            self.text_scale as usize
+        } else {
+            1
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct StyledLine {
     pub spans: Vec<StyledSpan>,
+    /// When true, this line is a placeholder row for a scaled multicell block
+    /// above it and should be skipped during terminal output (not overwritten).
+    pub is_scale_placeholder: bool,
 }
 
 #[allow(dead_code)]
 impl StyledLine {
     pub fn empty() -> Self {
-        Self { spans: Vec::new() }
+        Self { spans: Vec::new(), is_scale_placeholder: false }
     }
 
     pub fn plain(text: &str) -> Self {
         Self {
             spans: vec![StyledSpan::new(text)],
+            is_scale_placeholder: false,
         }
     }
 
     pub fn styled(text: &str, fg: Color) -> Self {
         Self {
             spans: vec![StyledSpan::new(text).with_fg(fg)],
+            is_scale_placeholder: false,
         }
+    }
+
+    /// Create a placeholder line for scaled text (skipped during rendering).
+    pub fn scale_placeholder() -> Self {
+        Self { spans: Vec::new(), is_scale_placeholder: true }
     }
 
     pub fn width(&self) -> usize {
         self.spans.iter().map(|s| s.width()).sum()
+    }
+
+    /// Maximum height among all spans (for OSC 66 scaled text).
+    pub fn height(&self) -> usize {
+        self.spans.iter().map(|s| s.height()).max().unwrap_or(1)
     }
 
     pub fn push(&mut self, span: StyledSpan) {
@@ -106,7 +144,10 @@ impl StyledLine {
 pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLine> {
     let mut result = Vec::new();
     for line in lines {
-        if line.width() <= max_width {
+        // Skip wrapping for lines containing scaled spans (OSC 66) — they use
+        // virtual width that doesn't correspond to actual terminal columns.
+        let has_scaled = line.spans.iter().any(|s| s.text_scale >= 2);
+        if has_scaled || line.width() <= max_width {
             result.push(line.clone());
             continue;
         }
@@ -133,6 +174,7 @@ pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLi
                         text: current,
                         ..style_ref.clone()
                     }],
+                    is_scale_placeholder: false,
                 });
                 current = word.to_string();
             } else {
@@ -145,6 +187,7 @@ pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLi
                     text: current,
                     ..style_ref.clone()
                 }],
+                is_scale_placeholder: false,
             });
         }
     }
@@ -249,5 +292,34 @@ mod tests {
         let line = StyledLine::empty();
         assert_eq!(line.width(), 0);
         assert!(line.spans.is_empty());
+    }
+
+    #[test]
+    fn test_text_scale_width() {
+        let span = StyledSpan::new("Hi").text_scale(3);
+        // "Hi" is 2 chars wide, at 3x scale = 6
+        assert_eq!(span.width(), 6);
+        assert_eq!(span.height(), 3);
+    }
+
+    #[test]
+    fn test_text_scale_zero_is_normal() {
+        let span = StyledSpan::new("abc").text_scale(0);
+        assert_eq!(span.width(), 3);
+        assert_eq!(span.height(), 1);
+    }
+
+    #[test]
+    fn test_line_height_with_scaled_span() {
+        let mut line = StyledLine::empty();
+        line.push(StyledSpan::new("pad"));
+        line.push(StyledSpan::new("Title").text_scale(3));
+        assert_eq!(line.height(), 3);
+    }
+
+    #[test]
+    fn test_line_height_normal() {
+        let line = StyledLine::plain("normal");
+        assert_eq!(line.height(), 1);
     }
 }

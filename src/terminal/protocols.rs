@@ -13,21 +13,53 @@ pub enum ImageProtocol {
 pub enum FontSizeCapability {
     /// Kitty remote control protocol (DCS-based, requires allow_remote_control in kitty.conf)
     KittyRemote,
+    /// Ghostty keystroke simulation via macOS AppleScript (requires Accessibility permission)
+    GhosttyKeystroke,
     None,
 }
 
+impl FontSizeCapability {
+    /// Returns true if this capability supports any form of font size control.
+    pub fn is_available(&self) -> bool {
+        !matches!(self, FontSizeCapability::None)
+    }
+}
+
 pub fn detect_font_capability() -> FontSizeCapability {
-    // Kitty font control only works when running directly in Kitty (not through tmux).
-    // KITTY_WINDOW_ID can persist as a stale env var in tmux sessions that were
-    // originally started in Kitty but later reattached from iTerm2 or another terminal.
+    // Font control doesn't work reliably through tmux — env vars become stale
+    // and keystroke simulation targets the wrong pane.
     if env::var("TMUX").is_ok() {
         return FontSizeCapability::None;
     }
     if env::var("KITTY_WINDOW_ID").is_ok() {
-        FontSizeCapability::KittyRemote
-    } else {
-        FontSizeCapability::None
+        return FontSizeCapability::KittyRemote;
     }
+    // Ghostty sets TERM_PROGRAM=ghostty when running directly
+    if env::var("TERM_PROGRAM").unwrap_or_default().to_lowercase() == "ghostty" {
+        // Only available on macOS (uses AppleScript for keystroke simulation)
+        if cfg!(target_os = "macos") {
+            return FontSizeCapability::GhosttyKeystroke;
+        }
+    }
+    FontSizeCapability::None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextScaleCapability {
+    /// Kitty OSC 66 text sizing protocol
+    Osc66,
+    None,
+}
+
+pub fn detect_text_scale_capability() -> TextScaleCapability {
+    // Only Kitty supports OSC 66 text sizing; tmux passthrough not yet tested
+    if env::var("TMUX").is_ok() {
+        return TextScaleCapability::None;
+    }
+    if env::var("KITTY_WINDOW_ID").is_ok() {
+        return TextScaleCapability::Osc66;
+    }
+    TextScaleCapability::None
 }
 
 pub fn detect_protocol() -> ImageProtocol {
@@ -46,6 +78,11 @@ pub fn detect_protocol() -> ImageProtocol {
     // WezTerm supports iTerm2 image protocol
     if term_program == "WezTerm" {
         return ImageProtocol::Iterm2;
+    }
+
+    // Ghostty supports Kitty graphics protocol natively
+    if term_program.to_lowercase() == "ghostty" {
+        return ImageProtocol::Kitty;
     }
 
     // Kitty detection — only trust KITTY_WINDOW_ID when NOT in tmux.

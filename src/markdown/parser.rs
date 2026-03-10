@@ -45,6 +45,10 @@ static RESET_LAYOUT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*reset_layout\s*-->").unwrap());
 static FONT_SIZE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_size:\s*(\d+)\s*-->").unwrap());
+static TEXT_SCALE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*text_scale:\s*(\d+)\s*-->").unwrap());
+static TITLE_SCALE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*title_scale:\s*(\d+)\s*-->").unwrap());
 static TITLE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^#\s+(.+)$").unwrap());
 static IMAGE_RE: LazyLock<Regex> =
@@ -73,6 +77,10 @@ static ANIMATION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*animation:\s*(typewriter|fade_in|slide_down)\s*-->").unwrap());
 static LOOP_ANIMATION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*loop_animation:\s*(matrix|bounce|pulse|sparkle|spin)\s*-->").unwrap());
+static FULLSCREEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*fullscreen(?::\s*(true|false))?\s*-->").unwrap());
+static SHOW_SECTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*show_section:\s*(true|false)\s*-->").unwrap());
 static PREAMBLE_START_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*preamble_start:\s*(\w+)\s*-->").unwrap());
 static PREAMBLE_END_RE: LazyLock<Regex> =
@@ -159,6 +167,8 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut image_color = String::new();
     let mut ascii_title = false;
     let mut font_size: Option<u8> = None;
+    let mut text_scale: Option<u8> = None;
+    let mut title_scale: Option<u8> = None;
     let mut footer: Option<String> = None;
     let mut footer_align = FooterAlign::Left;
     let mut alignment: Option<SlideAlignment> = None;
@@ -166,6 +176,8 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut transition: Option<String> = None;
     let mut entrance_animation: Option<String> = None;
     let mut loop_animation: Option<String> = None;
+    let mut fullscreen: Option<bool> = None;
+    let mut show_section: Option<bool> = None;
     let mut code_preambles: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut preamble_lang: Option<String> = None;
     let mut preamble_lines: Vec<String> = Vec::new();
@@ -273,6 +285,18 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             continue;
         }
 
+        // Text scale directive (OSC 66 — scales title + subtitle)
+        if let Some(caps) = TEXT_SCALE_RE.captures(line) {
+            text_scale = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
+            continue;
+        }
+
+        // Title scale directive (OSC 66 — scales title only)
+        if let Some(caps) = TITLE_SCALE_RE.captures(line) {
+            title_scale = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
+            continue;
+        }
+
         // Footer directive
         if let Some(caps) = FOOTER_RE.captures(line) {
             footer = Some(caps[1].to_string());
@@ -322,6 +346,18 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         // Loop animation directive
         if let Some(caps) = LOOP_ANIMATION_RE.captures(line) {
             loop_animation = Some(caps[1].to_string());
+            continue;
+        }
+
+        // Fullscreen directive (<!-- fullscreen --> or <!-- fullscreen: true/false -->)
+        if let Some(caps) = FULLSCREEN_RE.captures(line) {
+            fullscreen = Some(caps.get(1).map_or(true, |m| m.as_str() != "false"));
+            continue;
+        }
+
+        // Show section directive (<!-- show_section: true/false -->)
+        if let Some(caps) = SHOW_SECTION_RE.captures(line) {
+            show_section = Some(caps[1].as_bytes()[0] == b't');
             continue;
         }
 
@@ -596,6 +632,8 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         tables,
         block_quotes,
         font_size,
+        text_scale,
+        title_scale,
         footer,
         footer_align,
         alignment,
@@ -603,6 +641,8 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         transition,
         entrance_animation,
         loop_animation,
+        fullscreen,
+        show_section,
         code_preambles,
         mermaid_blocks,
     };
@@ -1124,5 +1164,56 @@ mod tests {
         assert!(meta.author.is_empty());
         assert!(meta.title.is_empty());
         assert_eq!(slides.len(), 1);
+    }
+
+    #[test]
+    fn test_text_scale_directive() {
+        let src = "<!-- text_scale: 3 -->\n# Scaled Title";
+        let slides = parse(src);
+        assert_eq!(slides[0].text_scale, Some(3));
+        assert_eq!(slides[0].title_scale, None);
+    }
+
+    #[test]
+    fn test_title_scale_directive() {
+        let src = "<!-- title_scale: 5 -->\n# Big Title";
+        let slides = parse(src);
+        assert_eq!(slides[0].title_scale, Some(5));
+        assert_eq!(slides[0].text_scale, None);
+    }
+
+    #[test]
+    fn test_text_scale_clamped() {
+        let src = "<!-- text_scale: 99 -->\n# Clamped";
+        let slides = parse(src);
+        assert_eq!(slides[0].text_scale, Some(7));
+    }
+
+    #[test]
+    fn test_title_scale_clamped_min() {
+        let src = "<!-- title_scale: 0 -->\n# Zero";
+        let slides = parse(src);
+        assert_eq!(slides[0].title_scale, Some(1));
+    }
+
+    #[test]
+    fn test_fullscreen_directive() {
+        let src = "<!-- fullscreen -->\n# Full";
+        let slides = parse(src);
+        assert_eq!(slides[0].fullscreen, Some(true));
+    }
+
+    #[test]
+    fn test_fullscreen_directive_false() {
+        let src = "<!-- fullscreen: false -->\n# Not Full";
+        let slides = parse(src);
+        assert_eq!(slides[0].fullscreen, Some(false));
+    }
+
+    #[test]
+    fn test_show_section_directive() {
+        let src = "<!-- show_section: false -->\n# No Section";
+        let slides = parse(src);
+        assert_eq!(slides[0].show_section, Some(false));
     }
 }

@@ -40,7 +40,7 @@ src/
 
 ## Terminal Requirements
 
-- **Recommended**: Kitty terminal — full feature support (native image protocol, per-slide font sizing via OSC 66, best rendering quality)
+- **Recommended**: Kitty terminal — full feature support (native image protocol, per-slide font sizing via DCS, OSC 66 per-element text scaling, best rendering quality)
 - **iTerm2**: Supports images via inline image protocol; no font sizing support
 - **tmux**: Works with DCS passthrough for images; stale `KITTY_WINDOW_ID` may cause issues — unset it or start a fresh session
 - **Other terminals**: Sixel or ASCII fallback for images; font sizing gracefully degrades

@@ -2123,9 +2123,66 @@ All features tested across this presentation:
 - **v0.2.0 Languages**: C, C++, Go, Ruby execution
 - **Scrolling**: bullet overflow, mixed content overflow
 - **Edge cases**: single-line notes, default alignment, multiple directives
+- **v0.3.0 Font Transitions**: fade-out before font change on slide transitions
+- **v0.3.0 OSC 66**: title_scale, text_scale (per-element scaling, Kitty only)
 
 <!-- notes:
 FEATURE: Summary/checklist
 EXPECTED: Clean bullet list summarizing all features
 VERIFY: All bullet text visible, no truncation, proper indentation
+-->
+
+---
+
+<!-- title_scale: 3 -->
+
+# OSC 66 Title Scale
+
+This slide tests OSC 66 per-element text scaling.
+
+- The title above should render at 3x scale in Kitty terminal
+- Body text and bullets remain at normal (1x) size
+- In non-Kitty terminals, the title appears at normal size (graceful degradation)
+
+<!-- notes:
+FEATURE: OSC 66 title_scale directive
+EXPECTED: Title "OSC 66 Title Scale" rendered at 3x size in Kitty; normal elsewhere
+VERIFY: Title is visibly larger, body text is normal, no escape artifacts in non-Kitty terminals
+-->
+
+---
+
+<!-- text_scale: 2 -->
+
+# Scaled Heading
+
+Scaled subtitle text
+
+- This slide tests `text_scale` which scales both title AND subtitle
+- The title and subtitle above should be 2x in Kitty
+- Bullets are always at normal scale
+
+<!-- notes:
+FEATURE: OSC 66 text_scale directive (title + subtitle)
+EXPECTED: Title and subtitle at 2x, bullets at 1x in Kitty; all normal elsewhere
+VERIFY: Both title and subtitle are larger, bullets are normal, scrolling works
+-->
+
+---
+
+<!-- title_scale: 3 -->
+<!-- font_size: 5 -->
+
+# Combined Font + Scale
+
+Both global font zoom and OSC 66 title scaling together.
+
+- `font_size: 5` sets the global terminal font size
+- `title_scale: 3` renders the title at 3x via OSC 66
+- These are independent, complementary features
+
+<!-- notes:
+FEATURE: Combined font_size + title_scale
+EXPECTED: Larger global font AND 3x title in Kitty; just larger font elsewhere
+VERIFY: Font transition fade-out on entry, title visibly scaled, no conflicts
 -->
