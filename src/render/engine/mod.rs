@@ -2734,7 +2734,7 @@ end tell"#,
     }
 
     fn render_ascii_title(&self, title: &str, pad: &str, lines: &mut Vec<StyledLine>) {
-        let font_data = include_str!("../../fonts/slant.flf");
+        let font_data = include_str!("../../../fonts/slant.flf");
         let fig = match figlet_rs::FIGfont::from_content(font_data)
             .or_else(|_| figlet_rs::FIGfont::standard())
         {
