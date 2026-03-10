@@ -63,6 +63,7 @@ pub struct Slide {
     pub show_section: Option<bool>,
     pub code_preambles: HashMap<String, String>,
     pub mermaid_blocks: Vec<MermaidBlock>,
+    pub font_transition: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +182,7 @@ impl Default for Slide {
             show_section: None,
             code_preambles: HashMap::new(),
             mermaid_blocks: Vec::new(),
+            font_transition: None,
         }
     }
 }

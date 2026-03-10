@@ -118,8 +118,12 @@ pub struct Presenter {
     exec_block_index: usize,
     state: StateManager,
     image_protocol: ImageProtocol,
-    image_cache: HashMap<(PathBuf, usize, u8), CachedImage>,
+    image_cache: HashMap<(PathBuf, usize, u8, usize), CachedImage>,
     preloaded_images: HashMap<PathBuf, image::RgbaImage>,
+    gif_frames: HashMap<PathBuf, Vec<crate::image_util::GifFrame>>,
+    gif_loading: Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>>,
+    gif_current_frame: usize,
+    gif_last_advance: std::time::Instant,
     window_size: WindowSize,
     remote_rx: Option<std::sync::mpsc::Receiver<crate::remote::RemoteCommand>>,
     state_broadcast: Option<tokio::sync::broadcast::Sender<String>>,
@@ -243,15 +247,43 @@ impl Presenter {
         };
         // Preload all slide images into memory
         let mut preloaded_images = HashMap::new();
+        let gif_frames: HashMap<PathBuf, Vec<crate::image_util::GifFrame>> = HashMap::new();
+        // Collect GIF paths for background loading
+        let mut gif_paths: Vec<PathBuf> = Vec::new();
         for slide in &slides {
             if let Some(ref img) = slide.image {
                 if img.path.exists() && !preloaded_images.contains_key(&img.path) {
-                    if let Ok(loaded) = crate::image_util::load_image(&img.path) {
+                    let ext = img.path.extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if ext == "gif" {
+                        // Load first frame quickly for initial display
+                        if let Ok(loaded) = crate::image_util::load_image(&img.path) {
+                            preloaded_images.insert(img.path.clone(), loaded);
+                        }
+                        gif_paths.push(img.path.clone());
+                    } else if let Ok(loaded) = crate::image_util::load_image(&img.path) {
                         preloaded_images.insert(img.path.clone(), loaded);
                     }
                 }
             }
         }
+        // Decode GIF frames in background thread to avoid blocking startup
+        let gif_loading: Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>> =
+            if !gif_paths.is_empty() {
+                Some(std::thread::spawn(move || {
+                    let mut result = HashMap::new();
+                    for path in gif_paths {
+                        if let Some(frames) = crate::image_util::load_gif_frames(&path) {
+                            result.insert(path, frames);
+                        }
+                    }
+                    result
+                }))
+            } else {
+                None
+            };
 
         let mut presenter = Self {
             current: restored_slide.min(slides.len().saturating_sub(1)),
@@ -278,6 +310,10 @@ impl Presenter {
             image_protocol,
             image_cache: HashMap::new(),
             preloaded_images,
+            gif_frames,
+            gif_loading,
+            gif_current_frame: 0,
+            gif_last_advance: std::time::Instant::now(),
             window_size,
             remote_rx,
             state_broadcast,
@@ -321,6 +357,17 @@ impl Presenter {
         let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
         if has_mermaid && crate::image_util::mermaid::MermaidRenderer::is_available() {
             presenter.mermaid_renderer = Some(crate::image_util::mermaid::MermaidRenderer::new());
+        }
+        // Restore saved theme (unless CLI explicitly specified a non-default theme)
+        if presenter.theme.slug == "terminal_green" {
+            if let Some(saved_slug) = presenter.state.get_theme_slug() {
+                if saved_slug != presenter.theme.slug {
+                    let registry = crate::theme::ThemeRegistry::load();
+                    if let Some(saved_theme) = registry.get(saved_slug) {
+                        presenter.apply_theme(saved_theme);
+                    }
+                }
+            }
         }
         presenter
     }
@@ -429,7 +476,7 @@ impl Presenter {
                     ImageProtocol::Sixel => 2,
                     ImageProtocol::Ascii => 3,
                 };
-                let cache_key = (img.path.clone(), content_width, proto_key);
+                let cache_key = (img.path.clone(), content_width, proto_key, 0usize);
                 if !self.image_cache.contains_key(&cache_key) {
                     let margin = tw.saturating_sub(content_width) / 2;
                     let pad = " ".repeat(margin);
@@ -477,12 +524,13 @@ impl Presenter {
         result
     }
 
-    /// Persist current state (slide position, font offsets) to disk.
+    /// Persist current state (slide position, font offsets, theme) to disk.
     fn save_state(&mut self) {
         self.state.set_current_slide(self.current);
         for (&slide, &offset) in &self.slide_font_offsets {
             self.state.set_font_offset(slide, offset);
         }
+        self.state.set_theme_slug(&self.theme.slug);
         let _ = self.state.save();
     }
 
@@ -490,8 +538,21 @@ impl Presenter {
         self.render_frame()?;
         self.broadcast_state();
         loop {
-            // Dynamic poll timeout: 33ms when animation active (~30fps), 100ms otherwise
-            let poll_ms = if self.active_animation.is_some() || self.active_loop.is_some() { 33 } else { 100 };
+            // Check if background GIF loading has completed
+            if let Some(handle) = self.gif_loading.take() {
+                if handle.is_finished() {
+                    if let Ok(loaded) = handle.join() {
+                        self.gif_frames.extend(loaded);
+                        self.needs_full_redraw = true;
+                    }
+                } else {
+                    self.gif_loading = Some(handle);
+                }
+            }
+
+            // Dynamic poll timeout: 33ms when animation/GIF active (~30fps), 100ms otherwise
+            let has_active_gif = self.current_slide_has_gif();
+            let poll_ms = if self.active_animation.is_some() || self.active_loop.is_some() || has_active_gif { 33 } else { 100 };
             let mut had_input = false;
             if event::poll(std::time::Duration::from_millis(poll_ms))? {
                 // Drain ALL pending events before rendering (prevents mouse event flooding)
@@ -564,6 +625,14 @@ impl Presenter {
                 *frame += 1;
                 self.needs_full_redraw = true;
                 // Only render loop when no transition/entrance is active
+                if self.active_animation.is_none() {
+                    self.render_frame()?;
+                }
+            }
+
+            // Advance animated GIF frame if delay has elapsed
+            if has_active_gif && self.advance_gif_frame() {
+                self.needs_full_redraw = true;
                 if self.active_animation.is_none() {
                     self.render_frame()?;
                 }
@@ -904,12 +973,6 @@ impl Presenter {
         self.accent_color = hex_to_color(&new_theme.colors.accent).unwrap_or(Color::Green);
         self.text_color = hex_to_color(&new_theme.colors.text).unwrap_or(Color::White);
         self.code_bg_color = hex_to_color(&new_theme.colors.code_background).unwrap_or(Color::DarkGrey);
-        // Presentation-level accent override persists across theme switches
-        if !self.meta.accent.is_empty() {
-            if let Some(c) = hex_to_color(&self.meta.accent) {
-                self.accent_color = c;
-            }
-        }
         // Parse gradient
         if let Some(ref grad) = new_theme.gradient {
             self.gradient_from = hex_to_color(&grad.from);
@@ -1170,7 +1233,12 @@ end tell"#,
         self.exec_output = None;
         self.exec_rx = None;
         self.exec_block_index = 0;
-        self.font_change_is_slide_transition = true;
+        // Reset GIF animation to first frame on slide change
+        self.gif_current_frame = 0;
+        self.gif_last_advance = std::time::Instant::now();
+        // Font transition animation: default to dissolve, but allow per-slide override
+        let use_dissolve = self.slides[self.current].font_transition.as_deref() != Some("none");
+        self.font_change_is_slide_transition = use_dissolve;
         // Apply per-slide fullscreen directive. User toggle (f key) is sticky
         // until the next slide change, then directives take control again.
         self.user_fullscreen_override = None;
@@ -1452,19 +1520,27 @@ end tell"#,
                         {
                             let stdout = io::stdout();
                             let mut fw = BufWriter::with_capacity(64 * 1024, stdout.lock());
+                            let dis_has_grad = self.gradient_from.is_some() && self.gradient_to.is_some();
+                            let grad_total = (self.height.saturating_sub(status_rows)) as usize;
                             queue!(fw, BeginSynchronizedUpdate)?;
                             for row in 0..self.height {
-                                queue!(fw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                                // Per-row gradient bg for rows below the status bar
+                                let row_bg = if dis_has_grad && row >= status_rows {
+                                    self.row_bg_color((row - status_rows) as usize, grad_total.max(1))
+                                } else {
+                                    self.bg_color
+                                };
+                                queue!(fw, cursor::MoveTo(0, row), SetBackgroundColor(row_bg))?;
                                 if let Some(line) = screen_buf.get(row as usize) {
                                     let mut col = 0usize;
                                     for span in &line.spans {
                                         if col >= tw { break; }
-                                        let span_bg = span.bg.unwrap_or(self.bg_color);
+                                        let span_bg = span.bg.unwrap_or(row_bg);
                                         let fg = span.fg.unwrap_or(self.text_color);
                                         // Fade fg toward span's own bg (handles inverted badges)
                                         let dimmed_fg = interpolate_color(fg, span_bg, progress * 0.7);
-                                        // Fade span bg toward screen bg
-                                        let dimmed_bg = interpolate_color(span_bg, self.bg_color, progress * 0.7);
+                                        // Fade span bg toward row gradient bg
+                                        let dimmed_bg = interpolate_color(span_bg, row_bg, progress * 0.7);
                                         for ch in span.text.chars() {
                                             if col >= tw { break; }
                                             let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
@@ -1474,7 +1550,7 @@ end tell"#,
                                                 .wrapping_mul(7919) % 1000;
                                             let threshold = hash as f64 / 1000.0;
                                             if threshold < progress {
-                                                queue!(fw, SetBackgroundColor(self.bg_color))?;
+                                                queue!(fw, SetBackgroundColor(row_bg))?;
                                                 for _ in 0..cw { write!(fw, " ")?; }
                                             } else {
                                                 queue!(fw, SetBackgroundColor(dimmed_bg))?;
@@ -1552,13 +1628,12 @@ end tell"#,
                 self.font_change_is_slide_transition = false;
             }
 
-            // ── Interactive ] / [ — plain font stepping, no dissolve ──
+            // ── Plain font stepping (interactive ] / [ or slide with font_transition: none) ──
             if !font_applied {
+                // Skip smooth stepping when font_transition: none — jump directly
+                let skip_stepping = self.slides[self.current].font_transition.as_deref() == Some("none");
                 match self.font_capability {
                     FontSizeCapability::KittyRemote => {
-                        let current = self.last_applied_font_size.unwrap_or(target);
-                        let increasing = target > current;
-
                         let stdout = io::stdout();
                         let mut pre = stdout.lock();
 
@@ -1567,19 +1642,25 @@ end tell"#,
                             pre.flush()?;
                         }
 
-                        if increasing && (target - current).abs() > 0.3 {
-                            let step = 0.2_f64;
-                            let num_steps = ((target - current) / step).round() as usize;
-                            for i in 1..num_steps {
-                                let intermediate = current + step * i as f64;
-                                let json = format!(
-                                    r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                                    intermediate
-                                );
-                                let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-                                pre.write_all(esc.as_bytes())?;
-                                pre.flush()?;
-                                std::thread::sleep(std::time::Duration::from_millis(8));
+                        // Smooth stepping for interactive font changes (not slide transitions with none)
+                        if !skip_stepping {
+                            let current = self.last_applied_font_size.unwrap_or(target);
+                            if (target - current).abs() > 0.3 {
+                                let step = 0.2_f64;
+                                let delta = target - current;
+                                let dir = if delta >= 0.0 { 1.0 } else { -1.0 };
+                                let num_steps = (delta.abs() / step).round() as usize;
+                                for i in 1..num_steps {
+                                    let intermediate = current + dir * step * i as f64;
+                                    let json = format!(
+                                        r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
+                                        intermediate
+                                    );
+                                    let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+                                    pre.write_all(esc.as_bytes())?;
+                                    pre.flush()?;
+                                    std::thread::sleep(std::time::Duration::from_millis(8));
+                                }
                             }
                         }
 
@@ -1601,7 +1682,8 @@ end tell"#,
             }
 
             self.last_applied_font_size = Some(target);
-            // Drain all resize events from the font change
+            // Let the terminal settle after font change, then drain resize events
+            std::thread::sleep(std::time::Duration::from_millis(30));
             while event::poll(std::time::Duration::from_millis(10))? {
                 if let Event::Resize(w2, h2) = event::read()? {
                     self.width = w2;
@@ -2005,9 +2087,20 @@ end tell"#,
             let effective_scale = (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
             let img_width = (content_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
             let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / 2.0).max(1.0) as usize;
-            let cache_key = (img.path.clone(), img_width, proto_key);
+            // For animated GIFs, include the current frame index in the cache key
+            let is_animated_gif = self.gif_frames.contains_key(&img.path);
+            let frame_idx = if is_animated_gif { self.gif_current_frame } else { 0 };
+            let cache_key = (img.path.clone(), img_width, proto_key, frame_idx);
             if !self.image_cache.contains_key(&cache_key) {
-                let preloaded = self.preloaded_images.get(&img.path);
+                // For animated GIFs, use the current frame's image data
+                let gif_frame_img = if is_animated_gif {
+                    self.gif_frames.get(&img.path)
+                        .and_then(|frames| frames.get(frame_idx))
+                        .map(|f| &f.image)
+                } else {
+                    None
+                };
+                let preloaded = gif_frame_img.or_else(|| self.preloaded_images.get(&img.path));
                 let rendered = render_slide_image(
                     img, img_width, img_max_height, &pad,
                     self.accent_color, self.text_color,
@@ -2063,6 +2156,10 @@ end tell"#,
                 }
                 padded.append(&mut lines);
                 lines = padded;
+                // Shift protocol image offsets to account for centering padding
+                for (_, offset) in &mut pending_protocol_images {
+                    *offset += padding_rows;
+                }
             }
         }
 
@@ -2152,22 +2249,43 @@ end tell"#,
             && self.last_rendered_scale == self.global_scale
             && self.last_rendered_image_scale == self.image_scale_offset;
 
+        // Total rows below the status bar that should participate in the gradient.
+        // This includes: separator row (1) + content_area + footer row (0 or 1).
+        let has_gradient = self.gradient_from.is_some() && self.gradient_to.is_some();
+        let gradient_span = if !self.show_fullscreen {
+            1 + content_area + if has_slide_footer { 1 } else { 0 }
+        } else {
+            content_area + if has_slide_footer { 1 } else { 0 }
+        };
+
         if !scroll_only && !self.show_fullscreen {
             let bar = self.build_status_bar(tw);
             queue!(w, cursor::MoveTo(0, 0))?;
             self.queue_styled_line(&mut w, &bar, tw)?;
-            queue!(w, cursor::MoveTo(0, 1), SetBackgroundColor(self.bg_color))?;
+            let sep_bg = if has_gradient {
+                self.row_bg_color(0, gradient_span.max(1))
+            } else {
+                self.bg_color
+            };
+            queue!(w, cursor::MoveTo(0, 1), SetBackgroundColor(sep_bg))?;
             write!(w, "{}", " ".repeat(tw))?;
         }
+
+        // Offset for gradient: content rows start after the separator row (unless fullscreen).
+        let gradient_offset = if !self.show_fullscreen { 1 } else { 0 };
 
         // Render visible content lines (offset by status_bar_rows), with per-row gradient.
         // When dissolve-in is pending, render blank content (the dissolve loop
         // will progressively reveal it after this frame flushes).
-        let has_gradient = self.gradient_from.is_some() && self.gradient_to.is_some();
         if self.pending_dissolve_in {
             for i in 0..content_area {
                 let row = (status_bar_rows + i) as u16;
-                queue!(w, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                let bg = if has_gradient {
+                    self.row_bg_color(gradient_offset + visible_start + i, gradient_span.max(1))
+                } else {
+                    self.bg_color
+                };
+                queue!(w, cursor::MoveTo(0, row), SetBackgroundColor(bg))?;
                 write!(w, "{}", " ".repeat(tw))?;
             }
         } else {
@@ -2176,9 +2294,8 @@ end tell"#,
                 let row = (status_bar_rows + i) as u16;
                 queue!(w, cursor::MoveTo(0, row))?;
                 if has_gradient {
-                    let screen_row = visible_start + i;
-                    let total = content_area.max(1);
-                    let row_bg = self.row_bg_color(screen_row, total);
+                    let screen_row = gradient_offset + visible_start + i;
+                    let row_bg = self.row_bg_color(screen_row, gradient_span.max(1));
                     self.queue_styled_line_with_bg(&mut w, line, tw, row_bg)?;
                 } else {
                     self.queue_styled_line(&mut w, line, tw)?;
@@ -2191,7 +2308,7 @@ end tell"#,
         for i in content_rows_drawn..content_area {
             let row = (status_bar_rows + i) as u16;
             let fill_bg = if has_gradient {
-                self.row_bg_color(visible_start + content_rows_drawn + (i - content_rows_drawn), content_area.max(1))
+                self.row_bg_color(gradient_offset + visible_start + i, gradient_span.max(1))
             } else {
                 self.bg_color
             };
@@ -2204,7 +2321,11 @@ end tell"#,
             if let Some(ref footer_text) = slide.footer {
                 use crate::presentation::FooterAlign;
                 let footer_row = (status_bar_rows + content_area) as u16;
-                let footer_bg = self.bg_color;
+                let footer_bg = if has_gradient {
+                    self.row_bg_color(gradient_span.saturating_sub(1), gradient_span.max(1))
+                } else {
+                    self.bg_color
+                };
                 queue!(w, cursor::MoveTo(0, footer_row), SetBackgroundColor(footer_bg))?;
                 let text = footer_text.as_str();
                 let text_width = unicode_width::UnicodeWidthStr::width(text);
@@ -2339,26 +2460,40 @@ end tell"#,
                     let stdout = io::stdout();
                     let mut dw = BufWriter::with_capacity(64 * 1024, stdout.lock());
                     queue!(dw, BeginSynchronizedUpdate)?;
+                    // Gradient support for dissolve-in
+                    let din_has_grad = self.gradient_from.is_some() && self.gradient_to.is_some();
+                    let din_grad_total = dis_content_rows + if dis_status > 0 { 1 } else { 0 };
                     // Status bar at full brightness
                     if dis_status > 0 {
                         let bar = self.build_status_bar(dis_tw);
                         queue!(dw, cursor::MoveTo(0, 0))?;
                         self.queue_styled_line(&mut dw, &bar, dis_tw)?;
-                        queue!(dw, cursor::MoveTo(0, 1), SetBackgroundColor(self.bg_color))?;
+                        let sep_bg = if din_has_grad {
+                            self.row_bg_color(0, din_grad_total.max(1))
+                        } else {
+                            self.bg_color
+                        };
+                        queue!(dw, cursor::MoveTo(0, 1), SetBackgroundColor(sep_bg))?;
                         for _ in 0..dis_tw { write!(dw, " ")?; }
                     }
+                    let din_grad_offset = if dis_status > 0 { 1 } else { 0 };
                     // Content: per-cell scatter reveal
                     for (i, line) in dissolve_lines[..dis_visible].iter().enumerate() {
                         if line.is_scale_placeholder { continue; }
                         let row = (dis_status as usize + i) as u16;
-                        queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                        let row_bg = if din_has_grad {
+                            self.row_bg_color(din_grad_offset + i, din_grad_total.max(1))
+                        } else {
+                            self.bg_color
+                        };
+                        queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(row_bg))?;
                         let mut col = 0usize;
                         for span in &line.spans {
                             if col >= dis_tw { break; }
-                            let span_bg = span.bg.unwrap_or(self.bg_color);
+                            let span_bg = span.bg.unwrap_or(row_bg);
                             let fg = span.fg.unwrap_or(self.text_color);
                             let dimmed_fg = interpolate_color(fg, span_bg, dim);
-                            let dimmed_bg = interpolate_color(span_bg, self.bg_color, dim);
+                            let dimmed_bg = interpolate_color(span_bg, row_bg, dim);
                             for ch in span.text.chars() {
                                 if col >= dis_tw { break; }
                                 let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
@@ -2372,21 +2507,26 @@ end tell"#,
                                                SetForegroundColor(dimmed_fg))?;
                                     write!(dw, "{}", ch)?;
                                 } else {
-                                    queue!(dw, SetBackgroundColor(self.bg_color))?;
+                                    queue!(dw, SetBackgroundColor(row_bg))?;
                                     for _ in 0..cw { write!(dw, " ")?; }
                                 }
                                 col += cw;
                             }
                         }
                         if col < dis_tw {
-                            queue!(dw, SetBackgroundColor(self.bg_color))?;
+                            queue!(dw, SetBackgroundColor(row_bg))?;
                             for _ in 0..dis_tw - col { write!(dw, " ")?; }
                         }
                     }
                     // Fill remaining rows
                     for i in dis_visible..dis_content_rows {
                         let row = (dis_status as usize + i) as u16;
-                        queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                        let row_bg = if din_has_grad {
+                            self.row_bg_color(din_grad_offset + i, din_grad_total.max(1))
+                        } else {
+                            self.bg_color
+                        };
+                        queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(row_bg))?;
                         for _ in 0..dis_tw { write!(dw, " ")?; }
                     }
                     // Emit protocol images on the final frame so they appear
@@ -3288,6 +3428,40 @@ end tell"#,
         queue!(w, SetAttribute(Attribute::Reset), EndSynchronizedUpdate, ResetColor)?;
         w.flush()?;
         Ok(())
+    }
+
+    /// Returns true if the current slide has an animated GIF image.
+    fn current_slide_has_gif(&self) -> bool {
+        self.slides[self.current].image.as_ref()
+            .map(|img| self.gif_frames.contains_key(&img.path))
+            .unwrap_or(false)
+    }
+
+    /// Advance the GIF frame if the current frame's delay has elapsed.
+    /// Returns true if the frame changed (needs redraw).
+    fn advance_gif_frame(&mut self) -> bool {
+        let path = match self.slides[self.current].image.as_ref() {
+            Some(img) => img.path.clone(),
+            None => return false,
+        };
+        let frames = match self.gif_frames.get(&path) {
+            Some(f) => f,
+            None => return false,
+        };
+        let current_delay = frames[self.gif_current_frame].delay_ms as u64;
+        if self.gif_last_advance.elapsed().as_millis() as u64 >= current_delay {
+            self.gif_current_frame = (self.gif_current_frame + 1) % frames.len();
+            self.gif_last_advance = std::time::Instant::now();
+            // Clear Kitty images before emitting next frame
+            if self.image_protocol == ImageProtocol::Kitty {
+                let mut stdout = io::stdout();
+                let _ = write!(stdout, "\x1b_Ga=d\x1b\\");
+                let _ = stdout.flush();
+            }
+            true
+        } else {
+            false
+        }
     }
 }
 

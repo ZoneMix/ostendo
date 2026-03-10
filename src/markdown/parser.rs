@@ -45,6 +45,8 @@ static RESET_LAYOUT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*reset_layout\s*-->").unwrap());
 static FONT_SIZE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_size:\s*(\d+)\s*-->").unwrap());
+static FONT_TRANSITION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_transition:\s*(\w+)\s*-->").unwrap());
 static TEXT_SCALE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*text_scale:\s*(\d+)\s*-->").unwrap());
 static TITLE_SCALE_RE: LazyLock<Regex> =
@@ -182,6 +184,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut preamble_lang: Option<String> = None;
     let mut preamble_lines: Vec<String> = Vec::new();
     let mut mermaid_blocks: Vec<MermaidBlock> = Vec::new();
+    let mut font_transition: Option<String> = None;
 
     let mut in_notes = false;
     let mut in_code = false;
@@ -282,6 +285,12 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         // Font size directive
         if let Some(caps) = FONT_SIZE_RE.captures(line) {
             font_size = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
+            continue;
+        }
+
+        // Font transition directive
+        if let Some(caps) = FONT_TRANSITION_RE.captures(line) {
+            font_transition = Some(caps[1].to_string());
             continue;
         }
 
@@ -645,6 +654,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         show_section,
         code_preambles,
         mermaid_blocks,
+        font_transition,
     };
 
     (slide, current_section)
@@ -1215,5 +1225,12 @@ mod tests {
         let src = "<!-- show_section: false -->\n# No Section";
         let slides = parse(src);
         assert_eq!(slides[0].show_section, Some(false));
+    }
+
+    #[test]
+    fn test_font_transition_directive() {
+        let md = "---\n---\n# Slide\n<!-- font_transition: none -->\nHello";
+        let (_, slides) = parse_presentation(md, None).unwrap();
+        assert_eq!(slides[0].font_transition.as_deref(), Some("none"));
     }
 }

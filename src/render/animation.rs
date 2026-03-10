@@ -652,7 +652,7 @@ fn render_bounce(
     result
 }
 
-/// Pulse: title brightness oscillates via sine wave.
+/// Pulse: all content brightness oscillates via sine wave.
 fn render_pulse(
     buffer: &[StyledLine],
     frame: u64,
@@ -662,22 +662,18 @@ fn render_pulse(
     // Sine wave oscillation: 0.3 to 1.0
     let t = 0.65 + 0.35 * (frame as f64 * 0.15).sin();
     let mut result = Vec::with_capacity(buffer.len());
-    for (i, line) in buffer.iter().enumerate() {
-        if i < 3 {
-            // Apply pulse to title area (first few lines)
-            let mut pulsed = StyledLine::empty();
-            for span in &line.spans {
-                let fg = span.fg.unwrap_or(accent);
-                let pulsed_fg = interpolate_color(bg, fg, t);
-                pulsed.push(StyledSpan {
-                    fg: Some(pulsed_fg),
-                    ..span.clone()
-                });
-            }
-            result.push(pulsed);
-        } else {
-            result.push(line.clone());
+    for line in buffer.iter() {
+        let mut pulsed = StyledLine::empty();
+        pulsed.is_scale_placeholder = line.is_scale_placeholder;
+        for span in &line.spans {
+            let fg = span.fg.unwrap_or(accent);
+            let pulsed_fg = interpolate_color(bg, fg, t);
+            pulsed.push(StyledSpan {
+                fg: Some(pulsed_fg),
+                ..span.clone()
+            });
         }
+        result.push(pulsed);
     }
     result
 }
@@ -711,9 +707,9 @@ fn render_sparkle(
             if chars[col].is_whitespace() { continue; }
             // Each cell has a "sparkle phase" — it sparkles for 2-3 frames then goes dark
             let cell_hash = (row as u64).wrapping_mul(7919).wrapping_add(col as u64 * 6271).wrapping_add(31);
-            let sparkle_period = 15 + (cell_hash % 25); // 15-39 frames between sparkles
+            let sparkle_period = 40 + (cell_hash % 50); // 40-89 frames between sparkles
             let phase = (frame.wrapping_add(cell_hash)) % sparkle_period;
-            if phase < 2 {
+            if phase < 3 {
                 // This cell is sparkling
                 let ch_idx = ((cell_hash + frame) % sparkle_chars.len() as u64) as usize;
                 let color_pick = (cell_hash + frame / 3) % 4;

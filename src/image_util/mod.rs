@@ -7,6 +7,13 @@ use std::path::Path;
 
 use crate::render::layout::WindowSize;
 
+/// A decoded GIF frame with its delay in milliseconds.
+#[derive(Clone)]
+pub struct GifFrame {
+    pub image: RgbaImage,
+    pub delay_ms: u32,
+}
+
 pub fn load_image(path: &Path) -> Result<RgbaImage> {
     let ext = path.extension()
         .and_then(|e| e.to_str())
@@ -19,6 +26,53 @@ pub fn load_image(path: &Path) -> Result<RgbaImage> {
         let img = image::open(path)?;
         Ok(img.to_rgba8())
     }
+}
+
+/// Load all frames from a GIF file. Returns None for non-GIF or single-frame images.
+/// Frames are downscaled to max 800px on the longest side to avoid excessive memory usage.
+pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
+    use image::AnimationDecoder;
+    use std::io::BufReader;
+
+    let ext = path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext != "gif" {
+        return None;
+    }
+
+    let file = std::fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    let decoder = image::codecs::gif::GifDecoder::new(reader).ok()?;
+    let frames: Vec<image::Frame> = decoder.into_frames().filter_map(|f| f.ok()).collect();
+
+    if frames.len() <= 1 {
+        return None; // Static GIF, use normal load path
+    }
+
+    const MAX_DIM: u32 = 800;
+
+    let gif_frames: Vec<GifFrame> = frames.into_iter().map(|f| {
+        let (numer, denom) = f.delay().numer_denom_ms();
+        let delay_ms = if denom > 0 { numer / denom } else { 100 };
+        // GIF spec: delay of 0 means "as fast as possible", default to 100ms
+        let delay_ms = if delay_ms == 0 { 100 } else { delay_ms };
+        let raw = f.into_buffer();
+        // Downscale large frames to keep memory usage reasonable
+        let (w, h) = raw.dimensions();
+        let image = if w > MAX_DIM || h > MAX_DIM {
+            let scale = MAX_DIM as f64 / w.max(h) as f64;
+            let nw = (w as f64 * scale).max(1.0) as u32;
+            let nh = (h as f64 * scale).max(1.0) as u32;
+            image::imageops::resize(&raw, nw, nh, image::imageops::FilterType::Triangle)
+        } else {
+            raw
+        };
+        GifFrame { image, delay_ms }
+    }).collect();
+
+    Some(gif_frames)
 }
 
 fn load_svg(path: &Path) -> Result<RgbaImage> {

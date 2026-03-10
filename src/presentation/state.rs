@@ -10,6 +10,8 @@ pub struct PresentationState {
     pub current_slide: usize,
     #[serde(default)]
     pub slide_font_offsets: HashMap<usize, i8>,
+    #[serde(default)]
+    pub theme_slug: Option<String>,
 }
 
 pub struct StateManager {
@@ -68,6 +70,14 @@ impl StateManager {
         } else {
             self.state.slide_font_offsets.insert(slide, offset);
         }
+    }
+
+    pub fn get_theme_slug(&self) -> Option<&str> {
+        self.state.theme_slug.as_deref()
+    }
+
+    pub fn set_theme_slug(&mut self, slug: &str) {
+        self.state.theme_slug = Some(slug.to_string());
     }
 
     pub fn save(&self) -> Result<()> {
