@@ -46,6 +46,10 @@ pub struct AnimationState {
     pub frame: u64,
     pub old_buffer: Vec<StyledLine>,
     pub new_buffer: Vec<StyledLine>,
+    /// When true, the transition only fades/dissolves the old content out
+    /// (to background) without revealing new content.  The entrance animation
+    /// that follows will handle revealing the new content.
+    pub exit_only: bool,
 }
 
 impl AnimationState {
@@ -66,6 +70,7 @@ impl AnimationState {
             frame: 0,
             old_buffer,
             new_buffer,
+            exit_only: false,
         }
     }
 
@@ -77,6 +82,7 @@ impl AnimationState {
             frame: 0,
             old_buffer: Vec::new(),
             new_buffer: buffer,
+            exit_only: false,
         }
     }
 
@@ -88,6 +94,7 @@ impl AnimationState {
             frame: 0,
             old_buffer: Vec::new(),
             new_buffer: buffer,
+            exit_only: false,
         }
     }
 
@@ -144,6 +151,9 @@ pub fn parse_loop_animation(s: &str) -> Option<LoopAnimation> {
 }
 
 /// Render a transition animation frame, returning the blended buffer.
+/// When `exit_only` is true, the transition only fades/dissolves the old
+/// content out to the background without revealing the new content — the
+/// entrance animation that follows will handle the reveal.
 pub fn render_transition_frame(
     old: &[StyledLine],
     new: &[StyledLine],
@@ -151,26 +161,42 @@ pub fn render_transition_frame(
     transition: TransitionType,
     bg: Color,
     width: usize,
+    exit_only: bool,
 ) -> Vec<StyledLine> {
     match transition {
-        TransitionType::Fade => render_fade(old, new, progress, bg),
-        TransitionType::SlideLeft => render_slide_left(old, new, progress, width),
-        TransitionType::Dissolve => render_dissolve(old, new, progress),
+        TransitionType::Fade => render_fade(old, new, progress, bg, exit_only),
+        TransitionType::SlideLeft => render_slide_left(old, new, progress, width, exit_only),
+        TransitionType::Dissolve => render_dissolve(old, new, progress, exit_only),
     }
 }
 
 /// Fade: interpolate fg colors old→bg→new over progress 0.0→1.0.
+/// When `exit_only`, the entire progress range fades old→bg (no new content).
 fn render_fade(
     old: &[StyledLine],
     new: &[StyledLine],
     progress: f64,
     bg: Color,
+    exit_only: bool,
 ) -> Vec<StyledLine> {
     let max_len = old.len().max(new.len());
     let mut result = Vec::with_capacity(max_len);
 
     for i in 0..max_len {
-        if progress < 0.5 {
+        if exit_only {
+            // Exit-only: fade old→bg over the full duration
+            let source = old.get(i).cloned().unwrap_or_else(StyledLine::empty);
+            let mut faded = StyledLine::empty();
+            for span in &source.spans {
+                let fg = span.fg.unwrap_or(Color::White);
+                let new_fg = interpolate_color(fg, bg, progress);
+                faded.push(StyledSpan {
+                    fg: Some(new_fg),
+                    ..span.clone()
+                });
+            }
+            result.push(faded);
+        } else if progress < 0.5 {
             // Fade old toward bg (progress 0→0.5 maps to t 0→1)
             let t = progress * 2.0;
             let source = old.get(i).cloned().unwrap_or_else(StyledLine::empty);
@@ -205,11 +231,13 @@ fn render_fade(
 
 /// SlideLeft: old content slides left, new enters from right.
 /// Uses character-based slicing to avoid panics on multi-byte UTF-8.
+/// When `exit_only`, old slides left with blank space (no new content enters).
 fn render_slide_left(
     old: &[StyledLine],
     new: &[StyledLine],
     progress: f64,
     width: usize,
+    exit_only: bool,
 ) -> Vec<StyledLine> {
     let max_len = old.len().max(new.len());
     let shift = (width as f64 * progress) as usize;
@@ -217,24 +245,33 @@ fn render_slide_left(
 
     for i in 0..max_len {
         let old_chars: Vec<char> = old.get(i).map(line_to_string).unwrap_or_default().chars().collect();
-        let new_chars: Vec<char> = new.get(i).map(line_to_string).unwrap_or_default().chars().collect();
 
-        // Shift old left, new enters from right
+        // Shift old left
         let old_visible: String = old_chars.iter().skip(shift).collect();
-        let new_visible: String = new_chars.iter().take(shift).collect();
 
-        let combined = format!("{}{}", old_visible, new_visible);
-        result.push(StyledLine::plain(&combined));
+        if exit_only {
+            // Pad with spaces instead of bringing in new content
+            let pad = " ".repeat(shift.min(width));
+            let combined = format!("{}{}", old_visible, pad);
+            result.push(StyledLine::plain(&combined));
+        } else {
+            let new_chars: Vec<char> = new.get(i).map(line_to_string).unwrap_or_default().chars().collect();
+            let new_visible: String = new_chars.iter().take(shift).collect();
+            let combined = format!("{}{}", old_visible, new_visible);
+            result.push(StyledLine::plain(&combined));
+        }
     }
     result
 }
 
 /// Dissolve: characters jumble randomly and gradually resolve into the new content.
 /// Early phase: each cell shows a random character, progressively replaced by target text.
+/// When `exit_only`, cells dissolve to spaces instead of resolving to new content.
 fn render_dissolve(
     old: &[StyledLine],
     new: &[StyledLine],
     progress: f64,
+    exit_only: bool,
 ) -> Vec<StyledLine> {
     let max_len = old.len().max(new.len());
     let jumble_chars: &[char] = &[
@@ -249,7 +286,11 @@ fn render_dissolve(
         let old_line = old.get(row).cloned().unwrap_or_else(StyledLine::empty);
 
         if progress >= 1.0 {
-            result.push(new_line);
+            if exit_only {
+                result.push(StyledLine::empty());
+            } else {
+                result.push(new_line);
+            }
             continue;
         }
         if progress <= 0.0 {
@@ -257,11 +298,18 @@ fn render_dissolve(
             continue;
         }
 
-        let new_text = line_to_string(&new_line);
         let old_text = line_to_string(&old_line);
-        let new_chars: Vec<char> = new_text.chars().collect();
         let old_chars: Vec<char> = old_text.chars().collect();
-        let max_cols = new_chars.len().max(old_chars.len());
+        let (new_chars, new_text, max_cols) = if exit_only {
+            let mc = old_chars.len();
+            (Vec::new(), String::new(), mc)
+        } else {
+            let nt = line_to_string(&new_line);
+            let nc: Vec<char> = nt.chars().collect();
+            let mc = nc.len().max(old_chars.len());
+            (nc, nt, mc)
+        };
+        let _ = &new_text; // suppress unused warning
 
         if max_cols == 0 {
             result.push(StyledLine::empty());
@@ -276,8 +324,12 @@ fn render_dissolve(
             let resolve_at = cell_hash as f64 / 1000.0;
 
             if progress > resolve_at {
-                // This cell has resolved — show the new character
-                out.push(*new_chars.get(col).unwrap_or(&' '));
+                // This cell has resolved — show the new character (or space if exit-only)
+                if exit_only {
+                    out.push(' ');
+                } else {
+                    out.push(*new_chars.get(col).unwrap_or(&' '));
+                }
             } else if progress > resolve_at * 0.5 {
                 // This cell is jumbling — show random character
                 let jumble_idx = ((cell_hash + (progress * 1000.0) as u64) % jumble_chars.len() as u64) as usize;
@@ -290,7 +342,9 @@ fn render_dissolve(
 
         // Use new line's styling but with the jumbled text
         // This preserves colors from the new slide
-        if progress > 0.5 {
+        if exit_only {
+            result.push(rebuild_line_with_text(&old_line, &out, max_cols));
+        } else if progress > 0.5 {
             result.push(rebuild_line_with_text(&new_line, &out, max_cols));
         } else {
             result.push(rebuild_line_with_text(&old_line, &out, max_cols));
@@ -840,9 +894,9 @@ mod tests {
         let bg = Color::Rgb { r: 0, g: 0, b: 0 };
         let old = vec![StyledLine::plain("old content")];
         let new = vec![StyledLine::plain("new content")];
-        let result = render_transition_frame(&old, &new, 0.0, TransitionType::Fade, bg, 80);
+        let result = render_transition_frame(&old, &new, 0.0, TransitionType::Fade, bg, 80, false);
         assert_eq!(result.len(), 1);
-        let result_end = render_transition_frame(&old, &new, 1.0, TransitionType::Fade, bg, 80);
+        let result_end = render_transition_frame(&old, &new, 1.0, TransitionType::Fade, bg, 80, false);
         assert_eq!(result_end.len(), 1);
     }
 
@@ -852,11 +906,11 @@ mod tests {
         let old = vec![StyledLine::plain("AAAA")];
         let new = vec![StyledLine::plain("BBBB")];
         // At progress 0, all old
-        let result_0 = render_transition_frame(&old, &new, 0.0, TransitionType::Dissolve, bg, 80);
+        let result_0 = render_transition_frame(&old, &new, 0.0, TransitionType::Dissolve, bg, 80, false);
         let text_0 = line_to_string(&result_0[0]);
         assert!(text_0.contains('A'));
         // At progress 1, all new
-        let result_1 = render_transition_frame(&old, &new, 1.0, TransitionType::Dissolve, bg, 80);
+        let result_1 = render_transition_frame(&old, &new, 1.0, TransitionType::Dissolve, bg, 80, false);
         let text_1 = line_to_string(&result_1[0]);
         assert!(text_1.contains('B'));
     }

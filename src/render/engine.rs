@@ -1054,7 +1054,13 @@ end tell"#,
             .or(if self.meta.transition.is_empty() { None } else { Some(self.meta.transition.as_str()) });
 
         if let Some(tt) = transition_str.and_then(parse_transition) {
-            self.active_animation = Some(AnimationState::new_transition(tt, old_buffer, Vec::new()));
+            let has_entrance = slide.entrance_animation.as_deref()
+                .and_then(parse_entrance).is_some();
+            let mut anim = AnimationState::new_transition(tt, old_buffer, Vec::new());
+            // When an entrance animation follows, the transition only fades out
+            // old content — the entrance handles revealing new content.
+            anim.exit_only = has_entrance;
+            self.active_animation = Some(anim);
         } else if let Some(ea) = slide.entrance_animation.as_deref().and_then(parse_entrance) {
             self.active_animation = Some(AnimationState::new_entrance(ea, Vec::new()));
         }
@@ -1999,6 +2005,7 @@ end tell"#,
                     lines = render_transition_frame(
                         &anim.old_buffer, &anim.new_buffer,
                         progress, tt, self.bg_color, content_width,
+                        anim.exit_only,
                     );
                 }
                 AnimationKind::Entrance(ea) => {
@@ -2212,9 +2219,11 @@ end tell"#,
 
         // ── Dissolve-in: scatter-reveal new content after font transition ──
         // Mirrors the dissolve-out so the transition feels symmetric.
+        // Images are emitted on the final frame within the same sync block
+        // so they appear atomically with the fully-revealed content.
         if self.pending_dissolve_in {
             self.pending_dissolve_in = false;
-            let dissolve_lines = &self.last_rendered_buffer.clone();
+            let dissolve_lines = self.last_rendered_buffer.clone();
             if !dissolve_lines.is_empty() {
                 let dis_frames = 12u32;
                 let dis_tw = self.width as usize;
@@ -2223,7 +2232,8 @@ end tell"#,
                 let dis_visible = dissolve_lines.len().min(dis_content_rows);
                 for frame in 1..=dis_frames {
                     let progress = frame as f64 / dis_frames as f64;
-                    let dim = (1.0 - progress) * 0.4; // newly appeared chars start slightly dim
+                    let dim = (1.0 - progress) * 0.4;
+                    let is_last = frame == dis_frames;
                     let stdout = io::stdout();
                     let mut dw = BufWriter::with_capacity(64 * 1024, stdout.lock());
                     queue!(dw, BeginSynchronizedUpdate)?;
@@ -2256,12 +2266,10 @@ end tell"#,
                                     .wrapping_mul(7919) % 1000;
                                 let threshold = hash as f64 / 1000.0;
                                 if threshold < progress {
-                                    // Revealed
                                     queue!(dw, SetBackgroundColor(dimmed_bg),
                                                SetForegroundColor(dimmed_fg))?;
                                     write!(dw, "{}", ch)?;
                                 } else {
-                                    // Still hidden
                                     queue!(dw, SetBackgroundColor(self.bg_color))?;
                                     for _ in 0..cw { write!(dw, " ")?; }
                                 }
@@ -2279,11 +2287,27 @@ end tell"#,
                         queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
                         for _ in 0..dis_tw { write!(dw, " ")?; }
                     }
+                    // Emit protocol images on the final frame so they appear
+                    // atomically with fully-revealed content (no flicker).
+                    if is_last {
+                        for (escape_data, line_offset) in &pending_protocol_images {
+                            if *line_offset >= visible_start && *line_offset < visible_end {
+                                let display_row = line_offset - visible_start;
+                                let screen_row = (status_bar_rows + display_row) as u16;
+                                queue!(dw, cursor::MoveTo(0, screen_row))?;
+                                write!(dw, "{}", escape_data)?;
+                            }
+                        }
+                    }
                     queue!(dw, EndSynchronizedUpdate, ResetColor)?;
                     dw.flush()?;
                     std::thread::sleep(std::time::Duration::from_millis(25));
                 }
             }
+            // The dissolve-in already revealed content, so skip any remaining
+            // transition/entrance animation to avoid double-reveal.
+            self.active_animation = None;
+            self.needs_full_redraw = true;
         }
 
         Ok(())
