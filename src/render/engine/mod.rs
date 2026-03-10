@@ -34,6 +34,52 @@ mod content;
 mod input;
 mod rendering;
 
+/// Kitty Graphics Protocol: delete all images (quiet mode).
+const KITTY_CLEAR_IMAGES: &[u8] = b"\x1b_Ga=d,d=a,q=2\x1b\\";
+
+/// Build a Kitty RC escape sequence to set font size to an absolute value.
+fn kitty_font_escape(size: f64) -> String {
+    format!(
+        "\x1bP@kitty-cmd{{\"cmd\":\"set_font_size\",\"version\":[0,14,2],\"no_response\":true,\"payload\":{{\"size\":{:.1}}}}}\x1b\\",
+        size
+    )
+}
+
+/// Get the bullet indent string for a given nesting depth.
+fn bullet_indent(depth: usize) -> &'static str {
+    match depth {
+        0 => "  * ",
+        1 => "      - ",
+        _ => "          > ",
+    }
+}
+
+/// Compute content width from terminal width and scale percentage.
+fn scaled_content_width(tw: usize, scale: u8) -> usize {
+    ((tw as f64 * scale as f64 / 100.0) as usize).min(tw)
+}
+
+/// Resolve an `ImageRenderMode` to a concrete `ImageProtocol`.
+fn resolve_image_protocol(mode: crate::presentation::ImageRenderMode, default: ImageProtocol) -> ImageProtocol {
+    match mode {
+        crate::presentation::ImageRenderMode::Kitty => ImageProtocol::Kitty,
+        crate::presentation::ImageRenderMode::Iterm => ImageProtocol::Iterm2,
+        crate::presentation::ImageRenderMode::Sixel => ImageProtocol::Sixel,
+        crate::presentation::ImageRenderMode::Ascii => ImageProtocol::Ascii,
+        crate::presentation::ImageRenderMode::Auto => default,
+    }
+}
+
+/// Numeric key for image protocol (used in cache keys).
+fn protocol_cache_key(proto: ImageProtocol) -> u8 {
+    match proto {
+        ImageProtocol::Kitty => 0,
+        ImageProtocol::Iterm2 => 1,
+        ImageProtocol::Sixel => 2,
+        ImageProtocol::Ascii => 3,
+    }
+}
+
 /// Strip terminal control characters from a string to prevent escape sequence injection.
 /// Preserves printable characters, spaces, and tabs. Removes ANSI escape sequences,
 /// and control characters (0x00-0x1F except \t, 0x7F).
@@ -181,6 +227,7 @@ pub struct Presenter {
     theme_slugs: Vec<String>,
     allow_exec: bool,
     allow_remote_exec: bool,
+    figfont: Option<figlet_rs::FIGfont>,
 }
 
 impl Presenter {
@@ -368,6 +415,12 @@ impl Presenter {
             theme_slugs: crate::theme::ThemeRegistry::load().list(),
             allow_exec: !no_exec,
             allow_remote_exec: remote_exec,
+            figfont: {
+                let font_data = include_str!("../../../fonts/slant.flf");
+                figlet_rs::FIGfont::from_content(font_data)
+                    .or_else(|_| figlet_rs::FIGfont::standard())
+                    .ok()
+            },
         };
         // Initialize mermaid renderer if any slide has mermaid blocks
         let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
@@ -400,24 +453,12 @@ impl Presenter {
     fn prerender_images(&mut self) {
         let tw = self.width as usize;
         let th = self.height as usize;
-        let scale = self.current_scale();
-        let content_width = ((tw as f64 * scale as f64 / 100.0) as usize).min(tw);
+        let content_width = scaled_content_width(tw, self.current_scale());
 
         for slide in &self.slides {
             if let Some(ref img) = slide.image {
-                let effective_protocol = match img.render_mode {
-                    crate::presentation::ImageRenderMode::Kitty => ImageProtocol::Kitty,
-                    crate::presentation::ImageRenderMode::Iterm => ImageProtocol::Iterm2,
-                    crate::presentation::ImageRenderMode::Sixel => ImageProtocol::Sixel,
-                    crate::presentation::ImageRenderMode::Ascii => ImageProtocol::Ascii,
-                    crate::presentation::ImageRenderMode::Auto => self.image_protocol,
-                };
-                let proto_key = match effective_protocol {
-                    ImageProtocol::Kitty => 0,
-                    ImageProtocol::Iterm2 => 1,
-                    ImageProtocol::Sixel => 2,
-                    ImageProtocol::Ascii => 3,
-                };
+                let effective_protocol = resolve_image_protocol(img.render_mode, self.image_protocol);
+                let proto_key = protocol_cache_key(effective_protocol);
                 let cache_key = (img.path.clone(), content_width, proto_key, 0usize);
                 if !self.image_cache.contains_key(&cache_key) {
                     let margin = tw.saturating_sub(content_width) / 2;
@@ -808,7 +849,7 @@ mod tests {
         // Verify scale math: content_width at various scales
         let tw = 100usize;
         for scale in [50u8, 80, 100, 150, 200] {
-            let content_width = ((tw as f64 * scale as f64 / 100.0) as usize).min(tw);
+            let content_width = scaled_content_width(tw, scale);
             assert!(content_width <= tw, "scale {} produced width {} > {}", scale, content_width, tw);
             assert!(content_width >= 50, "scale {} produced width {} < 50", scale, content_width);
         }
@@ -940,7 +981,7 @@ mod tests {
     fn test_scale_centering() {
         let tw = 100usize;
         let scale = 60u8;
-        let content_width = ((tw as f64 * scale as f64 / 100.0) as usize).min(tw);
+        let content_width = scaled_content_width(tw, scale);
         let margin = tw.saturating_sub(content_width) / 2;
         let pad = " ".repeat(margin);
         assert_eq!(content_width, 60);

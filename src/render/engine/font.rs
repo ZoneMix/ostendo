@@ -15,11 +15,7 @@ impl Presenter {
         if self.font_capability != FontSizeCapability::KittyRemote {
             return;
         }
-        let json = format!(
-            r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-            size
-        );
-        let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+        let esc = kitty_font_escape(size);
         let _ = std::io::Write::write_all(&mut std::io::stdout(), esc.as_bytes());
         if flush {
             let _ = std::io::Write::flush(&mut std::io::stdout());

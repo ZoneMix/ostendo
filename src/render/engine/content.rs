@@ -44,12 +44,9 @@ impl Presenter {
     }
 
     pub(crate) fn render_ascii_title(&self, title: &str, pad: &str, lines: &mut Vec<StyledLine>) {
-        let font_data = include_str!("../../../fonts/slant.flf");
-        let fig = match figlet_rs::FIGfont::from_content(font_data)
-            .or_else(|_| figlet_rs::FIGfont::standard())
-        {
-            Ok(f) => f,
-            Err(_) => {
+        let fig = match self.figfont.as_ref() {
+            Some(f) => f,
+            None => {
                 // Graceful fallback: render as plain bold title
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(pad));
@@ -305,11 +302,7 @@ impl Presenter {
             // Bullets with inline formatting, themed markers, and word wrapping
             for bullet in &content.bullets {
                 if bullet.text.is_empty() { continue; }
-                let indent = match bullet.depth {
-                    0 => "  * ",
-                    1 => "      - ",
-                    _ => "          > ",
-                };
+                let indent = bullet_indent(bullet.depth);
                 let text_width = cw.saturating_sub(indent.len());
                 if text_width == 0 { continue; }
                 let wrapped = textwrap_simple(&bullet.text, text_width);

@@ -64,7 +64,7 @@ impl Presenter {
 
         // Clear any Kitty images so they don't show through the help overlay
         if self.image_protocol == ImageProtocol::Kitty {
-            write!(w, "\x1b_Ga=d,d=a,q=2\x1b\\")?;
+            w.write_all(KITTY_CLEAR_IMAGES)?;
         }
 
         // Fill background for all rows
@@ -298,7 +298,7 @@ impl Presenter {
 
         // Clear Kitty images if applicable
         if self.image_protocol == ImageProtocol::Kitty {
-            write!(w, "\x1b_Ga=d\x1b\\")?;
+            w.write_all(KITTY_CLEAR_IMAGES)?;
         }
 
         queue!(w, cursor::MoveTo(2, 1), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;

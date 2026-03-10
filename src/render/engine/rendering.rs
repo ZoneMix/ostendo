@@ -36,7 +36,7 @@ impl Presenter {
                     if self.image_protocol == ImageProtocol::Kitty {
                         let stdout = io::stdout();
                         let mut pre = stdout.lock();
-                        pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
+                        pre.write_all(KITTY_CLEAR_IMAGES)?;
                         pre.flush()?;
                     }
 
@@ -157,12 +157,7 @@ impl Presenter {
                                 for s in 0..batch {
                                     let step_idx = font_steps_sent + s + 1;
                                     let intermediate = current_font + font_dir * 0.2 * step_idx as f64;
-                                    let json = format!(
-                                        r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                                        intermediate
-                                    );
-                                    let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-                                    pre.write_all(esc.as_bytes())?;
+                                    pre.write_all(kitty_font_escape(intermediate).as_bytes())?;
                                     pre.flush()?;
                                     std::thread::sleep(std::time::Duration::from_millis(8));
                                 }
@@ -182,14 +177,9 @@ impl Presenter {
                     // Final font step — land exactly on target
                     match self.font_capability {
                         FontSizeCapability::KittyRemote => {
-                            let json = format!(
-                                r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                                target
-                            );
-                            let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
                             let stdout = io::stdout();
                             let mut pre = stdout.lock();
-                            pre.write_all(esc.as_bytes())?;
+                            pre.write_all(kitty_font_escape(target).as_bytes())?;
                             pre.flush()?;
                         }
                         _ => {} // Ghostty keystrokes already sent above
@@ -222,7 +212,7 @@ impl Presenter {
                         }
 
                         if self.image_protocol == ImageProtocol::Kitty {
-                            pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
+                            pre.write_all(KITTY_CLEAR_IMAGES)?;
                             pre.flush()?;
                         }
 
@@ -236,24 +226,14 @@ impl Presenter {
                                 let num_steps = (delta.abs() / step).round() as usize;
                                 for i in 1..num_steps {
                                     let intermediate = current + dir * step * i as f64;
-                                    let json = format!(
-                                        r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                                        intermediate
-                                    );
-                                    let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-                                    pre.write_all(esc.as_bytes())?;
+                                    pre.write_all(kitty_font_escape(intermediate).as_bytes())?;
                                     pre.flush()?;
                                     std::thread::sleep(std::time::Duration::from_millis(8));
                                 }
                             }
                         }
 
-                        let json = format!(
-                            r#"{{"cmd":"set_font_size","version":[0,14,2],"no_response":true,"payload":{{"size":{:.1}}}}}"#,
-                            target
-                        );
-                        let esc = format!("\x1bP@kitty-cmd{}\x1b\\", json);
-                        pre.write_all(esc.as_bytes())?;
+                        pre.write_all(kitty_font_escape(target).as_bytes())?;
                         pre.flush()?;
                         drop(pre);
                     }
@@ -352,8 +332,7 @@ impl Presenter {
         let tw = self.width as usize;
         let th = self.height as usize;
 
-        let scale = self.current_scale();
-        let content_width = ((tw as f64 * scale as f64 / 100.0) as usize).min(tw);
+        let content_width = scaled_content_width(tw, self.current_scale());
         let margin = tw.saturating_sub(content_width) / 2;
         let pad = " ".repeat(margin);
 
@@ -414,11 +393,7 @@ impl Presenter {
 
         // Bullets
         for bullet in &slide.bullets {
-            let indent = match bullet.depth {
-                0 => "  * ",
-                1 => "      - ",
-                _ => "          > ",
-            };
+            let indent = bullet_indent(bullet.depth);
             let wrapped = textwrap_simple(&bullet.text, content_width.saturating_sub(indent.len() + 2));
             for (i, wline) in wrapped.iter().enumerate() {
                 let mut line = StyledLine::empty();
@@ -676,19 +651,8 @@ impl Presenter {
         // Image rendering (cached)
         if let Some(ref img) = slide.image {
             // Per-image render mode override from markdown directives
-            let effective_protocol = match img.render_mode {
-                crate::presentation::ImageRenderMode::Kitty => ImageProtocol::Kitty,
-                crate::presentation::ImageRenderMode::Iterm => ImageProtocol::Iterm2,
-                crate::presentation::ImageRenderMode::Sixel => ImageProtocol::Sixel,
-                crate::presentation::ImageRenderMode::Ascii => ImageProtocol::Ascii,
-                crate::presentation::ImageRenderMode::Auto => self.image_protocol,
-            };
-            let proto_key = match effective_protocol {
-                ImageProtocol::Kitty => 0,
-                ImageProtocol::Iterm2 => 1,
-                ImageProtocol::Sixel => 2,
-                ImageProtocol::Ascii => 3,
-            };
+            let effective_protocol = resolve_image_protocol(img.render_mode, self.image_protocol);
+            let proto_key = protocol_cache_key(effective_protocol);
             // Apply image_scale directive + runtime offset
             let effective_scale = (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
             let img_width = (content_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
@@ -1013,7 +977,7 @@ impl Presenter {
         // Clear old Kitty images right before placing new content, so the
         // delete and new frame appear atomically within the synchronized update.
         if need_kitty_clear {
-            write!(w, "\x1b_Ga=d,d=a,q=2\x1b\\")?;
+            w.write_all(KITTY_CLEAR_IMAGES)?;
         }
 
         // Write protocol image data after line rendering (Kitty/iTerm2/Sixel).
