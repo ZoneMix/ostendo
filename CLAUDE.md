@@ -13,7 +13,15 @@ cargo run --release -- --validate presentations/examples/test_presentation.md  #
 ```
 src/
   main.rs              # CLI (clap), entry point
-  render/engine.rs     # Core renderer, event loop, Presenter struct (~3700 lines)
+  render/engine/       # Core renderer (split into submodules)
+    mod.rs             # Presenter struct, lifecycle (new/run), shared helpers (~650 lines)
+    rendering.rs       # render_frame(), status bar redraw (~1175 lines)
+    input.rs           # Event loop, key handling, remote polling (~440 lines)
+    content.rs         # Tables, columns, titles, exec output (~450 lines)
+    ui.rs              # Status bar, help overlay, overview grid (~350 lines)
+    font.rs            # Terminal font/bg control protocols (~200 lines)
+    state.rs           # Toggles, scale, theme, persistence (~137 lines)
+    navigation.rs      # Slide movement, scrolling, animations (~120 lines)
   render/layout.rs     # WindowSize, terminal dimensions
   render/text.rs       # StyledLine/StyledSpan (virtual buffer)
   render/progress.rs   # Progress bar rendering
