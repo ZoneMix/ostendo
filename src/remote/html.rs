@@ -96,6 +96,7 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
     padding: 14px 16px 10px;
     border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
+    display: flex; align-items: flex-start; justify-content: space-between;
   }
   .slide-meta {
     display: flex; align-items: center; gap: 8px;
@@ -147,6 +148,7 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
     padding: 14px 16px 10px;
     border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
   }
   #notes-label {
     font-size: 0.7rem;
@@ -172,6 +174,29 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
     color: var(--text-tertiary);
     font-style: italic;
   }
+
+  /* ── Local font size buttons ── */
+  .font-sizer {
+    display: flex; align-items: center; gap: 2px;
+    flex-shrink: 0;
+  }
+  .font-sizer-btn {
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-tertiary);
+    font-family: inherit;
+    font-size: 0.6rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    padding: 0;
+    line-height: 1;
+  }
+  .font-sizer-btn:hover { color: var(--text-secondary); border-color: var(--accent); }
+  .font-sizer-btn:active { background: var(--bg-hover); }
 
   /* ── Controls area ── */
   #controls {
@@ -357,11 +382,17 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
 <main>
   <section id="slide-panel">
     <div id="slide-header">
-      <div class="slide-meta">
-        <span id="slide-counter">-- / --</span>
-        <span id="section-badge"></span>
+      <div>
+        <div class="slide-meta">
+          <span id="slide-counter">-- / --</span>
+          <span id="section-badge"></span>
+        </div>
+        <div id="slide-title">Connecting...</div>
       </div>
-      <div id="slide-title">Connecting...</div>
+      <div class="font-sizer">
+        <button class="font-sizer-btn" onclick="adjustLocalFont('slide',-1)">A&#8722;</button>
+        <button class="font-sizer-btn" onclick="adjustLocalFont('slide',1)">A&#43;</button>
+      </div>
     </div>
     <div id="slide-content"></div>
   </section>
@@ -369,6 +400,10 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
   <section id="notes-panel">
     <div id="notes-header">
       <span id="notes-label">Speaker Notes</span>
+      <div class="font-sizer">
+        <button class="font-sizer-btn" onclick="adjustLocalFont('notes',-1)">A&#8722;</button>
+        <button class="font-sizer-btn" onclick="adjustLocalFont('notes',1)">A&#43;</button>
+      </div>
     </div>
     <div id="notes-body"><span class="notes-empty">No notes</span></div>
   </section>
@@ -438,6 +473,7 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
 
 <script>
 let ws, state = {}, touchStartX = 0, panelOpen = false;
+var localFontSizes = { slide: 0.78, notes: 0.8 };
 
 function connect() {
   ws = new WebSocket("ws://" + location.host);
@@ -537,6 +573,14 @@ function jumpToSlide() {
   var v = parseInt(document.getElementById("jump-input").value);
   if (v > 0) send("goto", v);
   document.getElementById("jump-input").value = "";
+}
+
+function adjustLocalFont(target, delta) {
+  var step = 0.04;
+  var min = 0.5, max = 1.6;
+  localFontSizes[target] = Math.min(max, Math.max(min, localFontSizes[target] + delta * step));
+  var el = target === "slide" ? document.getElementById("slide-content") : document.getElementById("notes-body");
+  el.style.fontSize = localFontSizes[target] + "rem";
 }
 
 function togglePanel() {
