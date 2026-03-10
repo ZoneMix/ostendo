@@ -79,6 +79,18 @@ pub struct Cli {
     /// Output path for export (default: presentation name with new extension)
     #[arg(short, long, value_name = "PATH")]
     pub output: Option<PathBuf>,
+
+    /// Allow code execution from remote control (WebSocket). Default: disabled
+    #[arg(long)]
+    pub remote_exec: bool,
+
+    /// Disable all code execution (+exec/+pty blocks). Hides exec badges.
+    #[arg(long)]
+    pub no_exec: bool,
+
+    /// Bearer token for WebSocket remote control authentication
+    #[arg(long)]
+    pub remote_token: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -192,8 +204,13 @@ fn main() -> Result<()> {
 
     // Start remote control server if requested
     let remote_channels = if cli.remote {
-        eprintln!("Remote control: http://127.0.0.1:{}", cli.remote_port);
-        let (rx, tx) = remote::server::RemoteServer::start(cli.remote_port);
+        let url = if let Some(ref token) = cli.remote_token {
+            format!("http://127.0.0.1:{}/#token={}", cli.remote_port, token)
+        } else {
+            format!("http://127.0.0.1:{}", cli.remote_port)
+        };
+        eprintln!("Remote control: {}", url);
+        let (rx, tx) = remote::server::RemoteServer::start(cli.remote_port, cli.remote_token.clone());
         Some((rx, tx))
     } else {
         None
@@ -201,6 +218,7 @@ fn main() -> Result<()> {
 
     let mut presenter = render::Presenter::new(
         slides, meta, theme, cli.slide.saturating_sub(1), &file, &cli.image_mode, remote_channels,
+        cli.no_exec, cli.remote_exec,
     );
     if cli.fullscreen {
         presenter.set_fullscreen(true);

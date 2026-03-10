@@ -4,7 +4,7 @@ use std::io::Cursor;
 
 use crate::presentation::SlideImage;
 use crate::render::layout::WindowSize;
-use crate::render::text::{StyledLine, StyledSpan};
+use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 use crate::terminal::protocols::ImageProtocol;
 
 /// Check if we're running inside tmux.
@@ -126,7 +126,12 @@ fn render_ascii(
 ) -> RenderedImage {
     use crate::terminal::ascii_art;
 
-    let ascii_rows = ascii_art::render_ascii_art(img, display_width, None, Some(bg_color));
+    let color_override = if image.color_override.is_empty() {
+        None
+    } else {
+        crate::theme::colors::hex_to_color(&image.color_override)
+    };
+    let ascii_rows = ascii_art::render_ascii_art(img, display_width, color_override, Some(bg_color));
     let mut lines = Vec::with_capacity(ascii_rows.len() + 1);
     for row in &ascii_rows {
         let mut line = StyledLine::empty();
@@ -139,6 +144,7 @@ fn render_ascii(
             }
             line.push(span);
         }
+        line.content_type = LineContentType::AsciiImage;
         lines.push(line);
     }
 

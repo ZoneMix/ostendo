@@ -11,7 +11,7 @@ transition: fade
 # Ostendo
 <!-- section: showcase -->
 <!-- font_size: 4 -->
-<!-- loop_animation: sparkle -->
+<!-- loop_animation: sparkle(figlet) -->
 
 AI-native terminal presentations, reimagined.
 
@@ -72,8 +72,11 @@ VERIFY: Spin animation runs continuously on all characters
 
 # Protocol Image Rendering
 <!-- section: showcase -->
-<!-- font_size: 4 -->
+<!-- font_size: -2 -->
 <!-- font_transition: none -->
+<!-- image_render: ascii -->
+<!-- fullscreen -->
+<!-- align: center -->
 
 ![Opus](../../images/opus.png)
 
@@ -83,8 +86,8 @@ VERIFY: Spin animation runs continuously on all characters
 
 <!-- notes:
 FEATURE: Protocol image rendering (Kitty/iTerm2/Sixel/ASCII)
-EXPECTED: opus.png renders using the best available terminal image protocol
-VERIFY: Image displays correctly, protocol auto-detected
+EXPECTED: opus.png renders as fullscreen centered ASCII art at small font
+VERIFY: Image displays correctly as ASCII, fullscreen and centered
 -->
 
 ---
@@ -107,29 +110,33 @@ VERIFY: Image displays centered both vertically and horizontally
 
 # ASCII Art Image
 <!-- section: showcase -->
-<!-- font_size: 1 -->
+<!-- font_size: -3 -->
 <!-- image_render: ascii -->
+<!-- fullscreen -->
+<!-- align: center -->
 
 ![Opus ASCII](../../images/opus.png)
 
 - Rendered as ASCII art characters
-- Font size 1 for maximum detail
+- Font size -3 for maximum detail
 - Works in any terminal emulator
 
 <!-- notes:
 FEATURE: ASCII art image rendering
-EXPECTED: opus.png rendered as ASCII art characters at small font size
-VERIFY: Image recognizable as ASCII art, font_size: 1 makes characters small for detail
+EXPECTED: opus.png rendered as ASCII art characters at smallest font size
+VERIFY: Image recognizable as ASCII art, font_size: -3 makes characters very small for detail
 -->
 
 ---
 
 # ASCII Art + Sparkle
 <!-- section: showcase -->
-<!-- font_size: 1 -->
+<!-- font_size: -2 -->
 <!-- image_render: ascii -->
-<!-- loop_animation: sparkle -->
+<!-- loop_animation: sparkle(image) -->
 <!-- font_transition: none -->
+<!-- fullscreen -->
+<!-- align: center -->
 
 ![Sparkle Opus](../../images/opus.png)
 
@@ -137,8 +144,8 @@ Twinkling stars overlay the ASCII art image
 
 <!-- notes:
 FEATURE: ASCII image + sparkle animation combo
-EXPECTED: ASCII art image with twinkling star overlay animation
-VERIFY: Stars animate on top of the ASCII art image
+EXPECTED: ASCII art image with twinkling star overlay animation, fullscreen centered
+VERIFY: Stars animate on top of the ASCII art image, fullscreen and centered
 -->
 
 ---
@@ -182,9 +189,10 @@ VERIFY: SVG displays correctly with proper scaling
 
 # ASCII SVG + Sparkle
 <!-- section: showcase -->
-<!-- font_size: 1 -->
+<!-- font_size: -1 -->
 <!-- image_render: ascii -->
-<!-- loop_animation: sparkle -->
+<!-- image_scale: 60 -->
+<!-- loop_animation: sparkle(image) -->
 <!-- font_transition: none -->
 
 ![DakotaCon Sparkle](../../images/dakotacon.svg)
@@ -193,8 +201,8 @@ SVG as twinkling ASCII art
 
 <!-- notes:
 FEATURE: SVG as ASCII art with sparkle animation
-EXPECTED: dakotacon.svg rendered as ASCII with twinkling stars
-VERIFY: SVG renders as ASCII, sparkle animation overlays
+EXPECTED: dakotacon.svg rendered as ASCII with twinkling stars at 60% scale
+VERIFY: SVG renders as ASCII, sparkle animation overlays, image scaled to 60%
 -->
 
 ---
@@ -300,10 +308,10 @@ VERIFY: Ctrl+E runs successfully, helper function extracted properly
 <!-- column_layout: [1, 1] -->
 # Side-by-Side Columns
 <!-- section: showcase -->
-<!-- font_size: 4 -->
+<!-- font_size: 3 -->
 <!-- font_transition: none -->
 
-<!-- column: 1 -->
+<!-- column: 0 -->
 
 ```python +exec {label: "left.py"}
 squares = [x**2 for x in range(8)]
@@ -313,7 +321,7 @@ print("Squares:", squares)
 - Python list comprehension
 - Press Ctrl+E to execute
 
-<!-- column: 2 -->
+<!-- column: 1 -->
 
 ```bash +exec {label: "right.sh"}
 echo "User: $(whoami)"
@@ -1019,10 +1027,13 @@ VERIFY: Output shows sorted vector
 
 ---
 
+<!-- column_layout: [1, 1] -->
 # Code Execution: JavaScript
 <!-- section: code -->
-<!-- font_size: 4 -->
+<!-- font_size: 3 -->
 <!-- font_transition: none -->
+
+<!-- column: 0 -->
 
 ```javascript +exec {label: "demo.js"}
 const greet = (name) => `Hello, ${name}!`;
@@ -1030,10 +1041,20 @@ console.log(greet("Ostendo"));
 console.log("Array:", [1, 2, 3].map(x => x * 2));
 ```
 
+<!-- column: 1 -->
+
+```bash +exec {label: "info.sh"}
+echo "Platform: $(uname -s)"
+echo "Node: $(node --version 2>/dev/null || echo 'N/A')"
+echo "Date: $(date +%Y-%m-%d)"
+```
+
+<!-- reset_layout -->
+
 <!-- notes:
-FEATURE: JavaScript code execution
-EXPECTED: JS code executes via node
-VERIFY: Console output shows greeting and mapped array
+FEATURE: JavaScript + Bash side-by-side code execution
+EXPECTED: Two-column layout with JS on left, Bash on right
+VERIFY: Both code blocks executable via Ctrl+E, columns render correctly
 -->
 
 ---
@@ -1187,7 +1208,7 @@ VERIFY: Left border visible, inline formatting works within quotes
 <!-- font_size: 4 -->
 <!-- font_transition: none -->
 
-<!-- column: 1 -->
+<!-- column: 0 -->
 
 **Left Column**
 
@@ -1195,7 +1216,7 @@ VERIFY: Left border visible, inline formatting works within quotes
 - Second bullet
 - Third bullet
 
-<!-- column: 2 -->
+<!-- column: 1 -->
 
 **Right Column**
 
@@ -1219,7 +1240,7 @@ VERIFY: Columns render side-by-side with equal width
 <!-- font_size: 4 -->
 <!-- font_transition: none -->
 
-<!-- column: 1 -->
+<!-- column: 0 -->
 
 **Wide Column (2:1 ratio)**
 
@@ -1227,7 +1248,7 @@ VERIFY: Columns render side-by-side with equal width
 - Great for main content with sidebar
 - Supports all content types
 
-<!-- column: 2 -->
+<!-- column: 1 -->
 
 **Sidebar**
 
@@ -1250,21 +1271,21 @@ VERIFY: Columns render with correct width ratio
 <!-- font_size: 4 -->
 <!-- font_transition: none -->
 
-<!-- column: 1 -->
+<!-- column: 0 -->
 
 **Column A**
 
 - Item 1
 - Item 2
 
-<!-- column: 2 -->
+<!-- column: 1 -->
 
 **Column B**
 
 - Item 3
 - Item 4
 
-<!-- column: 3 -->
+<!-- column: 2 -->
 
 **Column C**
 
@@ -1287,7 +1308,7 @@ VERIFY: Three columns render side-by-side
 <!-- font_size: 4 -->
 <!-- font_transition: none -->
 
-<!-- column: 1 -->
+<!-- column: 0 -->
 
 ```python {label: "example.py"}
 def greet(name):
@@ -1296,7 +1317,7 @@ def greet(name):
 print(greet("World"))
 ```
 
-<!-- column: 2 -->
+<!-- column: 1 -->
 
 **Output**
 

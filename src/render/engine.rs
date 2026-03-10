@@ -21,7 +21,7 @@ use crate::image_util::render::{RenderedImage, render_slide_image};
 use crate::presentation::{ExecMode, PresentationMeta, Slide, SlideAlignment, StateManager};
 use crate::render::layout::WindowSize;
 use crate::render::progress::render_progress_bar;
-use crate::render::text::{StyledLine, StyledSpan};
+use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 use crate::terminal::protocols::{self, ImageProtocol, FontSizeCapability, TextScaleCapability};
 use crate::theme::colors::{hex_to_color, ensure_badge_contrast, interpolate_color};
 use crate::theme::Theme;
@@ -167,9 +167,12 @@ pub struct Presenter {
     last_rendered_mode: Mode,
     last_rendered_scale: u8,
     last_rendered_image_scale: i8,
+    last_rendered_gif_frame: usize,
     needs_full_redraw: bool,
     image_scale_offset: i8,
     theme_slugs: Vec<String>,
+    allow_exec: bool,
+    allow_remote_exec: bool,
 }
 
 impl Presenter {
@@ -184,6 +187,8 @@ impl Presenter {
             std::sync::mpsc::Receiver<crate::remote::RemoteCommand>,
             tokio::sync::broadcast::Sender<String>,
         )>,
+        no_exec: bool,
+        remote_exec: bool,
     ) -> Self {
         let bg = hex_to_color(&theme.colors.background).unwrap_or(Color::Black);
         let mut accent = hex_to_color(&theme.colors.accent).unwrap_or(Color::Green);
@@ -227,8 +232,8 @@ impl Presenter {
             if let Some(saved) = state.get_font_offset(i) {
                 slide_font_offsets.insert(i, saved);
             } else if let Some(md_size) = slides[i].font_size {
-                // Convert markdown font_size (1-7) to offset: (size - 1) * 2pt steps
-                let offset = (md_size as i8 - 1) * 2;
+                // Convert markdown font_size (-3..7) to offset: (size - 1) * 2pt steps
+                let offset = (md_size - 1) * 2;
                 if offset != 0 {
                     slide_font_offsets.insert(i, offset);
                 }
@@ -335,6 +340,7 @@ impl Presenter {
             last_rendered_mode: Mode::Normal,
             last_rendered_scale: 80,
             last_rendered_image_scale: 0,
+            last_rendered_gif_frame: 0,
             needs_full_redraw: true,
             image_scale_offset: 0,
             gradient_from,
@@ -352,6 +358,8 @@ impl Presenter {
             text_scale_cap: protocols::detect_text_scale_capability(),
             pending_dissolve_in: false,
             theme_slugs: crate::theme::ThemeRegistry::load().list(),
+            allow_exec: !no_exec,
+            allow_remote_exec: remote_exec,
         };
         // Initialize mermaid renderer if any slide has mermaid blocks
         let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
@@ -503,6 +511,16 @@ impl Presenter {
         self.prerender_images();
         // Apply initial slide's font offset (if restored from saved state)
         self.apply_slide_font();
+        // Initialize loop/entrance animations for the starting slide
+        {
+            let slide = &self.slides[self.current];
+            self.active_loop = slide.loop_animation.as_deref()
+                .and_then(parse_loop_animation)
+                .map(|la| (la, 0));
+            if let Some(fs) = slide.fullscreen {
+                self.show_fullscreen = fs;
+            }
+        }
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
         crossterm::execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide, EnableMouseCapture)?;
@@ -685,7 +703,11 @@ impl Presenter {
                 crate::remote::RemoteCommand::FontUp => self.adjust_font_offset(1),
                 crate::remote::RemoteCommand::FontDown => self.adjust_font_offset(-1),
                 crate::remote::RemoteCommand::FontReset => self.reset_font_offset(),
-                crate::remote::RemoteCommand::ExecuteCode => { let _ = self.execute_code(); }
+                crate::remote::RemoteCommand::ExecuteCode => {
+                    if self.allow_remote_exec && self.allow_exec {
+                        let _ = self.execute_code();
+                    }
+                }
                 crate::remote::RemoteCommand::TimerStart => {
                     if self.timer_start.is_none() { self.start_timer(); }
                 }
@@ -766,10 +788,10 @@ impl Presenter {
                     }
                 }
             }
-            let has_exec = slide.code_blocks.iter().any(|cb| cb.exec_mode.is_some())
+            let has_exec = self.allow_exec && (slide.code_blocks.iter().any(|cb| cb.exec_mode.is_some())
                 || slide.columns.as_ref().map_or(false, |cols|
                     cols.contents.iter().any(|c| c.code_blocks.iter().any(|cb| cb.exec_mode.is_some()))
-                );
+                ));
             let font_offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
             let msg = crate::remote::StateMessage {
                 msg_type: "state".to_string(),
@@ -809,6 +831,8 @@ impl Presenter {
             Mode::Goto => return self.handle_goto_key(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
+                self.apply_slide_font();
+                self.needs_full_redraw = true;
                 return Ok(false);
             }
             Mode::Overview => {
@@ -1316,6 +1340,10 @@ end tell"#,
     }
 
     fn execute_code(&mut self) -> Result<()> {
+        if !self.allow_exec {
+            return Ok(());
+        }
+
         // If previous execution completed, advance to next block
         if self.exec_output.is_some() && self.exec_rx.is_none() {
             self.exec_block_index += 1;
@@ -1637,6 +1665,18 @@ end tell"#,
                         let stdout = io::stdout();
                         let mut pre = stdout.lock();
 
+                        // When skipping stepping (font_transition: none), clear screen to bg
+                        // BEFORE font change to prevent flash of old content at wrong size
+                        if skip_stepping {
+                            queue!(pre, BeginSynchronizedUpdate)?;
+                            for row in 0..self.height {
+                                queue!(pre, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                                write!(pre, "{}", " ".repeat(self.width as usize))?;
+                            }
+                            queue!(pre, EndSynchronizedUpdate, ResetColor)?;
+                            pre.flush()?;
+                        }
+
                         if self.image_protocol == ImageProtocol::Kitty {
                             pre.write_all(b"\x1b_Ga=d,d=a,q=2\x1b\\")?;
                             pre.flush()?;
@@ -1705,6 +1745,27 @@ end tell"#,
         match self.mode {
             Mode::Help => {
                 self.last_rendered_mode = Mode::Help;
+                // Reset font to base for help readability
+                if self.font_capability.is_available() {
+                    if let Some(ref orig) = self.original_font_size {
+                        if let Ok(base) = orig.parse::<f64>() {
+                            if self.last_applied_font_size != Some(base) {
+                                self.kitty_font_size_absolute(base, true);
+                                std::thread::sleep(std::time::Duration::from_millis(30));
+                                while event::poll(std::time::Duration::from_millis(10))? {
+                                    if let Event::Resize(w2, h2) = event::read()? {
+                                        self.width = w2;
+                                        self.height = h2;
+                                    } else { break; }
+                                }
+                                self.window_size = WindowSize::query();
+                                self.width = self.window_size.columns;
+                                self.height = self.window_size.rows;
+                                self.last_applied_font_size = Some(base);
+                            }
+                        }
+                    }
+                }
                 return self.render_help_buf(&mut w);
             }
             Mode::Overview => {
@@ -1740,7 +1801,8 @@ end tell"#,
                 || self.last_rendered_width != self.width
                 || self.last_rendered_height != self.height
                 || self.last_rendered_scale != self.global_scale
-                || self.last_rendered_image_scale != self.image_scale_offset);
+                || self.last_rendered_image_scale != self.image_scale_offset
+                || self.gif_current_frame != self.last_rendered_gif_frame);
 
         let slide = self.slides[self.current].clone();
         let tw = self.width as usize;
@@ -1928,8 +1990,8 @@ end tell"#,
             vpad_bot.push(StyledSpan::new(&" ".repeat(block_width)).with_bg(self.code_bg_color));
             lines.push(vpad_bot);
 
-            // Exec mode indicator
-            if cb.exec_mode.is_some() {
+            // Exec mode indicator (hidden when --no-exec)
+            if cb.exec_mode.is_some() && self.allow_exec {
                 let mut el = StyledLine::empty();
                 el.push(StyledSpan::new(&pad));
                 let mode_str = match cb.exec_mode {
@@ -1942,7 +2004,7 @@ end tell"#,
             }
 
             // Execution output (show only under the currently-executed block)
-            if cb.exec_mode.is_some() {
+            if cb.exec_mode.is_some() && self.allow_exec {
                 if exec_render_idx == self.exec_block_index {
                     self.render_exec_output(&pad, &mut lines);
                 }
@@ -2216,10 +2278,12 @@ end tell"#,
         // Use full terminal width (tw) so matrix/bounce fill edge-to-edge
         if self.active_animation.is_none() {
             if let Some((la, frame)) = self.active_loop {
+                let loop_target = self.slides[self.current].loop_animation_target.as_deref();
                 lines = render_loop_frame(
                     &lines, la, frame,
                     self.accent_color, self.bg_color,
                     tw, content_area,
+                    loop_target,
                 );
             }
         }
@@ -2438,6 +2502,7 @@ end tell"#,
         self.last_rendered_mode = self.mode;
         self.last_rendered_scale = self.global_scale;
         self.last_rendered_image_scale = self.image_scale_offset;
+        self.last_rendered_gif_frame = self.gif_current_frame;
         self.needs_full_redraw = false;
 
         // ── Dissolve-in: scatter-reveal new content after font transition ──
@@ -2700,6 +2765,7 @@ end tell"#,
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(pad));
                 line.push(StyledSpan::new(fig_line).with_fg(self.accent_color).bold());
+                line.content_type = LineContentType::FigletTitle;
                 lines.push(line);
             }
             return;
@@ -2724,6 +2790,7 @@ end tell"#,
                         let mut line = StyledLine::empty();
                         line.push(StyledSpan::new(pad));
                         line.push(StyledSpan::new(fig_line).with_fg(self.accent_color).bold());
+                        line.content_type = LineContentType::FigletTitle;
                         lines.push(line);
                     }
                 }
@@ -3020,8 +3087,8 @@ end tell"#,
                 // Vertical padding bottom
                 col_rows.push((vec![StyledSpan::new(&" ".repeat(cw)).with_bg(self.code_bg_color)], true));
 
-                // Exec mode indicator for column code blocks
-                if cb.exec_mode.is_some() {
+                // Exec mode indicator for column code blocks (hidden when --no-exec)
+                if cb.exec_mode.is_some() && self.allow_exec {
                     let mode_str = match cb.exec_mode {
                         Some(ExecMode::Exec) => "  [Ctrl+E to execute]",
                         Some(ExecMode::Pty) => "  [Ctrl+E to run in PTY]",
@@ -3336,7 +3403,7 @@ end tell"#,
                     ("<!-- section: name -->", "Set slide section"),
                     ("<!-- timing: 1.0 -->", "Set timing in minutes"),
                     ("<!-- ascii_title -->", "Render title as FIGlet ASCII art"),
-                    ("<!-- font_size: 2 -->", "Set font size (1-7, requires kitty)"),
+                    ("<!-- font_size: 2 -->", "Set font size (-3..7, requires kitty)"),
                     ("<!-- column_layout: [1,1] -->", "Define column ratios"),
                     ("<!-- column: 0 -->", "Start column content"),
                     ("<!-- image_render: ascii|kitty|iterm|sixel -->", "Per-image render mode"),
@@ -3452,12 +3519,6 @@ end tell"#,
         if self.gif_last_advance.elapsed().as_millis() as u64 >= current_delay {
             self.gif_current_frame = (self.gif_current_frame + 1) % frames.len();
             self.gif_last_advance = std::time::Instant::now();
-            // Clear Kitty images before emitting next frame
-            if self.image_protocol == ImageProtocol::Kitty {
-                let mut stdout = io::stdout();
-                let _ = write!(stdout, "\x1b_Ga=d\x1b\\");
-                let _ = stdout.flush();
-            }
             true
         } else {
             false

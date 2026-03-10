@@ -492,7 +492,10 @@ let ws, state = {}, touchStartX = 0, panelOpen = false;
 var localFontSizes = { slide: 0.78, notes: 0.8 };
 
 function connect() {
-  ws = new WebSocket("ws://" + location.host);
+  var params = new URLSearchParams(window.location.hash.slice(1));
+  var token = params.get('token');
+  var wsUrl = "ws://" + location.host;
+  ws = token ? new WebSocket(wsUrl, token) : new WebSocket(wsUrl);
   ws.onopen = function() {
     document.getElementById("status").textContent = "connected";
     document.getElementById("conn-dot").classList.add("live");

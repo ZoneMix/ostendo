@@ -14,7 +14,7 @@ pub struct RemoteServer;
 
 impl RemoteServer {
     /// Start the WebSocket remote control server in a background thread.
-    pub fn start(port: u16) -> (mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>) {
+    pub fn start(port: u16, token: Option<String>) -> (mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (state_tx, _) = broadcast::channel(64);
         let state_tx_clone = state_tx.clone();
@@ -30,9 +30,10 @@ impl RemoteServer {
                     if let Ok((stream, _)) = listener.accept().await {
                         let cmd_tx = cmd_tx.clone();
                         let state_rx = state_tx_clone.subscribe();
+                        let token = token.clone();
 
                         tokio::spawn(async move {
-                            handle_connection(stream, cmd_tx, state_rx).await;
+                            handle_connection(stream, cmd_tx, state_rx, token).await;
                         });
                     }
                 }
@@ -47,6 +48,7 @@ async fn handle_connection(
     mut stream: tokio::net::TcpStream,
     cmd_tx: mpsc::Sender<RemoteCommand>,
     state_rx: broadcast::Receiver<String>,
+    token: Option<String>,
 ) {
     // Peek at first bytes to determine if this is a WebSocket upgrade or plain HTTP
     let mut buf = [0u8; 4096];
@@ -83,7 +85,30 @@ async fn handle_connection(
             return;
         }
 
-        let ws_stream = match tokio_tungstenite::accept_async(stream).await {
+        // Token authentication: check Authorization header and Sec-WebSocket-Protocol
+        if let Some(ref expected_token) = token {
+            let auth_ok = check_bearer_token(&request, expected_token)
+                || check_ws_protocol_token(&request, expected_token);
+            if !auth_ok {
+                let response = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let mut request_data = vec![0u8; n];
+                let _ = stream.read(&mut request_data).await;
+                let _ = stream.write_all(response).await;
+                return;
+            }
+        }
+
+        // Use accept_hdr_async to echo Sec-WebSocket-Protocol when token auth is used
+        let matched_token = token.clone();
+        let ws_stream = match tokio_tungstenite::accept_hdr_async(stream, move |_req: &tokio_tungstenite::tungstenite::http::Request<()>, mut resp: tokio_tungstenite::tungstenite::http::Response<()>| {
+            if let Some(ref tok) = matched_token {
+                resp.headers_mut().insert(
+                    "Sec-WebSocket-Protocol",
+                    tokio_tungstenite::tungstenite::http::HeaderValue::from_str(tok).unwrap_or_else(|_| tokio_tungstenite::tungstenite::http::HeaderValue::from_static("")),
+                );
+            }
+            Ok(resp)
+        }).await {
             Ok(ws) => ws,
             Err(_) => return,
         };
@@ -192,4 +217,35 @@ async fn handle_websocket(
 
     broadcast_task.abort();
     sink_task.abort();
+}
+
+/// Check for `Authorization: Bearer <token>` header in the HTTP request.
+fn check_bearer_token(request: &str, expected: &str) -> bool {
+    for line in request.lines() {
+        let lower = line.to_lowercase();
+        if lower.starts_with("authorization:") {
+            let value = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            if let Some(bearer) = value.strip_prefix("Bearer ") {
+                return bearer.trim() == expected;
+            }
+        }
+    }
+    false
+}
+
+/// Check for token in `Sec-WebSocket-Protocol` header (browser WebSocket token carrier).
+fn check_ws_protocol_token(request: &str, expected: &str) -> bool {
+    for line in request.lines() {
+        let lower = line.to_lowercase();
+        if lower.starts_with("sec-websocket-protocol:") {
+            let value = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            // The protocol field may contain multiple values separated by commas
+            for proto in value.split(',') {
+                if proto.trim() == expected {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }

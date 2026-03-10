@@ -1,7 +1,7 @@
 use crossterm::style::Color;
 use std::time::Instant;
 
-use crate::render::text::{StyledLine, StyledSpan};
+use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 use crate::theme::colors::interpolate_color;
 
 /// Types of transition animations between slides.
@@ -466,18 +466,20 @@ pub fn render_loop_frame(
     bg: Color,
     width: usize,
     height: usize,
+    target: Option<&str>,
 ) -> Vec<StyledLine> {
     match animation {
         LoopAnimation::Matrix => render_matrix(buffer, frame, width, height),
         LoopAnimation::Bounce => render_bounce(buffer, frame, accent, width, height),
         LoopAnimation::Pulse => render_pulse(buffer, frame, accent, bg),
-        LoopAnimation::Sparkle => render_sparkle(buffer, frame, accent),
-        LoopAnimation::Spin => render_spin(buffer, frame),
+        LoopAnimation::Sparkle => render_sparkle(buffer, frame, accent, target),
+        LoopAnimation::Spin => render_spin(buffer, frame, target),
     }
 }
 
 /// Matrix: falling green characters raining top-to-bottom across the full screen.
 /// Content is overlaid on top of the rain effect. Uses batched spans for performance.
+/// Rain fills whitespace cells even within content rows (character-level granularity).
 fn render_matrix(
     buffer: &[StyledLine],
     frame: u64,
@@ -503,6 +505,28 @@ fn render_matrix(
         (brightness, ch)
     };
 
+    // Helper: append rain characters from col_start..col_end as batched spans
+    let append_rain = |line: &mut StyledLine, row: usize, col_start: usize, col_end: usize| {
+        let mut batch = String::with_capacity(col_end - col_start);
+        let mut cur_brightness: u8 = 255; // sentinel
+        for col in col_start..col_end {
+            let (b, ch) = classify(col, row);
+            if b != cur_brightness && !batch.is_empty() {
+                line.push(styled_rain_span(&batch, cur_brightness, bright_green, green, dim_green, dark_green));
+                batch.clear();
+            }
+            cur_brightness = b;
+            if b == 0 {
+                batch.push(' ');
+            } else {
+                batch.push(ch as char);
+            }
+        }
+        if !batch.is_empty() {
+            line.push(styled_rain_span(&batch, cur_brightness, bright_green, green, dim_green, dark_green));
+        }
+    };
+
     let mut result = Vec::with_capacity(height);
 
     for row in 0..height {
@@ -511,31 +535,71 @@ fn render_matrix(
             .unwrap_or(false);
 
         if has_content {
-            // Keep content as-is; no margin rain to keep it clean
-            result.push(buffer[row].clone());
-        } else {
-            // Build rain line with batched spans (group consecutive same-brightness chars)
-            let mut rain_line = StyledLine::empty();
-            let mut batch = String::with_capacity(width);
-            let mut cur_brightness: u8 = 255; // sentinel
+            // Character-level: preserve non-whitespace content, fill whitespace with rain.
+            // First, expand the line's spans into per-character entries so we know
+            // which character position is whitespace vs content and can preserve styling.
+            let source_line = &buffer[row];
+            // Build a flat list: (char, span_index) for each character position
+            let mut char_entries: Vec<(char, usize)> = Vec::new();
+            for (span_idx, span) in source_line.spans.iter().enumerate() {
+                for ch in span.text.chars() {
+                    char_entries.push((ch, span_idx));
+                }
+            }
+            let content_len = char_entries.len();
 
-            for col in 0..width {
-                let (b, ch) = classify(col, row);
-                if b != cur_brightness && !batch.is_empty() {
-                    // Flush previous batch
-                    rain_line.push(styled_rain_span(&batch, cur_brightness, bright_green, green, dim_green, dark_green));
-                    batch.clear();
-                }
-                cur_brightness = b;
-                if b == 0 {
-                    batch.push(' ');
+            let mut mixed_line = StyledLine::empty();
+            let mut col = 0;
+
+            while col < width {
+                if col < content_len {
+                    let (ch, _span_idx) = char_entries[col];
+                    if ch.is_whitespace() {
+                        // Whitespace cell in content row: accumulate consecutive
+                        // whitespace cells and render them as rain.
+                        let rain_start = col;
+                        while col < content_len {
+                            let (c, _) = char_entries[col];
+                            if !c.is_whitespace() {
+                                break;
+                            }
+                            col += 1;
+                        }
+                        // Also include any columns beyond content_len if we
+                        // reached the end of content during this whitespace run
+                        // (they'll be handled by the trailing rain below).
+                        append_rain(&mut mixed_line, row, rain_start, col);
+                    } else {
+                        // Non-whitespace: accumulate a run of consecutive
+                        // non-whitespace chars from the same span and emit
+                        // them as a single styled span preserving original styling.
+                        let run_span_idx = char_entries[col].1;
+                        let run_start = col;
+                        while col < content_len {
+                            let (c, si) = char_entries[col];
+                            if c.is_whitespace() || si != run_span_idx {
+                                break;
+                            }
+                            col += 1;
+                        }
+                        let text: String = char_entries[run_start..col].iter().map(|(c, _)| *c).collect();
+                        mixed_line.push(StyledSpan {
+                            text,
+                            ..source_line.spans[run_span_idx].clone()
+                        });
+                    }
                 } else {
-                    batch.push(ch as char);
+                    // Past the content line's length: fill remaining with rain
+                    append_rain(&mut mixed_line, row, col, width);
+                    col = width; // done
                 }
             }
-            if !batch.is_empty() {
-                rain_line.push(styled_rain_span(&batch, cur_brightness, bright_green, green, dim_green, dark_green));
-            }
+
+            result.push(mixed_line);
+        } else {
+            // Empty row: build full rain line with batched spans
+            let mut rain_line = StyledLine::empty();
+            append_rain(&mut rain_line, row, 0, width);
             result.push(rain_line);
         }
     }
@@ -665,6 +729,7 @@ fn render_pulse(
     for line in buffer.iter() {
         let mut pulsed = StyledLine::empty();
         pulsed.is_scale_placeholder = line.is_scale_placeholder;
+        pulsed.content_type = line.content_type;
         for span in &line.spans {
             let fg = span.fg.unwrap_or(accent);
             let pulsed_fg = interpolate_color(bg, fg, t);
@@ -685,6 +750,7 @@ fn render_sparkle(
     buffer: &[StyledLine],
     frame: u64,
     accent: Color,
+    target: Option<&str>,
 ) -> Vec<StyledLine> {
     let sparkle_chars: &[char] = &['✦', '✧', '★', '☆', '✫', '✬', '·', '⁺', '✹', '✵'];
     let bright_white = Color::Rgb { r: 255, g: 255, b: 255 };
@@ -694,6 +760,16 @@ fn render_sparkle(
     let mut result = Vec::with_capacity(buffer.len());
 
     for (row, line) in buffer.iter().enumerate() {
+        let should_animate = match target {
+            None => true,
+            Some("figlet") => line.content_type == LineContentType::FigletTitle,
+            Some("image") => line.content_type == LineContentType::AsciiImage,
+            _ => true,
+        };
+        if !should_animate {
+            result.push(line.clone());
+            continue;
+        }
         let text = line_to_string(line);
         let chars: Vec<char> = text.chars().collect();
         if chars.is_empty() || chars.iter().all(|c| c.is_whitespace()) {
@@ -731,6 +807,7 @@ fn render_sparkle(
 
         // Rebuild line with sparkles injected
         let mut new_line = StyledLine::empty();
+        new_line.content_type = line.content_type;
         let mut char_pos = 0;
         for span in &line.spans {
             let span_chars: Vec<char> = span.text.chars().collect();
@@ -770,6 +847,7 @@ fn render_sparkle(
 fn render_spin(
     buffer: &[StyledLine],
     frame: u64,
+    target: Option<&str>,
 ) -> Vec<StyledLine> {
     // Same ramp as ascii_art.rs for consistency
     const ASCII_RAMP: &[u8] = b" .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
@@ -777,6 +855,16 @@ fn render_spin(
     let mut result = Vec::with_capacity(buffer.len());
 
     for (row, line) in buffer.iter().enumerate() {
+        let should_animate = match target {
+            None => true,
+            Some("figlet") => line.content_type == LineContentType::FigletTitle,
+            Some("image") => line.content_type == LineContentType::AsciiImage,
+            _ => true,
+        };
+        if !should_animate {
+            result.push(line.clone());
+            continue;
+        }
         let text = line_to_string(line);
         let chars: Vec<char> = text.chars().collect();
         if chars.is_empty() || chars.iter().all(|c| c.is_whitespace()) {
@@ -795,6 +883,7 @@ fn render_spin(
 
         // Rebuild with shifted ASCII ramp characters
         let mut new_line = StyledLine::empty();
+        new_line.content_type = line.content_type;
         let mut char_pos: usize = 0;
         for span in &line.spans {
             let span_chars: Vec<char> = span.text.chars().collect();

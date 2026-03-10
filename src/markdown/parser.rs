@@ -44,7 +44,7 @@ static COLUMN_RE: LazyLock<Regex> =
 static RESET_LAYOUT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*reset_layout\s*-->").unwrap());
 static FONT_SIZE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_size:\s*(\d+)\s*-->").unwrap());
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_size:\s*(-?\d+)\s*-->").unwrap());
 static FONT_TRANSITION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_transition:\s*(\w+)\s*-->").unwrap());
 static TEXT_SCALE_RE: LazyLock<Regex> =
@@ -78,7 +78,7 @@ static TRANSITION_RE: LazyLock<Regex> =
 static ANIMATION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*animation:\s*(typewriter|fade_in|slide_down)\s*-->").unwrap());
 static LOOP_ANIMATION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*loop_animation:\s*(matrix|bounce|pulse|sparkle|spin)\s*-->").unwrap());
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*loop_animation:\s*(matrix|bounce|pulse|sparkle|spin)(?:\((\w+)\))?\s*-->").unwrap());
 static FULLSCREEN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*fullscreen(?::\s*(true|false))?\s*-->").unwrap());
 static SHOW_SECTION_RE: LazyLock<Regex> =
@@ -168,7 +168,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut image_scale: u8 = 100;
     let mut image_color = String::new();
     let mut ascii_title = false;
-    let mut font_size: Option<u8> = None;
+    let mut font_size: Option<i8> = None;
     let mut text_scale: Option<u8> = None;
     let mut title_scale: Option<u8> = None;
     let mut footer: Option<String> = None;
@@ -178,6 +178,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut transition: Option<String> = None;
     let mut entrance_animation: Option<String> = None;
     let mut loop_animation: Option<String> = None;
+    let mut loop_animation_target: Option<String> = None;
     let mut fullscreen: Option<bool> = None;
     let mut show_section: Option<bool> = None;
     let mut code_preambles: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -284,7 +285,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Font size directive
         if let Some(caps) = FONT_SIZE_RE.captures(line) {
-            font_size = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
+            font_size = caps[1].parse::<i8>().ok().map(|s| s.clamp(-3, 7));
             continue;
         }
 
@@ -355,6 +356,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         // Loop animation directive
         if let Some(caps) = LOOP_ANIMATION_RE.captures(line) {
             loop_animation = Some(caps[1].to_string());
+            loop_animation_target = caps.get(2).map(|m| m.as_str().to_string());
             continue;
         }
 
@@ -650,6 +652,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         transition,
         entrance_animation,
         loop_animation,
+        loop_animation_target,
         fullscreen,
         show_section,
         code_preambles,

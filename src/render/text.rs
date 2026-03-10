@@ -92,24 +92,38 @@ impl StyledSpan {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[allow(dead_code)]
+pub enum LineContentType {
+    #[default]
+    Text,
+    FigletTitle,
+    AsciiImage,
+    CodeBlock,
+    Padding,
+}
+
 #[derive(Debug, Clone)]
 pub struct StyledLine {
     pub spans: Vec<StyledSpan>,
     /// When true, this line is a placeholder row for a scaled multicell block
     /// above it and should be skipped during terminal output (not overwritten).
     pub is_scale_placeholder: bool,
+    /// What kind of content this line represents (for targeted animations).
+    pub content_type: LineContentType,
 }
 
 #[allow(dead_code)]
 impl StyledLine {
     pub fn empty() -> Self {
-        Self { spans: Vec::new(), is_scale_placeholder: false }
+        Self { spans: Vec::new(), is_scale_placeholder: false, content_type: LineContentType::default() }
     }
 
     pub fn plain(text: &str) -> Self {
         Self {
             spans: vec![StyledSpan::new(text)],
             is_scale_placeholder: false,
+            content_type: LineContentType::default(),
         }
     }
 
@@ -117,12 +131,13 @@ impl StyledLine {
         Self {
             spans: vec![StyledSpan::new(text).with_fg(fg)],
             is_scale_placeholder: false,
+            content_type: LineContentType::default(),
         }
     }
 
     /// Create a placeholder line for scaled text (skipped during rendering).
     pub fn scale_placeholder() -> Self {
-        Self { spans: Vec::new(), is_scale_placeholder: true }
+        Self { spans: Vec::new(), is_scale_placeholder: true, content_type: LineContentType::Padding }
     }
 
     pub fn width(&self) -> usize {
@@ -175,6 +190,7 @@ pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLi
                         ..style_ref.clone()
                     }],
                     is_scale_placeholder: false,
+                    content_type: LineContentType::default(),
                 });
                 current = word.to_string();
             } else {
@@ -188,6 +204,7 @@ pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLi
                     ..style_ref.clone()
                 }],
                 is_scale_placeholder: false,
+                content_type: LineContentType::default(),
             });
         }
     }

@@ -4,7 +4,7 @@
 
 ```bash
 cargo build --release          # Release build
-cargo test                     # Run all tests (115 tests)
+cargo test                     # Run all tests (128 tests)
 cargo run --release -- --validate presentations/examples/test_presentation.md  # Validate presentation
 ```
 
@@ -13,7 +13,7 @@ cargo run --release -- --validate presentations/examples/test_presentation.md  #
 ```
 src/
   main.rs              # CLI (clap), entry point
-  render/engine.rs     # Core renderer, event loop, Presenter struct (~2800 lines)
+  render/engine.rs     # Core renderer, event loop, Presenter struct (~3700 lines)
   render/layout.rs     # WindowSize, terminal dimensions
   render/text.rs       # StyledLine/StyledSpan (virtual buffer)
   render/progress.rs   # Progress bar rendering
@@ -35,7 +35,7 @@ src/
 
 - **Virtual buffer**: Rendering builds `Vec<StyledLine>` in memory, then writes to terminal in one pass within `BeginSynchronizedUpdate`/`EndSynchronizedUpdate`
 - **Smart redraw**: `render_frame()` tracks last-rendered state; timer-only ticks only update the status bar (no image re-emission)
-- **Image caching**: `image_cache` keyed by `(path, content_width, protocol)` — stale entries are naturally unreachable
+- **Image caching**: `image_cache` keyed by `(path, content_width, protocol, gif_frame_index)` — stale entries are naturally unreachable
 - **Hot reload**: Background `FileWatcher` polls every 500ms, triggers `try_reload()` which re-parses and preserves slide position
 
 ## Terminal Requirements
@@ -48,7 +48,7 @@ src/
 
 ## Theme System
 
-- 23 built-in themes in `themes/*.yaml` (20 original + 3 light variants)
+- 29 built-in themes in `themes/*.yaml`
 - All themes must pass contrast ratio tests (WCAG 2.0):
   - text:bg >= 4.5:1
   - accent:bg >= 3.0:1
@@ -57,7 +57,7 @@ src/
 
 ## Test Presentation
 
-`presentations/examples/test_presentation.md` has 99 slides testing every feature. Each slide's speaker notes contain:
+`presentations/examples/test_presentation.md` has 89 slides testing every feature. Each slide's speaker notes contain:
 ```
 FEATURE: [name]
 EXPECTED: [expected visual]
@@ -72,6 +72,7 @@ Use `AGENTS.md` feedback format: `Slide N - [Feature]: PASS/FAIL - [description]
 - FIGlet ASCII titles overflow on narrow terminals with long text
 - Font sizing via Kitty remote control protocol — Kitty terminal only
 - Protocol images in tmux may have latency on first display
+- Animated GIFs are downscaled to 800px max dimension for memory efficiency
 
 ## Feature Batches (v0.2.0)
 
@@ -127,3 +128,19 @@ Use `AGENTS.md` feedback format: `Slide N - [Feature]: PASS/FAIL - [description]
 - [x] Alignment variants: vcenter, hcenter (in addition to center/top)
 - [x] Auto-wrap code execution for Rust/Go/C (no main function needed)
 - [x] 99-slide test presentation covering every feature
+
+## v0.3.0 Enhancements
+
+- [x] Animated GIF support (background frame decoding, downscaled to 800px max)
+- [x] Font size directive expanded: accepts -3 to 7 (negative = smaller than base)
+- [x] `font_transition: none` directive for instant font changes
+- [x] Loop animation targeting: `sparkle(figlet)`, `sparkle(image)`, `spin(figlet)`, etc.
+- [x] LineContentType system for selective animation
+- [x] Matrix rain character-level granularity (fills FIGlet whitespace)
+- [x] `image_color` override now functional for ASCII art
+- [x] Theme persistence across restarts
+- [x] Help menu renders at base font size
+- [x] GIF frame advancement within synchronized update blocks
+- [x] Security: `--no-exec`, `--remote-exec`, `--remote-token` CLI flags
+- [x] Security: WebSocket `execute_code` gated behind `--remote-exec`
+- [x] Security: Token-based WebSocket authentication
