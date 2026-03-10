@@ -230,7 +230,7 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
   .nav-prev:active { background: var(--border); }
   .nav-next {
     background: var(--accent);
-    color: #1a1614;
+    color: var(--bg);
   }
   .nav-next:active { background: var(--accent-hover); }
 

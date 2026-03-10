@@ -724,9 +724,9 @@ impl Presenter {
                 has_executable_code: has_exec,
                 timer_running: self.timer_start.is_some(),
                 themes: self.theme_slugs.clone(),
-                theme_bg: self.theme.colors.background.clone(),
-                theme_accent: self.theme.colors.accent.clone(),
-                theme_text: self.theme.colors.text.clone(),
+                theme_bg: crate::theme::colors::color_to_hex(self.bg_color),
+                theme_accent: crate::theme::colors::color_to_hex(self.accent_color),
+                theme_text: crate::theme::colors::color_to_hex(self.text_color),
             };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = tx.send(json);

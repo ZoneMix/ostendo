@@ -61,6 +61,14 @@ pub fn interpolate_color(from: Color, to: Color, t: f64) -> Color {
     }
 }
 
+pub fn color_to_hex(color: Color) -> String {
+    if let Some((r, g, b)) = color_to_rgb(color) {
+        format!("#{:02x}{:02x}{:02x}", r, g, b)
+    } else {
+        "#000000".to_string()
+    }
+}
+
 pub fn hex_to_color(hex: &str) -> Option<Color> {
     let hex = hex.trim_start_matches('#');
     if hex.len() != 6 {
