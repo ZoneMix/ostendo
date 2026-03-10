@@ -266,6 +266,22 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
     transition: all 0.15s;
   }
   #jump-btn:hover { color: var(--text); border-color: var(--accent); }
+  #theme-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-family: inherit;
+    font-size: 0.68rem;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s;
+    max-width: 140px;
+  }
+  #theme-select:focus { border-color: var(--accent); }
+  #theme-select option { background: var(--bg-surface); color: var(--text); }
 
   /* Expand button */
   #expand-btn {
@@ -418,7 +434,7 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
     <input type="number" id="jump-input" min="1" placeholder="#">
     <button id="jump-btn" onclick="jumpToSlide()">Go to slide</button>
     <span style="flex:1"></span>
-    <span id="theme-name" style="font-size:0.65rem;color:var(--text-tertiary);font-weight:500"></span>
+    <select id="theme-select" onchange="setTheme(this.value)"></select>
   </div>
   <button id="expand-btn" onclick="togglePanel()">&#9662; Controls</button>
   <div id="ctrl-panel">
@@ -493,12 +509,19 @@ function connect() {
   ws.onerror = function() { ws.close(); };
 }
 
-function send(action, slide) {
+function send(action, extra) {
   if (ws && ws.readyState === 1) {
     var msg = {type:"command", action:action};
-    if (slide !== undefined) msg.slide = slide;
+    if (extra !== undefined) {
+      if (typeof extra === "number") msg.slide = extra;
+      else if (typeof extra === "string") msg.theme = extra;
+    }
     ws.send(JSON.stringify(msg));
   }
+}
+
+function setTheme(slug) {
+  if (slug) send("set_theme", slug);
 }
 
 function updateUI(d) {
@@ -550,8 +573,18 @@ function updateUI(d) {
   document.getElementById("img-scale-val").textContent = (d.image_scale >= 0 ? "+" : "") + d.image_scale;
   document.getElementById("font-val").textContent = (d.font_offset >= 0 ? "+" : "") + d.font_offset;
 
-  // Theme name
-  document.getElementById("theme-name").textContent = d.theme_name || "";
+  // Theme selector
+  var sel = document.getElementById("theme-select");
+  if (d.themes && d.themes.length > 0 && sel.options.length !== d.themes.length) {
+    sel.textContent = "";
+    for (var i = 0; i < d.themes.length; i++) {
+      var opt = document.createElement("option");
+      opt.value = d.themes[i];
+      opt.textContent = d.themes[i];
+      sel.appendChild(opt);
+    }
+  }
+  if (d.theme_slug) sel.value = d.theme_slug;
 
   // Execute button visibility
   var execBtn = document.getElementById("btn-exec");

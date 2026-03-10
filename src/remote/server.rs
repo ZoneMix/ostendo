@@ -176,6 +176,7 @@ async fn handle_websocket(
                             "execute_code" => Some(RemoteCommand::ExecuteCode),
                             "timer_start" => Some(RemoteCommand::TimerStart),
                             "timer_reset" => Some(RemoteCommand::TimerReset),
+                            "set_theme" => cmd_msg.theme.map(RemoteCommand::SetTheme),
                             _ => None,
                         };
                         if let Some(cmd) = command {

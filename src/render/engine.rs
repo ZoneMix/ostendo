@@ -165,6 +165,7 @@ pub struct Presenter {
     last_rendered_image_scale: i8,
     needs_full_redraw: bool,
     image_scale_offset: i8,
+    theme_slugs: Vec<String>,
 }
 
 impl Presenter {
@@ -314,6 +315,7 @@ impl Presenter {
             font_change_is_slide_transition: false,
             text_scale_cap: protocols::detect_text_scale_capability(),
             pending_dissolve_in: false,
+            theme_slugs: crate::theme::ThemeRegistry::load().list(),
         };
         // Initialize mermaid renderer if any slide has mermaid blocks
         let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
@@ -619,6 +621,13 @@ impl Presenter {
                     if self.timer_start.is_none() { self.start_timer(); }
                 }
                 crate::remote::RemoteCommand::TimerReset => self.reset_timer(),
+                crate::remote::RemoteCommand::SetTheme(slug) => {
+                    let registry = crate::theme::ThemeRegistry::load();
+                    if let Some(new_theme) = registry.get(&slug) {
+                        self.is_light_variant = new_theme.dark_variant.is_some();
+                        self.apply_theme(new_theme);
+                    }
+                }
             }
             got_command = true;
         }
@@ -708,11 +717,13 @@ impl Presenter {
                 show_theme_name: self.show_theme_name,
                 show_sections: self.show_sections,
                 theme_name: self.theme.name.clone(),
+                theme_slug: self.theme.slug.clone(),
                 scale: self.global_scale,
                 image_scale: self.image_scale_offset,
                 font_offset,
                 has_executable_code: has_exec,
                 timer_running: self.timer_start.is_some(),
+                themes: self.theme_slugs.clone(),
             };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = tx.send(json);

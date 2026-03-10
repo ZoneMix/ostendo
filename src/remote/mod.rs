@@ -10,6 +10,8 @@ pub struct RemoteCommandMsg {
     pub action: String,
     #[serde(default)]
     pub slide: Option<usize>,
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 #[derive(Debug)]
@@ -40,6 +42,8 @@ pub enum RemoteCommand {
     ExecuteCode,
     TimerStart,
     TimerReset,
+    // Theme
+    SetTheme(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,11 +63,13 @@ pub struct StateMessage {
     pub show_theme_name: bool,
     pub show_sections: bool,
     pub theme_name: String,
+    pub theme_slug: String,
     pub scale: u8,
     pub image_scale: i8,
     pub font_offset: i8,
     pub has_executable_code: bool,
     pub timer_running: bool,
+    pub themes: Vec<String>,
 }
 
 #[cfg(test)]
@@ -110,12 +116,14 @@ mod tests {
             is_dark_mode: true,
             show_theme_name: false,
             show_sections: true,
-            theme_name: "dracula".to_string(),
+            theme_name: "Dracula".to_string(),
+            theme_slug: "dracula".to_string(),
             scale: 100,
             image_scale: 0,
             font_offset: 0,
             has_executable_code: false,
             timer_running: true,
+            themes: vec!["dracula".to_string(), "nord".to_string()],
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"state\""));
@@ -124,7 +132,8 @@ mod tests {
         assert!(json.contains("\"slide_title\":\"Test Title\""));
         assert!(json.contains("\"section\":\"intro\""));
         assert!(json.contains("\"is_dark_mode\":true"));
-        assert!(json.contains("\"theme_name\":\"dracula\""));
+        assert!(json.contains("\"theme_name\":\"Dracula\""));
+        assert!(json.contains("\"theme_slug\":\"dracula\""));
         assert!(json.contains("\"timer_running\":true"));
     }
 }
