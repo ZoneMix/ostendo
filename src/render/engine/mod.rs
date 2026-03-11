@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use crate::code::highlight::Highlighter;
 use crate::render::animation::{
-    AnimationState, AnimationKind, parse_transition, parse_entrance,
-    parse_loop_animation, render_transition_frame, render_entrance_frame,
+    AnimationState, AnimationKind, parse_transition,
+    render_transition_frame, render_entrance_frame,
     render_loop_frame,
 };
 use crate::image_util::render::{RenderedImage, render_slide_image};
@@ -143,6 +143,16 @@ enum Mode {
     Overview,
 }
 
+/// Cache key for rendered image data.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+struct ImageCacheKey {
+    path: PathBuf,
+    render_width: usize,
+    protocol: u8,
+    gif_frame_index: usize,
+    color_override: String,
+}
+
 /// Cached rendered image data.
 enum CachedImage {
     Lines(Vec<StyledLine>),
@@ -172,12 +182,12 @@ pub struct Presenter {
     exec_block_index: usize,
     state: StateManager,
     image_protocol: ImageProtocol,
-    image_cache: HashMap<(PathBuf, usize, u8, usize), CachedImage>,
+    image_cache: HashMap<ImageCacheKey, CachedImage>,
     preloaded_images: HashMap<PathBuf, image::RgbaImage>,
-    gif_frames: HashMap<PathBuf, Vec<crate::image_util::GifFrame>>,
+    gif_frames: HashMap<PathBuf, std::sync::Arc<Vec<crate::image_util::GifFrame>>>,
     gif_loading: Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>>,
     /// Receives pre-rendered GIF frame cache entries from background thread.
-    gif_render_rx: Option<std::sync::mpsc::Receiver<((PathBuf, usize, u8, usize), CachedImage)>>,
+    gif_render_rx: Option<std::sync::mpsc::Receiver<(ImageCacheKey, CachedImage)>>,
     gif_current_frame: usize,
     gif_last_advance: std::time::Instant,
     window_size: WindowSize,
@@ -309,7 +319,7 @@ impl Presenter {
         };
         // Preload all slide images into memory
         let mut preloaded_images = HashMap::new();
-        let gif_frames: HashMap<PathBuf, Vec<crate::image_util::GifFrame>> = HashMap::new();
+        let gif_frames: HashMap<PathBuf, std::sync::Arc<Vec<crate::image_util::GifFrame>>> = HashMap::new();
         // Collect GIF paths for background loading
         let mut gif_paths: Vec<PathBuf> = Vec::new();
         for slide in &slides {
@@ -457,31 +467,64 @@ impl Presenter {
         let tw = self.width as usize;
         let th = self.height as usize;
         let content_width = scaled_content_width(tw, self.current_scale());
+        let margin = tw.saturating_sub(content_width) / 2;
 
+        // Collect render jobs from slides we haven't cached yet.
+        // We must gather them first to avoid borrowing &self.slides while
+        // mutating self.image_cache.
+        struct PrerenderJob {
+            img: crate::presentation::SlideImage,
+            cache_key: ImageCacheKey,
+            img_width: usize,
+            img_max_height: usize,
+            img_pad: String,
+            effective_protocol: ImageProtocol,
+        }
+        let mut jobs = Vec::new();
         for slide in &self.slides {
             if let Some(ref img) = slide.image {
                 let effective_protocol = resolve_image_protocol(img.render_mode, self.image_protocol);
                 let proto_key = protocol_cache_key(effective_protocol);
-                let cache_key = (img.path.clone(), content_width, proto_key, 0usize);
+                let effective_scale = (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
+                let img_width = (content_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
+                let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / 2.0).max(1.0) as usize;
+                let img_extra_margin = content_width.saturating_sub(img_width) / 2;
+                let img_pad = " ".repeat(margin + img_extra_margin);
+                let cache_key = ImageCacheKey {
+                    path: img.path.clone(),
+                    render_width: img_width,
+                    protocol: proto_key,
+                    gif_frame_index: 0,
+                    color_override: img.color_override.clone(),
+                };
                 if !self.image_cache.contains_key(&cache_key) {
-                    let margin = tw.saturating_sub(content_width) / 2;
-                    let pad = " ".repeat(margin);
-                    let preloaded = self.preloaded_images.get(&img.path);
-                    let rendered = render_slide_image(
-                        img, content_width, th / 2, &pad,
-                        self.accent_color, self.text_color,
-                        effective_protocol, self.bg_color,
-                        &self.window_size, preloaded,
-                    );
-                    let cached = match rendered {
-                        RenderedImage::Lines(l) => CachedImage::Lines(l),
-                        RenderedImage::Protocol { escape_data, placeholder_height } => {
-                            CachedImage::Protocol { escape_data, placeholder_height }
-                        }
-                    };
-                    self.image_cache.insert(cache_key, cached);
+                    jobs.push(PrerenderJob {
+                        img: img.clone(),
+                        cache_key,
+                        img_width,
+                        img_max_height,
+                        img_pad,
+                        effective_protocol,
+                    });
                 }
             }
+        }
+
+        for job in jobs {
+            let preloaded = self.preloaded_images.get(&job.img.path);
+            let rendered = render_slide_image(
+                &job.img, job.img_width, job.img_max_height, &job.img_pad,
+                self.accent_color, self.text_color,
+                job.effective_protocol, self.bg_color,
+                &self.window_size, preloaded,
+            );
+            let cached = match rendered {
+                RenderedImage::Lines(l) => CachedImage::Lines(l),
+                RenderedImage::Protocol { escape_data, placeholder_height } => {
+                    CachedImage::Protocol { escape_data, placeholder_height }
+                }
+            };
+            self.image_cache.insert(job.cache_key, cached);
         }
     }
 
@@ -502,7 +545,7 @@ impl Presenter {
         // Collect render jobs: (SlideImage metadata, frames, computed params)
         struct RenderJob {
             img: crate::presentation::SlideImage,
-            frames: Vec<crate::image_util::GifFrame>,
+            frames: std::sync::Arc<Vec<crate::image_util::GifFrame>>,
             img_width: usize,
             img_max_height: usize,
             img_pad: String,
@@ -522,7 +565,7 @@ impl Presenter {
                     let img_pad = " ".repeat(margin + img_extra_margin);
                     jobs.push(RenderJob {
                         img: img.clone(),
-                        frames: frames.clone(),
+                        frames: std::sync::Arc::clone(frames),
                         img_width,
                         img_max_height,
                         img_pad,
@@ -540,7 +583,13 @@ impl Presenter {
         std::thread::spawn(move || {
             for job in jobs {
                 for (idx, frame) in job.frames.iter().enumerate() {
-                    let cache_key = (job.img.path.clone(), job.img_width, job.proto_key, idx);
+                    let cache_key = ImageCacheKey {
+                        path: job.img.path.clone(),
+                        render_width: job.img_width,
+                        protocol: job.proto_key,
+                        gif_frame_index: idx,
+                        color_override: job.img.color_override.clone(),
+                    };
                     let rendered = render_slide_image(
                         &job.img, job.img_width, job.img_max_height, &job.img_pad,
                         accent_color, text_color,
@@ -566,9 +615,7 @@ impl Presenter {
         // Initialize loop/entrance animations for the starting slide
         {
             let slide = &self.slides[self.current];
-            self.active_loop = slide.loop_animation.as_deref()
-                .and_then(parse_loop_animation)
-                .map(|la| (la, 0));
+            self.active_loop = slide.loop_animation.map(|la| (la, 0));
             if let Some(fs) = slide.fullscreen {
                 self.show_fullscreen = fs;
             }
@@ -771,11 +818,11 @@ impl Presenter {
     /// Advance the GIF frame if the current frame's delay has elapsed.
     /// Returns true if the frame changed (needs redraw).
     fn advance_gif_frame(&mut self) -> bool {
-        let path = match self.slides[self.current].image.as_ref() {
-            Some(img) => img.path.clone(),
+        let img_path = match self.slides[self.current].image.as_ref() {
+            Some(img) => &img.path,
             None => return false,
         };
-        let frames = match self.gif_frames.get(&path) {
+        let frames = match self.gif_frames.get(img_path) {
             Some(f) => f,
             None => return false,
         };
@@ -791,12 +838,14 @@ impl Presenter {
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let char_count = s.chars().count();
+    if char_count <= max {
         s.to_string()
     } else if max > 3 {
-        format!("{}...", &s[..max - 3])
+        let truncated: String = s.chars().take(max - 3).collect();
+        format!("{}...", truncated)
     } else {
-        s[..max].to_string()
+        s.chars().take(max).collect()
     }
 }
 

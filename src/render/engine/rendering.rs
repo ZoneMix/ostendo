@@ -133,10 +133,10 @@ impl Presenter {
                                         }
                                     }
                                     if col < tw {
-                                        for _ in 0..tw - col { write!(fw, " ")?; }
+                                        write!(fw, "{:width$}", "", width = tw - col)?;
                                     }
                                 } else {
-                                    for _ in 0..tw { write!(fw, " ")?; }
+                                    write!(fw, "{:width$}", "", width = tw)?;
                                 }
                             }
                             queue!(fw, EndSynchronizedUpdate, ResetColor)?;
@@ -205,7 +205,7 @@ impl Presenter {
                             queue!(pre, BeginSynchronizedUpdate)?;
                             for row in 0..self.height {
                                 queue!(pre, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
-                                write!(pre, "{}", " ".repeat(self.width as usize))?;
+                                write!(pre, "{:width$}", "", width = self.width as usize)?;
                             }
                             queue!(pre, EndSynchronizedUpdate, ResetColor)?;
                             pre.flush()?;
@@ -328,6 +328,8 @@ impl Presenter {
                 || self.last_rendered_image_scale != self.image_scale_offset
                 || self.gif_current_frame != self.last_rendered_gif_frame);
 
+        // Clone needed: slide fields are read throughout the frame while &mut self
+        // methods (build_status_bar, queue_styled_line, etc.) borrow self mutably.
         let slide = self.slides[self.current].clone();
         let tw = self.width as usize;
         let th = self.height as usize;
@@ -660,8 +662,14 @@ impl Presenter {
             // For animated GIFs, include the current frame index in the cache key
             let is_animated_gif = self.gif_frames.contains_key(&img.path);
             let frame_idx = if is_animated_gif { self.gif_current_frame } else { 0 };
-            let cache_key = (img.path.clone(), img_width, proto_key, frame_idx);
-            if !self.image_cache.contains_key(&cache_key) {
+            let cache_key = ImageCacheKey {
+                path: img.path.clone(),
+                render_width: img_width,
+                protocol: proto_key,
+                gif_frame_index: frame_idx,
+                color_override: img.color_override.clone(),
+            };
+            let cached = self.image_cache.entry(cache_key).or_insert_with(|| {
                 // For animated GIFs, use the current frame's image data
                 let gif_frame_img = if is_animated_gif {
                     self.gif_frames.get(&img.path)
@@ -681,19 +689,18 @@ impl Presenter {
                     effective_protocol, self.bg_color,
                     &self.window_size, preloaded,
                 );
-                let cached = match rendered {
+                match rendered {
                     RenderedImage::Lines(l) => CachedImage::Lines(l),
                     RenderedImage::Protocol { escape_data, placeholder_height } => {
                         CachedImage::Protocol { escape_data, placeholder_height }
                     }
-                };
-                self.image_cache.insert(cache_key.clone(), cached);
-            }
-            match self.image_cache.get(&cache_key) {
-                Some(CachedImage::Lines(cached_lines)) => {
+                }
+            });
+            match cached {
+                CachedImage::Lines(cached_lines) => {
                     lines.extend(cached_lines.clone());
                 }
-                Some(CachedImage::Protocol { escape_data, placeholder_height }) => {
+                CachedImage::Protocol { escape_data, placeholder_height } => {
                     // Record line offset where image should be drawn
                     let image_line_offset = lines.len();
                     for _ in 0..*placeholder_height {
@@ -701,7 +708,6 @@ impl Presenter {
                     }
                     pending_protocol_images.push((escape_data.clone(), image_line_offset));
                 }
-                None => {}
             }
             lines.push(StyledLine::empty());
         }
@@ -767,19 +773,18 @@ impl Presenter {
         if let Some(ref mut anim) = self.active_animation {
             match anim.kind {
                 AnimationKind::Transition(tt) => {
-                    // Update new_buffer with current content
-                    anim.new_buffer = lines.clone();
+                    // Pass &lines directly — no need to clone into anim.new_buffer
                     let progress = anim.progress();
                     lines = render_transition_frame(
-                        &anim.old_buffer, &anim.new_buffer,
+                        &anim.old_buffer, &lines,
                         progress, tt, self.bg_color, content_width,
                         anim.exit_only,
                     );
                 }
                 AnimationKind::Entrance(ea) => {
-                    anim.new_buffer = lines.clone();
+                    // Pass &lines directly — avoids per-frame clone
                     let progress = anim.progress();
-                    lines = render_entrance_frame(&anim.new_buffer, progress, ea, self.bg_color);
+                    lines = render_entrance_frame(&lines, progress, ea, self.bg_color);
                 }
                 AnimationKind::Loop(_) => {
                     // Loops are handled below (separate from active_animation)
@@ -800,9 +805,6 @@ impl Presenter {
                 );
             }
         }
-
-        // Cache current buffer for transition source on next slide change
-        self.last_rendered_buffer = lines.clone();
 
         // Clamp scroll
         if lines.len() > content_area {
@@ -845,7 +847,7 @@ impl Presenter {
                 self.bg_color
             };
             queue!(w, cursor::MoveTo(0, 1), SetBackgroundColor(sep_bg))?;
-            write!(w, "{}", " ".repeat(tw))?;
+            write!(w, "{:width$}", "", width = tw)?;
         }
 
         // Offset for gradient: content rows start after the separator row (unless fullscreen).
@@ -863,7 +865,7 @@ impl Presenter {
                     self.bg_color
                 };
                 queue!(w, cursor::MoveTo(0, row), SetBackgroundColor(bg))?;
-                write!(w, "{}", " ".repeat(tw))?;
+                write!(w, "{:width$}", "", width = tw)?;
             }
         } else {
             for (i, line) in lines[visible_start..visible_end].iter().enumerate() {
@@ -880,6 +882,10 @@ impl Presenter {
             }
         }
 
+        // Cache current buffer for transition source on next slide change.
+        // Moved here (after the last read of `lines`) to avoid a full clone.
+        self.last_rendered_buffer = lines;
+
         // Fill remaining rows below content
         let content_rows_drawn = visible_end - visible_start;
         for i in content_rows_drawn..content_area {
@@ -890,7 +896,7 @@ impl Presenter {
                 self.bg_color
             };
             queue!(w, cursor::MoveTo(0, row), SetBackgroundColor(fill_bg))?;
-            write!(w, "{}", " ".repeat(tw))?;
+            write!(w, "{:width$}", "", width = tw)?;
         }
 
         // Per-slide custom footer bar (rendered at bottom of content area)
@@ -910,16 +916,16 @@ impl Presenter {
                 match slide.footer_align {
                     FooterAlign::Left => {
                         let pad_right = tw.saturating_sub(text_width + 1);
-                        write!(w, " {}{}", text, " ".repeat(pad_right))?;
+                        write!(w, " {}{:width$}", text, "", width = pad_right)?;
                     }
                     FooterAlign::Center => {
                         let pad_left = tw.saturating_sub(text_width) / 2;
                         let pad_right = tw.saturating_sub(pad_left + text_width);
-                        write!(w, "{}{}{}", " ".repeat(pad_left), text, " ".repeat(pad_right))?;
+                        write!(w, "{:wl$}{}{:wr$}", "", text, "", wl = pad_left, wr = pad_right)?;
                     }
                     FooterAlign::Right => {
                         let pad_left = tw.saturating_sub(text_width + 1);
-                        write!(w, "{}{} ", " ".repeat(pad_left), text)?;
+                        write!(w, "{:width$}{} ", "", text, width = pad_left)?;
                     }
                 }
             }
@@ -944,7 +950,7 @@ impl Presenter {
             let sep: String = format!("─── Notes{} {}", scroll_indicator, "─".repeat(tw))
                 .chars().take(tw).collect();
             let sep_pad = tw.saturating_sub(sep.chars().count());
-            write!(w, "{}{}", sep, " ".repeat(sep_pad))?;
+            write!(w, "{}{:width$}", sep, "", width = sep_pad)?;
 
             // Content rows (scrollable, fill all 6 remaining rows)
             let visible_notes: Vec<&str> = all_note_lines
@@ -958,9 +964,9 @@ impl Presenter {
                 if let Some(note_line) = visible_notes.get(i) {
                     let truncated: String = note_line.chars().take(tw.saturating_sub(2)).collect();
                     let trunc_cols = truncated.chars().count();
-                    write!(w, " {}{}", truncated, " ".repeat(tw.saturating_sub(trunc_cols + 2)))?;
+                    write!(w, " {}{:width$}", truncated, "", width = tw.saturating_sub(trunc_cols + 2))?;
                 } else {
-                    write!(w, "{}", " ".repeat(tw))?;
+                    write!(w, "{:width$}", "", width = tw)?;
                 }
             }
         }
@@ -969,14 +975,14 @@ impl Presenter {
         if self.mode == Mode::Command {
             let y = th as u16 - 1;
             queue!(w, cursor::MoveTo(0, y), SetBackgroundColor(self.code_bg_color), SetForegroundColor(self.accent_color))?;
-            write!(w, ":{}{}", self.command_buf, " ".repeat(tw.saturating_sub(self.command_buf.len() + 1)))?;
+            write!(w, ":{}{:width$}", self.command_buf, "", width = tw.saturating_sub(self.command_buf.len() + 1))?;
         }
 
         // Goto indicator
         if self.mode == Mode::Goto {
             let y = th as u16 - 1;
             queue!(w, cursor::MoveTo(0, y), SetBackgroundColor(self.code_bg_color), SetForegroundColor(self.accent_color))?;
-            write!(w, "goto: {}{}", self.goto_buf, " ".repeat(tw.saturating_sub(self.goto_buf.len() + 7)))?;
+            write!(w, "goto: {}{:width$}", self.goto_buf, "", width = tw.saturating_sub(self.goto_buf.len() + 7))?;
         }
 
         // Clear old Kitty images right before placing new content, so the
@@ -1024,13 +1030,21 @@ impl Presenter {
         // so they appear atomically with the fully-revealed content.
         if self.pending_dissolve_in {
             self.pending_dissolve_in = false;
-            let dissolve_lines = self.last_rendered_buffer.clone();
+            // Take the buffer instead of cloning — it will be rebuilt on the
+            // next render_frame() call so we don't need it to stay populated.
+            let dissolve_lines = std::mem::take(&mut self.last_rendered_buffer);
             if !dissolve_lines.is_empty() {
                 let dis_frames = 12u32;
                 let dis_tw = self.width as usize;
                 let dis_status = if self.show_fullscreen { 0u16 } else { 2 };
                 let dis_content_rows = (self.height - dis_status) as usize;
                 let dis_visible = dissolve_lines.len().min(dis_content_rows);
+                // Build status bar once before the loop (avoid rebuilding on every frame)
+                let status_bar = if dis_status > 0 {
+                    self.build_status_bar(dis_tw)
+                } else {
+                    StyledLine::empty()
+                };
                 for frame in 1..=dis_frames {
                     let progress = frame as f64 / dis_frames as f64;
                     let dim = (1.0 - progress) * 0.4;
@@ -1043,16 +1057,15 @@ impl Presenter {
                     let din_grad_total = dis_content_rows + if dis_status > 0 { 1 } else { 0 };
                     // Status bar at full brightness
                     if dis_status > 0 {
-                        let bar = self.build_status_bar(dis_tw);
                         queue!(dw, cursor::MoveTo(0, 0))?;
-                        self.queue_styled_line(&mut dw, &bar, dis_tw)?;
+                        self.queue_styled_line(&mut dw, &status_bar, dis_tw)?;
                         let sep_bg = if din_has_grad {
                             self.row_bg_color(0, din_grad_total.max(1))
                         } else {
                             self.bg_color
                         };
                         queue!(dw, cursor::MoveTo(0, 1), SetBackgroundColor(sep_bg))?;
-                        for _ in 0..dis_tw { write!(dw, " ")?; }
+                        write!(dw, "{:width$}", "", width = dis_tw)?;
                     }
                     let din_grad_offset = if dis_status > 0 { 1 } else { 0 };
                     // Content: per-cell scatter reveal
@@ -1086,14 +1099,14 @@ impl Presenter {
                                     write!(dw, "{}", ch)?;
                                 } else {
                                     queue!(dw, SetBackgroundColor(row_bg))?;
-                                    for _ in 0..cw { write!(dw, " ")?; }
+                                    write!(dw, "{:width$}", "", width = cw)?;
                                 }
                                 col += cw;
                             }
                         }
                         if col < dis_tw {
                             queue!(dw, SetBackgroundColor(row_bg))?;
-                            for _ in 0..dis_tw - col { write!(dw, " ")?; }
+                            write!(dw, "{:width$}", "", width = dis_tw - col)?;
                         }
                     }
                     // Fill remaining rows
@@ -1105,7 +1118,7 @@ impl Presenter {
                             self.bg_color
                         };
                         queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(row_bg))?;
-                        for _ in 0..dis_tw { write!(dw, " ")?; }
+                        write!(dw, "{:width$}", "", width = dis_tw)?;
                     }
                     // Emit protocol images on the final frame so they appear
                     // atomically with fully-revealed content (no flicker).

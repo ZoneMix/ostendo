@@ -6,25 +6,22 @@ impl Presenter {
         let old_buffer = self.last_rendered_buffer.clone();
 
         // Determine transition: per-slide directive overrides global meta
-        let transition_str = slide.transition.as_deref()
-            .or(if self.meta.transition.is_empty() { None } else { Some(self.meta.transition.as_str()) });
+        let transition_type = slide.transition
+            .or_else(|| if self.meta.transition.is_empty() { None } else { parse_transition(&self.meta.transition) });
 
-        if let Some(tt) = transition_str.and_then(parse_transition) {
-            let has_entrance = slide.entrance_animation.as_deref()
-                .and_then(parse_entrance).is_some();
+        if let Some(tt) = transition_type {
+            let has_entrance = slide.entrance_animation.is_some();
             let mut anim = AnimationState::new_transition(tt, old_buffer, Vec::new());
             // When an entrance animation follows, the transition only fades out
             // old content — the entrance handles revealing new content.
             anim.exit_only = has_entrance;
             self.active_animation = Some(anim);
-        } else if let Some(ea) = slide.entrance_animation.as_deref().and_then(parse_entrance) {
+        } else if let Some(ea) = slide.entrance_animation {
             self.active_animation = Some(AnimationState::new_entrance(ea, Vec::new()));
         }
 
         // Set up loop animation (runs independently after transition/entrance complete)
-        self.active_loop = slide.loop_animation.as_deref()
-            .and_then(parse_loop_animation)
-            .map(|la| (la, 0));
+        self.active_loop = slide.loop_animation.map(|la| (la, 0));
 
         self.needs_full_redraw = true;
     }

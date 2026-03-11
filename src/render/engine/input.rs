@@ -9,7 +9,7 @@ impl Presenter {
             if let Some(handle) = self.gif_loading.take() {
                 if handle.is_finished() {
                     if let Ok(loaded) = handle.join() {
-                        self.gif_frames.extend(loaded);
+                        self.gif_frames.extend(loaded.into_iter().map(|(k, v)| (k, std::sync::Arc::new(v))));
                         self.spawn_gif_prerender();
                         self.needs_full_redraw = true;
                     }
@@ -76,7 +76,7 @@ impl Presenter {
                     // Chain: transition -> entrance animation if slide has one
                     if matches!(anim.kind, AnimationKind::Transition(_)) {
                         let slide = &self.slides[self.current];
-                        if let Some(ea) = slide.entrance_animation.as_deref().and_then(parse_entrance) {
+                        if let Some(ea) = slide.entrance_animation {
                             self.active_animation = Some(AnimationState::new_entrance(ea, Vec::new()));
                         } else {
                             self.active_animation = None;

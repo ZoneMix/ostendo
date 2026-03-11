@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::render::animation::{EntranceAnimation, LoopAnimation, TransitionType};
+
 /// Alignment for the per-slide footer bar.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum FooterAlign {
@@ -56,9 +58,9 @@ pub struct Slide {
     pub footer_align: FooterAlign,
     pub alignment: Option<SlideAlignment>,
     pub title_decoration: Option<String>,
-    pub transition: Option<String>,
-    pub entrance_animation: Option<String>,
-    pub loop_animation: Option<String>,
+    pub transition: Option<TransitionType>,
+    pub entrance_animation: Option<EntranceAnimation>,
+    pub loop_animation: Option<LoopAnimation>,
     pub loop_animation_target: Option<String>,
     pub fullscreen: Option<bool>,
     pub show_section: Option<bool>,

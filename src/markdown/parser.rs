@@ -175,9 +175,9 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut footer_align = FooterAlign::Left;
     let mut alignment: Option<SlideAlignment> = None;
     let mut title_decoration: Option<String> = None;
-    let mut transition: Option<String> = None;
-    let mut entrance_animation: Option<String> = None;
-    let mut loop_animation: Option<String> = None;
+    let mut transition: Option<crate::render::animation::TransitionType> = None;
+    let mut entrance_animation: Option<crate::render::animation::EntranceAnimation> = None;
+    let mut loop_animation: Option<crate::render::animation::LoopAnimation> = None;
     let mut loop_animation_target: Option<String> = None;
     let mut fullscreen: Option<bool> = None;
     let mut show_section: Option<bool> = None;
@@ -343,19 +343,19 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Transition directive
         if let Some(caps) = TRANSITION_RE.captures(line) {
-            transition = Some(caps[1].to_string());
+            transition = crate::render::animation::parse_transition(&caps[1]);
             continue;
         }
 
         // Entrance animation directive
         if let Some(caps) = ANIMATION_RE.captures(line) {
-            entrance_animation = Some(caps[1].to_string());
+            entrance_animation = crate::render::animation::parse_entrance(&caps[1]);
             continue;
         }
 
         // Loop animation directive
         if let Some(caps) = LOOP_ANIMATION_RE.captures(line) {
-            loop_animation = Some(caps[1].to_string());
+            loop_animation = crate::render::animation::parse_loop_animation(&caps[1]);
             loop_animation_target = caps.get(2).map(|m| m.as_str().to_string());
             continue;
         }
@@ -1152,15 +1152,15 @@ mod tests {
     fn test_transition_directive() {
         let src = "<!-- transition: dissolve -->\n# Trans";
         let slides = parse(src);
-        assert_eq!(slides[0].transition.as_deref(), Some("dissolve"));
+        assert_eq!(slides[0].transition, Some(crate::render::animation::TransitionType::Dissolve));
     }
 
     #[test]
     fn test_animation_directives() {
         let src = "<!-- animation: typewriter -->\n<!-- loop_animation: matrix -->\n# Animated";
         let slides = parse(src);
-        assert_eq!(slides[0].entrance_animation.as_deref(), Some("typewriter"));
-        assert_eq!(slides[0].loop_animation.as_deref(), Some("matrix"));
+        assert_eq!(slides[0].entrance_animation, Some(crate::render::animation::EntranceAnimation::Typewriter));
+        assert_eq!(slides[0].loop_animation, Some(crate::render::animation::LoopAnimation::Matrix));
     }
 
     #[test]

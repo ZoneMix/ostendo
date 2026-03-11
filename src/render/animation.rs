@@ -531,7 +531,7 @@ fn render_matrix(
 
     for row in 0..height {
         let has_content = buffer.get(row)
-            .map(|l| !line_to_string(l).trim().is_empty())
+            .map(|l| l.spans.iter().any(|s| s.text.chars().any(|c| !c.is_whitespace())))
             .unwrap_or(false);
 
         if has_content {
@@ -770,8 +770,7 @@ fn render_sparkle(
             result.push(line.clone());
             continue;
         }
-        let text = line_to_string(line);
-        let chars: Vec<char> = text.chars().collect();
+        let chars: Vec<char> = line.spans.iter().flat_map(|s| s.text.chars()).collect();
         if chars.is_empty() || chars.iter().all(|c| c.is_whitespace()) {
             result.push(line.clone());
             continue;
@@ -852,6 +851,14 @@ fn render_spin(
     // Same ramp as ascii_art.rs for consistency
     const ASCII_RAMP: &[u8] = b" .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
 
+    // Build O(1) lookup table: byte value -> ramp index (255 = not in ramp)
+    let mut ramp_lookup = [255u8; 128];
+    for (i, &b) in ASCII_RAMP.iter().enumerate() {
+        if (b as usize) < 128 {
+            ramp_lookup[b as usize] = i as u8;
+        }
+    }
+
     let mut result = Vec::with_capacity(buffer.len());
 
     for (row, line) in buffer.iter().enumerate() {
@@ -865,8 +872,7 @@ fn render_spin(
             result.push(line.clone());
             continue;
         }
-        let text = line_to_string(line);
-        let chars: Vec<char> = text.chars().collect();
+        let chars: Vec<char> = line.spans.iter().flat_map(|s| s.text.chars()).collect();
         if chars.is_empty() || chars.iter().all(|c| c.is_whitespace()) {
             result.push(line.clone());
             continue;
@@ -894,8 +900,12 @@ fn render_spin(
                     new_text.push(ch);
                     continue;
                 }
-                // Find current position in the ASCII ramp
-                if let Some(ramp_pos) = ASCII_RAMP.iter().position(|&r| r == ch as u8) {
+                // Find current position in the ASCII ramp (O(1) lookup)
+                let ramp_pos = if (ch as u32) < 128 {
+                    let idx = ramp_lookup[ch as usize];
+                    if idx < 255 { Some(idx as usize) } else { None }
+                } else { None };
+                if let Some(ramp_pos) = ramp_pos {
                     // Wave: each cell shifts by a sine-based offset depending on position and frame
                     let cell_phase = (row as f64 * 0.3 + global_col as f64 * 0.2).sin();
                     let wave = (frame as f64 * 0.12 + cell_phase * 3.0).sin();
