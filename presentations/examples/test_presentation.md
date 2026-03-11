@@ -98,7 +98,7 @@ VERIFY: Image displays correctly as ASCII, fullscreen and centered
 <!-- align: center -->
 <!-- font_transition: none -->
 
-![Pokemon](../../images/pokemon.gif)
+![Cat](../../images/cat.gif)
 
 <!-- notes:
 FEATURE: GIF image rendering

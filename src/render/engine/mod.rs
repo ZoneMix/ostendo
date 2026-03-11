@@ -176,6 +176,8 @@ pub struct Presenter {
     preloaded_images: HashMap<PathBuf, image::RgbaImage>,
     gif_frames: HashMap<PathBuf, Vec<crate::image_util::GifFrame>>,
     gif_loading: Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>>,
+    /// Receives pre-rendered GIF frame cache entries from background thread.
+    gif_render_rx: Option<std::sync::mpsc::Receiver<((PathBuf, usize, u8, usize), CachedImage)>>,
     gif_current_frame: usize,
     gif_last_advance: std::time::Instant,
     window_size: WindowSize,
@@ -372,6 +374,7 @@ impl Presenter {
             preloaded_images,
             gif_frames,
             gif_loading,
+            gif_render_rx: None,
             gif_current_frame: 0,
             gif_last_advance: std::time::Instant::now(),
             window_size,
@@ -480,6 +483,80 @@ impl Presenter {
                 }
             }
         }
+    }
+
+    /// Spawn a background thread to pre-render all GIF frames into cache entries.
+    /// Results stream back via `gif_render_rx` and are merged in the event loop.
+    fn spawn_gif_prerender(&mut self) {
+        let tw = self.width as usize;
+        let th = self.height as usize;
+        let content_width = scaled_content_width(tw, self.current_scale());
+        let margin = tw.saturating_sub(content_width) / 2;
+        let image_protocol = self.image_protocol;
+        let image_scale_offset = self.image_scale_offset;
+        let accent_color = self.accent_color;
+        let text_color = self.text_color;
+        let bg_color = self.bg_color;
+        let window_size = self.window_size;
+
+        // Collect render jobs: (SlideImage metadata, frames, computed params)
+        struct RenderJob {
+            img: crate::presentation::SlideImage,
+            frames: Vec<crate::image_util::GifFrame>,
+            img_width: usize,
+            img_max_height: usize,
+            img_pad: String,
+            effective_protocol: ImageProtocol,
+            proto_key: u8,
+        }
+        let mut jobs = Vec::new();
+        for slide in &self.slides {
+            if let Some(ref img) = slide.image {
+                if let Some(frames) = self.gif_frames.get(&img.path) {
+                    let effective_protocol = resolve_image_protocol(img.render_mode, image_protocol);
+                    let proto_key = protocol_cache_key(effective_protocol);
+                    let effective_scale = (img.scale as i16 + image_scale_offset as i16).clamp(5, 100) as u8;
+                    let img_width = (content_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
+                    let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / 2.0).max(1.0) as usize;
+                    let img_extra_margin = content_width.saturating_sub(img_width) / 2;
+                    let img_pad = " ".repeat(margin + img_extra_margin);
+                    jobs.push(RenderJob {
+                        img: img.clone(),
+                        frames: frames.clone(),
+                        img_width,
+                        img_max_height,
+                        img_pad,
+                        effective_protocol,
+                        proto_key,
+                    });
+                }
+            }
+        }
+        if jobs.is_empty() { return; }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.gif_render_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            for job in jobs {
+                for (idx, frame) in job.frames.iter().enumerate() {
+                    let cache_key = (job.img.path.clone(), job.img_width, job.proto_key, idx);
+                    let rendered = render_slide_image(
+                        &job.img, job.img_width, job.img_max_height, &job.img_pad,
+                        accent_color, text_color,
+                        job.effective_protocol, bg_color,
+                        &window_size, Some(&frame.image),
+                    );
+                    let cached = match rendered {
+                        RenderedImage::Lines(l) => CachedImage::Lines(l),
+                        RenderedImage::Protocol { escape_data, placeholder_height } => {
+                            CachedImage::Protocol { escape_data, placeholder_height }
+                        }
+                    };
+                    if tx.send((cache_key, cached)).is_err() { return; }
+                }
+            }
+        });
     }
 
     pub fn run(&mut self) -> Result<()> {
@@ -989,5 +1066,59 @@ mod tests {
         assert_eq!(pad.len(), 20);
         // Content should be centered: margin + content + margin = total
         assert!(margin + content_width + margin <= tw);
+    }
+
+    #[test]
+    fn test_figfont_cached_produces_figlet_content_type() {
+        let font_data = include_str!("../../../fonts/slant.flf");
+        let fig = figlet_rs::FIGfont::from_content(font_data).ok();
+        assert!(fig.is_some(), "FIGfont should load from bundled slant.flf");
+
+        let fig = fig.unwrap();
+        let rendered = fig.convert("Test");
+        assert!(rendered.is_some(), "FIGfont should render 'Test'");
+
+        let rendered_str = rendered.unwrap().to_string();
+        let fig_lines: Vec<&str> = rendered_str.lines().collect();
+        assert!(!fig_lines.is_empty(), "FIGlet output should have lines");
+
+        // Verify lines have non-whitespace content (sparkle needs this)
+        let has_content = fig_lines.iter().any(|l| l.chars().any(|c| !c.is_whitespace()));
+        assert!(has_content, "FIGlet output should have non-whitespace characters");
+
+        // Simulate what render_ascii_title does
+        let mut lines: Vec<StyledLine> = Vec::new();
+        for fig_line in &fig_lines {
+            let mut line = StyledLine::empty();
+            line.push(StyledSpan::new(fig_line).with_fg(Color::Green).bold());
+            line.content_type = LineContentType::FigletTitle;
+            lines.push(line);
+        }
+
+        // Verify content_type is preserved
+        for line in &lines {
+            assert_eq!(line.content_type, LineContentType::FigletTitle);
+        }
+
+        // Verify sparkle would animate these lines (target = "figlet")
+        use crate::render::animation::{LoopAnimation, render_loop_frame};
+        let sparkled = render_loop_frame(
+            &lines, LoopAnimation::Sparkle, 42,
+            Color::Green, Color::Black,
+            80, 24,
+            Some("figlet"),
+        );
+        assert_eq!(sparkled.len(), lines.len(), "Sparkle should preserve line count");
+
+        // At frame 42, at least some cells should have sparkle characters
+        let original_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+        let sparkled_text: String = sparkled.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+        // Sparkle modifies some characters, so texts should differ
+        assert_ne!(original_text, sparkled_text,
+            "Sparkle should modify at least some characters at frame 42");
     }
 }

@@ -10,10 +10,18 @@ impl Presenter {
                 if handle.is_finished() {
                     if let Ok(loaded) = handle.join() {
                         self.gif_frames.extend(loaded);
+                        self.spawn_gif_prerender();
                         self.needs_full_redraw = true;
                     }
                 } else {
                     self.gif_loading = Some(handle);
+                }
+            }
+
+            // Drain pre-rendered GIF frames from background thread
+            if let Some(ref rx) = self.gif_render_rx {
+                while let Ok((key, cached)) = rx.try_recv() {
+                    self.image_cache.insert(key, cached);
                 }
             }
 

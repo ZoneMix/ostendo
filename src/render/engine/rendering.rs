@@ -671,8 +671,12 @@ impl Presenter {
                     None
                 };
                 let preloaded = gif_frame_img.or_else(|| self.preloaded_images.get(&img.path));
+                // Center image within content area (pad covers terminal→content margin,
+                // img_extra_margin centers within content when img < content_width)
+                let img_extra_margin = content_width.saturating_sub(img_width) / 2;
+                let img_pad = " ".repeat(margin + img_extra_margin);
                 let rendered = render_slide_image(
-                    img, img_width, img_max_height, &pad,
+                    img, img_width, img_max_height, &img_pad,
                     self.accent_color, self.text_color,
                     effective_protocol, self.bg_color,
                     &self.window_size, preloaded,
@@ -748,6 +752,7 @@ impl Presenter {
                     if desired_left > margin {
                         let extra = desired_left - margin;
                         let mut centered = StyledLine::empty();
+                        centered.content_type = line.content_type;
                         centered.push(StyledSpan::new(&" ".repeat(extra)));
                         for span in &line.spans {
                             centered.push(span.clone());
