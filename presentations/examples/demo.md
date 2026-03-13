@@ -10,7 +10,7 @@ transition: fade
 # Ostendo
 <!-- section: Introduction -->
 <!-- ascii_title -->
-<!-- font_size: 2 -->
+<!-- font_size: 6 -->
 <!-- loop_animation: sparkle(figlet) -->
 
 Terminal presentations, reimagined.
@@ -30,7 +30,7 @@ Press Ctrl+E on executable code blocks to run them live.
 # What is Ostendo?
 <!-- section: Introduction -->
 <!-- title_decoration: underline -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 A **Rust-powered** presentation engine that renders *beautiful slide decks* directly in your terminal.
 
@@ -55,7 +55,7 @@ synchronized update to eliminate flicker. No curses library needed.
 # Rich Markdown Formatting
 <!-- section: Formatting -->
 <!-- title_decoration: box -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 All standard inline formatting works everywhere -- bullets, subtitles, and block quotes:
 
@@ -80,7 +80,7 @@ background-highlighted (code) spans in any terminal that supports SGR sequences.
 
 # Block Quotes and Attribution
 <!-- section: Formatting -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Callouts, quotations, and emphasis blocks:
 
@@ -107,7 +107,7 @@ of '>' lines becomes a separate BlockQuote element.
 
 # Data Tables
 <!-- section: Formatting -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Standard Markdown pipe tables with column alignment:
 
@@ -133,7 +133,7 @@ Unicode box-drawing characters for clean borders.
 # Code: Python
 <!-- section: Code Execution -->
 <!-- title_decoration: banner -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Mark code blocks with `+exec` and press **Ctrl+E** to execute live:
 
@@ -163,7 +163,7 @@ The +exec badge appears in the top-right corner of the code block.
 
 # Code: Rust (Auto-Wrap)
 <!-- section: Code Execution -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 No `fn main()` needed -- Ostendo auto-wraps bare Rust code:
 
@@ -198,7 +198,7 @@ This lets you write concise code examples without boilerplate.
 
 # Multi-Language Columns
 <!-- section: Code Execution -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [1, 1] -->
 <!-- column: 0 -->
@@ -246,7 +246,7 @@ The +exec badge appears on each block to indicate it's runnable.
 
 # Code Preambles
 <!-- section: Code Execution -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Hidden imports injected before execution with `preamble_start`/`preamble_end`:
 
@@ -281,7 +281,7 @@ are imported silently so the visible code stays focused on the interesting parts
 # Column Layouts
 <!-- section: Layouts -->
 <!-- title_decoration: banner -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [1, 1, 1] -->
 <!-- column: 0 -->
@@ -326,7 +326,7 @@ the left column twice the width of the right).
 
 # Weighted Columns
 <!-- section: Layouts -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Asymmetric layouts with `column_layout: [2, 1]`:
 
@@ -371,7 +371,7 @@ provides context. The ratio [2, 1] gives 2/3 width to the left column.
 <!-- section: Images -->
 <!-- title_decoration: underline -->
 <!-- image_scale: 50 -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Ostendo detects the best image protocol for your terminal:
 
@@ -396,7 +396,7 @@ sets the initial size as a percentage of terminal width.
 <!-- image_render: ascii -->
 <!-- image_color: #00FF88 -->
 <!-- image_scale: 45 -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Force ASCII rendering with custom color override:
 
@@ -419,7 +419,7 @@ text terminals and serial consoles.
 <!-- section: Images -->
 <!-- align: center -->
 <!-- image_scale: 60 -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 ![Cat GIF](../../images/cat.gif)
 
@@ -440,7 +440,7 @@ happens within synchronized update blocks to prevent flicker.
 # Diagram: Box Style
 <!-- section: Diagrams -->
 <!-- title_decoration: banner -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Native ASCII diagrams with the built-in diagram engine (no external tools):
 
@@ -465,7 +465,7 @@ Box style is the default and uses Unicode box-drawing characters.
 
 # Diagram: Bracket Style
 <!-- section: Diagrams -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Compact bracket notation for tighter layouts:
 
@@ -489,7 +489,7 @@ width is limited or when you want a lighter visual weight.
 
 # Diagram: Vertical Flow
 <!-- section: Diagrams -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Top-to-bottom layout for hierarchical flows:
 
@@ -515,7 +515,7 @@ any flow that represents progression through stages.
 <!-- section: Animations -->
 <!-- title_decoration: banner -->
 <!-- transition: fade -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 This slide uses `<!-- transition: fade -->`.
 
@@ -536,7 +536,7 @@ cinematic feel between slides. Set via the transition directive.
 # Transition: Dissolve
 <!-- section: Animations -->
 <!-- transition: dissolve -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 This slide uses `<!-- transition: dissolve -->`.
 
@@ -558,7 +558,7 @@ happens on every frame during the transition duration.
 # Transition: Slide
 <!-- section: Animations -->
 <!-- transition: slide -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 This slide uses `<!-- transition: slide -->`.
 
@@ -580,7 +580,7 @@ most traditional presentation transition style.
 # Entrance: Typewriter
 <!-- section: Animations -->
 <!-- animation: typewriter -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Characters appear one at a time, creating a typing effect:
 
@@ -602,7 +602,7 @@ without feeling slow. Entrance animations are one-shot effects.
 # Entrance: Fade In
 <!-- section: Animations -->
 <!-- animation: fade_in -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Content brightens from dim to full opacity:
 
@@ -624,7 +624,7 @@ polish without distraction.
 # Loop: Matrix Rain
 <!-- section: Animations -->
 <!-- loop_animation: matrix -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 The Matrix has you...
 
@@ -644,7 +644,7 @@ This is a continuous animation that runs as long as the slide is displayed.
 # Loop: Sparkle on FIGlet
 <!-- section: Animations -->
 <!-- ascii_title -->
-<!-- font_size: 1 -->
+<!-- font_size: 6 -->
 <!-- loop_animation: sparkle(figlet) -->
 <!-- font_transition: none -->
 
@@ -666,7 +666,7 @@ untouched. Other targets include sparkle(image) for ASCII art images.
 # Loop: Bounce
 <!-- section: Animations -->
 <!-- loop_animation: bounce -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 A bouncing ball traverses the entire screen:
 
@@ -686,7 +686,7 @@ width and height for maximum visual impact.
 # Loop: Pulse
 <!-- section: Animations -->
 <!-- loop_animation: pulse -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 All content rhythmically fades in and out:
 
@@ -708,7 +708,7 @@ attention-grabbing title cards.
 # Loop: Spin on FIGlet
 <!-- section: Animations -->
 <!-- ascii_title -->
-<!-- font_size: 1 -->
+<!-- font_size: 6 -->
 <!-- loop_animation: spin(figlet) -->
 <!-- font_transition: none -->
 
@@ -730,9 +730,9 @@ title appears to shimmer and evolve continuously.
 # Font Sizing: Large
 <!-- section: Display -->
 <!-- title_decoration: banner -->
-<!-- font_size: 2 -->
+<!-- font_size: 7 -->
 
-This slide uses `<!-- font_size: 2 -->` for maximum readability.
+This slide uses `<!-- font_size: 7 -->` for maximum readability.
 
 - Font size range: -3 to 7
 - Requires Kitty or Ghostty terminal
@@ -751,10 +751,10 @@ animation. Use font_transition: none for instant changes.
 
 # Font Sizing: Small Detail
 <!-- section: Display -->
-<!-- font_size: -3 -->
+<!-- font_size: 3 -->
 <!-- font_transition: none -->
 
-This slide uses `<!-- font_size: -3 -->` with `<!-- font_transition: none -->` for instant change.
+This slide uses `<!-- font_size: 3 -->` with `<!-- font_transition: none -->` for instant change.
 
 - Negative font sizes shrink below the terminal's base size
 - Perfect for dense content, code listings, and data tables
@@ -780,7 +780,7 @@ This avoids the brief blank screen during font transitions.
 # Per-Slide Theme Override
 <!-- section: Display -->
 <!-- theme: dracula -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 This slide uses `<!-- theme: dracula -->` to override the presentation theme.
 
@@ -809,7 +809,7 @@ or use :theme slug in command mode.
 
 # Title Decorations
 <!-- section: Display -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Three decoration styles for slide titles:
 
@@ -856,7 +856,7 @@ Each slide in this demo uses different decorations for variety.
 <!-- section: Display -->
 <!-- fullscreen -->
 <!-- align: center -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 This slide uses `<!-- fullscreen -->` -- no status bar, no progress bar.
 
@@ -877,7 +877,7 @@ is sticky until the next slide is reached.
 <!-- section: Display -->
 <!-- footer: Ostendo Demo | March 2026 | Slide 32/37 -->
 <!-- footer_align: center -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Per-slide footer displayed at the bottom of the screen:
 
@@ -900,7 +900,7 @@ set to center or right via the footer_align directive.
 <!-- section: Navigation -->
 <!-- title_decoration: banner -->
 <!-- show_section: true -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Slides are grouped into sections with `<!-- section: Name -->`:
 
@@ -923,7 +923,7 @@ next or previous section, making it easy to jump between topics.
 # Mermaid Diagrams
 <!-- section: Advanced -->
 <!-- title_decoration: underline -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 External diagram rendering via the `mmdc` CLI (requires Mermaid CLI installed):
 
@@ -952,7 +952,7 @@ the raw source text is shown instead.
 
 # Remote Control
 <!-- section: Advanced -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 Present from one machine, control from another:
 
@@ -985,7 +985,7 @@ code execution entirely.
 
 # Keyboard Reference
 <!-- section: Navigation -->
-<!-- font_size: -3 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [1, 1] -->
 <!-- column: 0 -->
@@ -1027,7 +1027,7 @@ Mouse clicks advance slides, scroll wheel scrolls content, right-click goes back
 # Thank You
 <!-- section: Closing -->
 <!-- ascii_title -->
-<!-- font_size: 2 -->
+<!-- font_size: 6 -->
 <!-- loop_animation: sparkle(figlet) -->
 <!-- align: center -->
 

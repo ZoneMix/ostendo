@@ -8,7 +8,7 @@ transition: fade
 
 # Quick Start Guide
 <!-- section: intro -->
-<!-- font_size: 3 -->
+<!-- font_size: 6 -->
 <!-- ascii_title -->
 
 Get up and running with Ostendo in minutes
@@ -23,7 +23,7 @@ Get up and running with Ostendo in minutes
 
 # Formatting Basics
 <!-- section: content -->
-<!-- font_size: 3 -->
+<!-- font_size: 6 -->
 
 Ostendo supports standard Markdown inline formatting:
 
@@ -41,7 +41,7 @@ Ostendo supports standard Markdown inline formatting:
 
 # Live Code Execution
 <!-- section: code -->
-<!-- font_size: 3 -->
+<!-- font_size: 6 -->
 
 Mark code blocks with `+exec` and press **Ctrl+E** to run:
 
@@ -63,7 +63,7 @@ print(f"Current time: {datetime.now().strftime('%H:%M:%S')}")
 
 # Columns and Images
 <!-- section: layout -->
-<!-- font_size: 3 -->
+<!-- font_size: 6 -->
 
 <!-- column_layout: [1, 1] -->
 <!-- column: 0 -->
@@ -90,7 +90,7 @@ print(f"Current time: {datetime.now().strftime('%H:%M:%S')}")
 
 # Thank You
 <!-- section: closing -->
-<!-- font_size: 3 -->
+<!-- font_size: 6 -->
 <!-- ascii_title -->
 
 - Run: `ostendo quick_start.md`
