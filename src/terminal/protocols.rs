@@ -1,20 +1,64 @@
+//! Terminal capability detection.
+//!
+//! Probes the terminal environment (via environment variables) to determine
+//! which image protocol and font sizing capability are available.  This module
+//! runs once at startup and the results are stored for the lifetime of the
+//! presentation.
+//!
+//! # Detection strategy
+//!
+//! The detection is entirely based on environment variables -- no escape-sequence
+//! probing is performed (which would require reading terminal responses and can
+//! be unreliable inside tmux).  The heuristics are:
+//!
+//! | Variable              | Indicates                                  |
+//! |-----------------------|--------------------------------------------|
+//! | `KITTY_WINDOW_ID`     | Kitty terminal (graphics + font control)   |
+//! | `TERM_PROGRAM=iTerm.app` / `LC_TERMINAL=iTerm2` | iTerm2        |
+//! | `TERM_PROGRAM=WezTerm` | WezTerm (uses iTerm2 image protocol)      |
+//! | `TERM_PROGRAM=ghostty` | Ghostty (uses Kitty graphics protocol)    |
+//! | `TMUX`                | Running inside tmux (affects font control)  |
+//!
+//! # Capabilities detected
+//!
+//! - [`ImageProtocol`] -- which image display protocol to use
+//! - [`FontSizeCapability`] -- whether per-slide font sizing is possible
+//! - [`TextScaleCapability`] -- whether OSC 66 per-element text scaling works
+
 use std::env;
 
+/// Which image display protocol the terminal supports.
+///
+/// Detected once at startup by [`detect_protocol`] and used throughout
+/// the image rendering pipeline to choose the correct escape sequences.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
 pub enum ImageProtocol {
+    /// Kitty Graphics Protocol -- highest quality, supports Kitty and Ghostty.
     Kitty,
+    /// iTerm2 Inline Images -- widely supported (iTerm2, WezTerm, many others).
     Iterm2,
+    /// Sixel -- legacy VT340 bitmap format, works in xterm and mlterm.
     Sixel,
+    /// ASCII art fallback -- works everywhere but at low resolution.
     Ascii,
 }
 
+/// Whether (and how) the terminal supports changing the font size at runtime.
+///
+/// Font size changes are used for the `<!-- font_size: N -->` slide directive,
+/// which lets presenters enlarge text for emphasis or shrink it to fit more
+/// content on screen.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FontSizeCapability {
-    /// Kitty remote control protocol (DCS-based, requires allow_remote_control in kitty.conf)
+    /// Kitty remote control protocol (DCS-based).
+    /// Requires `allow_remote_control yes` in `kitty.conf`.
     KittyRemote,
-    /// Ghostty keystroke simulation via macOS AppleScript (requires Accessibility permission)
+    /// Ghostty keystroke simulation via macOS AppleScript.
+    /// Requires Accessibility permission in System Settings.
+    /// Only available on macOS because it uses `osascript`.
     GhosttyKeystroke,
+    /// No font size control available -- font directives are silently ignored.
     None,
 }
 
@@ -25,6 +69,11 @@ impl FontSizeCapability {
     }
 }
 
+/// Detect whether the current terminal supports runtime font size changes.
+///
+/// Returns [`FontSizeCapability::None`] inside tmux because font control
+/// escape sequences and keystroke simulation target the wrong process when
+/// multiplexed.
 pub fn detect_font_capability() -> FontSizeCapability {
     // Font control doesn't work reliably through tmux — env vars become stale
     // and keystroke simulation targets the wrong pane.
@@ -44,13 +93,23 @@ pub fn detect_font_capability() -> FontSizeCapability {
     FontSizeCapability::None
 }
 
+/// Whether the terminal supports OSC 66 per-element text scaling.
+///
+/// OSC 66 allows individual text spans to be rendered at 2x-7x their normal
+/// size, which is used for large slide titles without needing FIGlet ASCII art.
+/// Currently only Kitty implements this protocol extension.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextScaleCapability {
-    /// Kitty OSC 66 text sizing protocol
+    /// Kitty OSC 66 text sizing protocol -- scales individual text runs.
     Osc66,
+    /// No per-element scaling available.
     None,
 }
 
+/// Detect whether the terminal supports OSC 66 per-element text scaling.
+///
+/// Only returns [`TextScaleCapability::Osc66`] when running directly in Kitty
+/// (not through tmux, where passthrough support is untested).
 pub fn detect_text_scale_capability() -> TextScaleCapability {
     // Only Kitty supports OSC 66 text sizing; tmux passthrough not yet tested
     if env::var("TMUX").is_ok() {
@@ -62,6 +121,19 @@ pub fn detect_text_scale_capability() -> TextScaleCapability {
     TextScaleCapability::None
 }
 
+/// Detect which image display protocol the current terminal supports.
+///
+/// Checks environment variables in priority order and returns the best
+/// available protocol.  Falls back to [`ImageProtocol::Iterm2`] because
+/// the iTerm2 inline image protocol is the most widely supported among
+/// modern terminal emulators.
+///
+/// # tmux caveat
+///
+/// Inside tmux, `KITTY_WINDOW_ID` can be *stale* (inherited from a previous
+/// Kitty session even though the terminal is now iTerm2).  To avoid misdetection,
+/// Kitty is only selected outside tmux.  iTerm2 detection uses `LC_TERMINAL`
+/// which tmux preserves correctly.
 pub fn detect_protocol() -> ImageProtocol {
     let term_program = env::var("TERM_PROGRAM").unwrap_or_default();
     let lc_terminal = env::var("LC_TERMINAL").unwrap_or_default();

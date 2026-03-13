@@ -1,3 +1,15 @@
+//! Web-based remote control UI.
+//!
+//! Contains the self-contained HTML/CSS/JavaScript for the remote control interface
+//! served to connected browsers. When a user opens `http://127.0.0.1:<port>` in a
+//! browser, the server returns this page. It establishes a WebSocket connection back
+//! to the server and provides a mobile-friendly UI for controlling the presentation
+//! (navigation, display toggles, theme switching, timer, and code execution).
+//!
+//! The HTML is stored as a compile-time `&str` constant. It dynamically adapts its
+//! color scheme to match the active presentation theme via CSS custom properties
+//! updated from the state broadcast.
+
 pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>

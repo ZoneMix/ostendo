@@ -1,3 +1,19 @@
+//! WebSocket server for remote presentation control.
+//!
+//! Listens on a configurable port (default 8765) and supports optional token-based
+//! authentication. The server handles two kinds of incoming TCP connections:
+//!
+//! 1. **Plain HTTP requests** — served the embedded remote control HTML page
+//!    (from [`super::html::REMOTE_HTML`]) with security headers.
+//! 2. **WebSocket upgrade requests** — upgraded to a persistent WebSocket
+//!    connection that carries JSON commands inbound and state broadcasts outbound.
+//!
+//! The server runs on a dedicated background thread with its own Tokio async
+//! runtime, so it does not block the main TUI render loop. Communication with the
+//! main thread uses two channels:
+//! - `mpsc::Receiver<RemoteCommand>` — commands flow from WebSocket clients to the presenter.
+//! - `broadcast::Sender<String>` — state JSON flows from the presenter to all clients.
+
 use std::sync::mpsc;
 use std::thread;
 
@@ -10,6 +26,10 @@ use tokio_tungstenite::tungstenite::Message;
 use super::html::REMOTE_HTML;
 use super::{RemoteCommand, RemoteCommandMsg};
 
+/// Entry point for launching the WebSocket remote control server.
+///
+/// This is a zero-sized struct used as a namespace — all functionality lives in
+/// the [`RemoteServer::start`] associated function.
 pub struct RemoteServer;
 
 impl RemoteServer {
@@ -44,6 +64,17 @@ impl RemoteServer {
     }
 }
 
+/// Handle a single incoming TCP connection.
+///
+/// Peeks at the first bytes of the request to decide whether it is a WebSocket
+/// upgrade or a plain HTTP GET. For WebSocket connections, it performs:
+/// 1. **Origin validation** — only allows `127.0.0.1`, `localhost`, or `file://` origins
+///    to prevent cross-site WebSocket hijacking (CSRF).
+/// 2. **Token authentication** — if a `--remote-token` was configured, checks for a
+///    matching `Authorization: Bearer <token>` header or `Sec-WebSocket-Protocol` value.
+/// 3. **WebSocket handshake** — upgrades the connection and enters the message loop.
+///
+/// For plain HTTP requests, it serves the remote control HTML page with security headers.
 async fn handle_connection(
     mut stream: tokio::net::TcpStream,
     cmd_tx: mpsc::Sender<RemoteCommand>,
@@ -134,6 +165,17 @@ async fn handle_connection(
     }
 }
 
+/// Run the bidirectional WebSocket message loop for a single client.
+///
+/// Spawns two async tasks:
+/// - **Broadcast forwarder**: Receives state updates from the `broadcast` channel
+///   and forwards them to the WebSocket sink.
+/// - **Sink writer**: Takes forwarded messages and writes them to the WebSocket.
+///
+/// The main body reads incoming WebSocket text messages, deserializes them as
+/// [`RemoteCommandMsg`], maps the action string to a [`RemoteCommand`] enum,
+/// and sends it to the presenter via the `mpsc` channel. Messages larger than
+/// 4 KiB are silently dropped to prevent memory exhaustion from malicious clients.
 async fn handle_websocket(
     ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     cmd_tx: mpsc::Sender<RemoteCommand>,

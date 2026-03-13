@@ -1,3 +1,28 @@
+//! Central orchestrator for the presentation engine.
+//!
+//! The `Presenter` struct owns all rendering state and manages the complete
+//! lifecycle from terminal setup through event processing to cleanup.
+//!
+//! # Architecture
+//!
+//! The engine is split across several submodules for maintainability:
+//!
+//! - **`rendering`** — The core `render_frame()` function that assembles slide
+//!   content into a virtual buffer and writes it to the terminal.
+//! - **`input`** — Event loop and keyboard/mouse/remote command handling.
+//! - **`content`** — Renderers for tables, columns, ASCII art titles, and code output.
+//! - **`ui`** — Status bar, help overlay, and overview grid mode.
+//! - **`font`** — Terminal font size control via Kitty/Ghostty protocols.
+//! - **`state`** — Toggle methods, scale adjustments, and theme persistence.
+//! - **`navigation`** — Slide movement, scrolling, and animation triggers.
+//!
+//! # Virtual Buffer Pattern
+//!
+//! Rendering never writes directly to the terminal mid-frame. Instead, each
+//! frame builds a `Vec<StyledLine>` in memory, then flushes everything to
+//! stdout inside a `BeginSynchronizedUpdate` / `EndSynchronizedUpdate` block.
+//! This prevents visible flicker even at high frame rates (30 fps for animations).
+
 use anyhow::Result;
 use crossterm::{
     cursor,
@@ -134,116 +159,320 @@ fn comment_prefix_for(lang: &str) -> &'static str {
     }
 }
 
+/// The current interaction mode of the presenter.
+///
+/// Ostendo is a modal application (similar to Vim). The mode determines
+/// which keys are active and what is drawn on screen. For example, in
+/// `Command` mode the bottom bar shows a `:` prompt, while `Overview`
+/// mode replaces the slide with a grid of slide titles.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Mode {
+    /// Default mode: slide content visible, navigation keys active.
     Normal,
+    /// Command-line input mode (`:theme dark`, `:goto 5`, etc.).
     Command,
+    /// Numeric goto-slide input mode (`g` then type a number).
     Goto,
+    /// Full-screen help overlay showing all keybindings and directives.
     Help,
+    /// Grid overview of all slides for quick navigation.
     Overview,
 }
 
 /// Cache key for rendered image data.
+///
+/// Images are expensive to render (especially ASCII art conversion and
+/// protocol encoding). This key uniquely identifies a rendered result so
+/// it can be reused across frames. The key includes the GIF frame index
+/// so each frame of an animated GIF gets its own cache entry.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct ImageCacheKey {
+    /// Filesystem path to the source image file.
     path: PathBuf,
+    /// Target width in terminal columns (changes with scale/resize).
     render_width: usize,
+    /// Numeric identifier for the image protocol (0=Kitty, 1=iTerm2, etc.).
     protocol: u8,
+    /// For animated GIFs, which frame this entry represents. Always 0 for static images.
     gif_frame_index: usize,
+    /// Optional hex color override from `<!-- image_color: #hex -->` directive.
     color_override: String,
 }
 
 /// Cached rendered image data.
+///
+/// There are two rendering paths depending on the terminal's image protocol:
+/// - **Lines**: ASCII/half-block art stored as styled text lines (works everywhere).
+/// - **Protocol**: Raw escape sequence data for Kitty/iTerm2/Sixel (placed after
+///   the text buffer is flushed, since protocol images overlay terminal cells).
 enum CachedImage {
+    /// ASCII or half-block art rendered as styled terminal text lines.
     Lines(Vec<StyledLine>),
+    /// Raw protocol escape data (Kitty/iTerm2/Sixel) plus the number of
+    /// terminal rows the image occupies (used for placeholder spacing).
     Protocol { escape_data: String, placeholder_height: usize },
 }
 
+/// The main presentation engine.
+///
+/// `Presenter` owns every piece of state needed to run a terminal-based
+/// slide show: the parsed slides, the current theme, image caches, animation
+/// state, font control, and the connection to the optional WebSocket remote.
+///
+/// # Lifecycle
+///
+/// 1. `Presenter::new()` — parses theme colors, detects terminal capabilities,
+///    preloads images, restores saved state from disk.
+/// 2. `Presenter::run()` — enters raw mode, switches to the alternate screen,
+///    runs `event_loop()`, then cleans up the terminal on exit.
+/// 3. Inside the event loop, `render_frame()` is called on every input event,
+///    animation tick, or timer update.
 pub struct Presenter {
+    // --- Slide Data ---
+
+    /// The parsed slide deck. Each `Slide` contains title, bullets, code blocks,
+    /// images, directives, and speaker notes.
     slides: Vec<Slide>,
+    /// Front-matter metadata (author, date, accent override, default alignment).
     meta: PresentationMeta,
+    /// The currently active theme (may differ from `base_theme` during light/dark toggling).
     theme: Theme,
+    /// Zero-based index of the currently displayed slide.
     current: usize,
+
+    // --- UI State ---
+
+    /// Current interaction mode (Normal, Command, Goto, Help, Overview).
     mode: Mode,
+    /// Text buffer for the `:command` input bar.
     command_buf: String,
+    /// Text buffer for the `g` + number goto input.
     goto_buf: String,
+    /// Whether the speaker notes panel is visible at the bottom.
     show_notes: bool,
+    /// Scroll offset within the notes panel (for long notes).
     notes_scroll: usize,
+    /// Whether the status bar is hidden (fullscreen mode).
     show_fullscreen: bool,
+    /// Whether the theme name badge is shown in the status bar.
     show_theme_name: bool,
+    /// Whether section labels are displayed above slide titles.
     show_sections: bool,
+    /// Vertical scroll offset within the current slide's content (in lines).
     scroll_offset: usize,
+    /// When `Some`, the presentation timer is running. The `Instant` marks
+    /// when the timer was started (elapsed = now - start).
     timer_start: Option<Instant>,
+
+    // --- Terminal Dimensions ---
+
+    /// Current terminal width in columns (updated on resize events).
     width: u16,
+    /// Current terminal height in rows (updated on resize events).
     height: u16,
+
+    // --- Code Execution ---
+
+    /// Syntax highlighter for code blocks (shared across all slides).
     highlighter: Highlighter,
+    /// Accumulated stdout/stderr from the most recent code execution.
     exec_output: Option<String>,
+    /// Channel receiver for streaming code execution output. `None` means
+    /// no execution is in progress. Receives `Some(line)` for output and
+    /// `None` when the process exits.
     exec_rx: Option<std::sync::mpsc::Receiver<Option<String>>>,
+    /// Index of the currently-executing code block within the slide
+    /// (Ctrl+E cycles through executable blocks).
     exec_block_index: usize,
+
+    // --- Persistence ---
+
+    /// JSON state manager for saving/restoring slide position, font offsets,
+    /// and theme selection across restarts.
     state: StateManager,
+
+    // --- Image Rendering ---
+
+    /// Detected (or CLI-overridden) terminal image protocol (Kitty, iTerm2, Sixel, ASCII).
     image_protocol: ImageProtocol,
+    /// Cache of rendered image data keyed by (path, width, protocol, frame).
+    /// Avoids re-rendering images on every frame.
     image_cache: HashMap<ImageCacheKey, CachedImage>,
+    /// Pre-loaded RGBA image data for all slide images (loaded at startup).
     preloaded_images: HashMap<PathBuf, image::RgbaImage>,
+    /// Decoded GIF frames for animated images. The `Arc` allows sharing with
+    /// background render threads without copying frame data.
     gif_frames: HashMap<PathBuf, std::sync::Arc<Vec<crate::image_util::GifFrame>>>,
+    /// Handle for the background thread that decodes GIF frames at startup.
+    /// `None` once decoding is complete or if no GIFs exist.
     gif_loading: Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>>,
     /// Receives pre-rendered GIF frame cache entries from background thread.
     gif_render_rx: Option<std::sync::mpsc::Receiver<(ImageCacheKey, CachedImage)>>,
+    /// Current frame index for animated GIF playback (wraps around).
     gif_current_frame: usize,
+    /// Timestamp of last GIF frame advance (used to honor per-frame delays).
     gif_last_advance: std::time::Instant,
+    /// Terminal dimensions in both columns/rows and pixels (needed for image scaling).
     window_size: WindowSize,
+
+    // --- Remote Control ---
+
+    /// Channel receiver for commands from the WebSocket remote control server.
+    /// `None` if remote control is not enabled.
     remote_rx: Option<std::sync::mpsc::Receiver<crate::remote::RemoteCommand>>,
+    /// Broadcast sender for pushing presentation state to connected WebSocket clients.
     state_broadcast: Option<tokio::sync::broadcast::Sender<String>>,
+
+    // --- Theme Colors ---
+    // These are resolved from the theme's hex strings at startup for fast access.
+
+    /// Background color for the slide area.
     bg_color: Color,
+    /// Accent color used for titles, bullets markers, borders, and highlights.
     accent_color: Color,
+    /// Primary text color for bullet content and body text.
     text_color: Color,
+    /// Background color for code blocks and the status bar timer section.
     code_bg_color: Color,
+
+    // --- Font & Scale ---
+
+    /// Per-slide font size offsets (slide index -> offset in 2pt steps).
+    /// Populated from markdown `<!-- font_size -->` directives and user `]`/`[` adjustments.
     slide_font_offsets: HashMap<usize, i8>,
+    /// Global content scale percentage (default 80). Controls the width of the
+    /// content area relative to the terminal width.
     global_scale: u8,
+    /// Background color for keybinding badges in the help overlay.
+    /// Computed to ensure contrast against the theme background.
     help_badge_bg: Color,
+    /// Detected terminal font control capability (Kitty RC, Ghostty keystroke, or None).
     font_capability: FontSizeCapability,
+    /// The terminal's original font size captured at startup, used to restore
+    /// on exit and as the base for per-slide offsets.
     original_font_size: Option<String>,
+
+    // --- Hot Reload ---
+
+    /// File watcher that polls the presentation file for changes every 500ms.
     file_watcher: Option<crate::watch::FileWatcher>,
+    /// Absolute path to the presentation markdown file (needed for reload and code execution).
     presentation_path: PathBuf,
+
+    // --- Theme Gradient ---
+
+    /// Starting color for the background gradient (top or left edge).
     gradient_from: Option<Color>,
+    /// Ending color for the background gradient (bottom or right edge).
     gradient_to: Option<Color>,
+    /// Whether the gradient runs vertically (true) or horizontally (false).
     gradient_vertical: bool,
+    /// Whether we are currently showing the light variant of the theme.
     is_light_variant: bool,
+
+    // --- Animations ---
+
+    /// The currently playing one-shot animation (slide transition or entrance effect).
+    /// `None` when no animation is active.
     active_animation: Option<crate::render::animation::AnimationState>,
+    /// Active looping animations for the current slide (e.g., sparkle, matrix, pulse).
+    /// Each entry is a (loop type, frame counter) pair.
     active_loop: Vec<(crate::render::animation::LoopAnimation, u64)>,
+    /// The last rendered virtual buffer. Kept so slide transitions can use the
+    /// previous frame as their "old" content for dissolve/fade effects.
     last_rendered_buffer: Vec<StyledLine>,
+
+    // --- Mermaid Diagrams ---
+
+    /// Optional Mermaid diagram renderer (requires `mmdc` CLI to be installed).
     mermaid_renderer: Option<crate::image_util::mermaid::MermaidRenderer>,
-    /// True when fullscreen was toggled by user (f key), not by a slide directive.
+
+    // --- Font Change Transition State ---
+
+    /// `Some(true/false)` when the user manually toggled fullscreen with `f`.
+    /// Used to distinguish user intent from per-slide `<!-- fullscreen -->` directives.
     user_fullscreen_override: Option<bool>,
-    // Font change deferred until inside BeginSynchronizedUpdate
+    /// Deferred font size target. Font changes happen at the start of `render_frame()`
+    /// before the synchronized update block, so this queues the change.
     pending_font_size: Option<f64>,
+    /// The last font size that was actually applied to the terminal (for delta calculations).
     last_applied_font_size: Option<f64>,
     /// True when font change was triggered by slide navigation (fade out old content).
     /// False when triggered by `]`/`[` interactive adjustment (no fade).
     font_change_is_slide_transition: bool,
-    /// OSC 66 text scaling capability (disabled pending rendering fix, but kept for detection)
+    /// OSC 66 text scaling capability (disabled pending rendering fix, but kept for detection).
     #[allow(dead_code)]
     text_scale_cap: TextScaleCapability,
     /// When true, the next render will dissolve-in the new content after flush.
+    /// This is set after a font-change dissolve-out completes.
     pending_dissolve_in: bool,
-    // Smart redraw tracking
+
+    // --- Smart Redraw Tracking ---
+    // These fields cache the state from the last `render_frame()` call.
+    // If nothing changed, only the status bar (timer) is redrawn, avoiding
+    // expensive image re-emission and full-screen repaints.
+
+    /// Slide index that was rendered last frame (or `None` on first render).
     last_rendered_slide: Option<usize>,
+    /// Scroll offset that was rendered last frame.
     last_rendered_scroll: usize,
+    /// Terminal width at last render.
     last_rendered_width: u16,
+    /// Terminal height at last render.
     last_rendered_height: u16,
+    /// Interaction mode at last render.
     last_rendered_mode: Mode,
+    /// Content scale at last render.
     last_rendered_scale: u8,
+    /// Image scale offset at last render.
     last_rendered_image_scale: i8,
+    /// GIF frame index at last render (triggers image refresh when it changes).
     last_rendered_gif_frame: usize,
+    /// Flag that forces a complete re-render on the next frame. Set by
+    /// animations, resize events, slide changes, and theme switches.
     needs_full_redraw: bool,
+
+    // --- Miscellaneous ---
+
+    /// Runtime image scale adjustment from `>` / `<` keys (-100 to +100).
     image_scale_offset: i8,
+    /// List of all available theme slugs (for remote control theme switching).
     theme_slugs: Vec<String>,
+    /// The original theme before any light/dark variant toggling.
     base_theme: Theme,
+    /// Whether code execution is allowed (`false` when `--no-exec` is passed).
     allow_exec: bool,
+    /// Whether remote-initiated code execution is allowed (`--remote-exec` flag).
     allow_remote_exec: bool,
+    /// Cached FIGlet font for rendering ASCII art titles. Loaded once at startup
+    /// from the bundled `slant.flf` font file.
     figfont: Option<figlet_rs::FIGfont>,
 }
 
 impl Presenter {
+    /// Create a new `Presenter` with the given slides, theme, and configuration.
+    ///
+    /// This performs the full initialization sequence:
+    /// 1. Resolves theme colors from hex strings.
+    /// 2. Applies front-matter accent color override (if present).
+    /// 3. Detects terminal capabilities: image protocol, font control, text scaling.
+    /// 4. Queries the terminal's current font size (for restore on exit).
+    /// 5. Restores saved state from disk (slide position, font offsets, theme).
+    /// 6. Pre-loads all slide images into memory (static images immediately, GIF
+    ///    frames in a background thread).
+    /// 7. Initializes the Mermaid renderer if any slide has mermaid blocks.
+    ///
+    /// # Parameters
+    ///
+    /// - `slides` — The parsed slide deck.
+    /// - `meta` — Front-matter metadata (author, date, accent, default alignment).
+    /// - `theme` — The initial theme to use.
+    /// - `start` — Starting slide index (0 = use saved state, >0 = override).
+    /// - `presentation_path` — Path to the markdown file (for hot reload and code execution).
+    /// - `image_mode` — CLI override for image protocol ("auto", "kitty", "iterm", "sixel", "ascii").
+    /// - `remote_channels` — Optional WebSocket remote control channels.
+    /// - `no_exec` — If true, disables all code execution.
+    /// - `remote_exec` — If true, allows remote-initiated code execution.
     pub fn new(
         slides: Vec<Slide>,
         meta: PresentationMeta,
@@ -458,15 +687,26 @@ impl Presenter {
         presenter
     }
 
+    /// Enable or disable fullscreen mode (hides the status bar).
     pub fn set_fullscreen(&mut self, fs: bool) { self.show_fullscreen = fs; }
+
+    /// Start the presentation timer from the current moment.
     pub fn start_timer(&mut self) { self.timer_start = Some(Instant::now()); }
+
+    /// Reset (stop) the presentation timer.
     fn reset_timer(&mut self) { self.timer_start = None; }
 
+    /// Set the default content scale percentage (e.g., 80 = content uses 80% of terminal width).
     pub fn set_default_scale(&mut self, scale: u8) {
         self.global_scale = scale;
     }
 
     /// Pre-render all slide images into the cache so navigation is instant.
+    ///
+    /// Iterates over every slide that has an image, computes the cache key
+    /// based on current dimensions and scale, and renders any images not
+    /// already in the cache. This is called once during `run()` before the
+    /// event loop starts.
     fn prerender_images(&mut self) {
         let tw = self.width as usize;
         let th = self.height as usize;
@@ -612,6 +852,24 @@ impl Presenter {
         });
     }
 
+    /// Run the presentation.
+    ///
+    /// This is the top-level entry point that manages the full terminal lifecycle:
+    ///
+    /// 1. Pre-renders all slide images into the cache.
+    /// 2. Applies initial font size and per-slide theme overrides.
+    /// 3. Enters terminal raw mode and switches to the alternate screen
+    ///    (Rust's `crossterm` library handles the low-level terminal setup).
+    /// 4. Sets the terminal background color via OSC 11 so font-change
+    ///    resizes don't flash black.
+    /// 5. Runs the event loop (`event_loop()`), which blocks until the user quits.
+    /// 6. On exit: restores original font size, leaves alternate screen,
+    ///    disables raw mode, and saves state to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if terminal setup/teardown fails or if an unrecoverable
+    /// I/O error occurs during rendering.
     pub fn run(&mut self) -> Result<()> {
         self.prerender_images();
         // Apply initial slide's font offset (if restored from saved state)
@@ -647,6 +905,14 @@ impl Presenter {
         result
     }
 
+    /// Execute the current slide's active code block.
+    ///
+    /// If a previous execution has completed, advances to the next executable
+    /// block (Ctrl+E cycles through blocks). Collects all executable code blocks
+    /// from both slide-level and column-level sources, prepends any preamble
+    /// code, then spawns a streaming execution process.
+    ///
+    /// Does nothing if `--no-exec` was passed or if the slide has no executable blocks.
     fn execute_code(&mut self) -> Result<()> {
         if !self.allow_exec {
             return Ok(());
@@ -695,6 +961,12 @@ impl Presenter {
         Ok(())
     }
 
+    /// Poll for streaming code execution output.
+    ///
+    /// Drains all available lines from `exec_rx` into `exec_output`.
+    /// Returns `true` if any output was received (signals a needed redraw).
+    /// When the channel sends `None`, execution is complete and the receiver
+    /// is dropped.
     fn poll_exec_output(&mut self) -> bool {
         let mut got_output = false;
         if let Some(ref rx) = self.exec_rx {
@@ -752,6 +1024,11 @@ impl Presenter {
         }
     }
 
+    /// Write a single styled line to the terminal output buffer using the default background.
+    ///
+    /// Delegates to `queue_styled_line_with_bg` with the theme's background color.
+    /// Each `StyledSpan` in the line is rendered with its own foreground, background,
+    /// and text attributes (bold, italic, dim, etc.).
     fn queue_styled_line(&self, w: &mut impl Write, line: &StyledLine, term_width: usize) -> Result<()> {
         self.queue_styled_line_with_bg(w, line, term_width, self.bg_color)
     }
@@ -843,6 +1120,8 @@ impl Presenter {
     }
 }
 
+/// Truncate a string to at most `max` characters, adding "..." if truncated.
+/// Used for labels in the overview grid and status bar where space is limited.
 fn truncate_str(s: &str, max: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max {
@@ -855,8 +1134,11 @@ fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
-/// Truncate a string to fit within `max_cols` display columns.
-/// Write text, wrapping with OSC 66 when `scale >= 2`.
+/// Write text to the output buffer, applying OSC 66 text scaling when `scale >= 2`.
+///
+/// OSC 66 is a Kitty-specific escape sequence that tells the terminal to
+/// render text at a larger size (2x, 3x, etc.) within a single cell span.
+/// When scale is 1 (or 0), the text is written directly without any escape.
 fn write_span_text(w: &mut impl Write, scale: u8, text: &str) -> Result<()> {
     if scale >= 2 {
         write!(w, "\x1b]66;s={};{}\x07", scale, text)?;
@@ -866,6 +1148,11 @@ fn write_span_text(w: &mut impl Write, scale: u8, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Truncate a string to fit within `max_cols` display columns.
+///
+/// Uses Unicode character widths (not byte count) so that wide characters
+/// (CJK, emoji) are measured correctly. For example, a full-width character
+/// counts as 2 columns.
 fn truncate_to_width(s: &str, max_cols: usize) -> String {
     use unicode_width::UnicodeWidthChar;
     let mut result = String::new();
@@ -881,6 +1168,10 @@ fn truncate_to_width(s: &str, max_cols: usize) -> String {
     result
 }
 
+/// Simple word-wrapping: splits text at word boundaries to fit within `width` display columns.
+///
+/// Words that exceed the width on their own are placed on a single line without
+/// breaking mid-word. Returns a `Vec<String>` where each entry is one wrapped line.
 fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
     if width == 0 || text.is_empty() {
         return vec![text.to_string()];

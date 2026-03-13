@@ -1,3 +1,22 @@
+//! Image loading and protocol detection.
+//!
+//! Handles PNG, JPG, GIF, BMP, WEBP, and SVG image formats.  Static images are
+//! loaded into an `RgbaImage` (from the `image` crate) which downstream code can
+//! then render using the appropriate terminal protocol.
+//!
+//! Animated GIFs receive special treatment: all frames are decoded eagerly in
+//! [`load_gif_frames`] and downscaled to a maximum of 800 px on the longest side
+//! to keep memory usage reasonable (a 60-frame 1080p GIF would otherwise consume
+//! hundreds of megabytes of uncompressed pixel data).
+//!
+//! SVG files are rasterized at 2x scale (capped at 2048 px) using the `resvg`
+//! library, which provides high-quality rendering without an external tool.
+//!
+//! # Submodules
+//!
+//! - [`render`] -- protocol-specific image rendering (Kitty, iTerm2, Sixel, ASCII)
+//! - [`mermaid`] -- Mermaid diagram rendering via external `mmdc` CLI
+
 pub mod render;
 pub mod mermaid;
 
@@ -7,13 +26,24 @@ use std::path::Path;
 
 use crate::render::layout::WindowSize;
 
-/// A decoded GIF frame with its delay in milliseconds.
+/// A single decoded frame from an animated GIF.
+///
+/// The rendering engine cycles through these frames on a timer, re-emitting the
+/// image escape sequence for each frame to produce animation in the terminal.
 #[derive(Clone)]
 pub struct GifFrame {
+    /// The RGBA pixel data for this frame (already downscaled if needed).
     pub image: RgbaImage,
+    /// How long this frame should be displayed before advancing, in milliseconds.
+    /// The GIF spec uses centisecond precision; a value of 0 defaults to 100 ms.
     pub delay_ms: u32,
 }
 
+/// Load a static image from disk and convert it to RGBA pixel format.
+///
+/// Supports all formats handled by the `image` crate (PNG, JPG, BMP, WEBP, GIF,
+/// etc.) plus SVG via `resvg`.  The returned `RgbaImage` is ready for protocol
+/// rendering or ASCII art conversion.
 pub fn load_image(path: &Path) -> Result<RgbaImage> {
     let ext = path.extension()
         .and_then(|e| e.to_str())
@@ -75,6 +105,12 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
     Some(gif_frames)
 }
 
+/// Rasterize an SVG file to an RGBA image using the `resvg` library.
+///
+/// Renders at 2x the SVG's native size (capped at 2048 px on the longest side)
+/// for crisp display on high-DPI terminals.  The `resvg` library uses
+/// premultiplied alpha internally, so pixel values are un-premultiplied before
+/// returning.
 fn load_svg(path: &Path) -> Result<RgbaImage> {
     let tree = resvg::usvg::Tree::from_data(
         &std::fs::read(path)?,
@@ -114,8 +150,20 @@ fn load_svg(path: &Path) -> Result<RgbaImage> {
     Ok(img)
 }
 
-/// Scale image using pixel dimensions for protocol images (Kitty/iTerm2/Sixel).
-/// Returns (scaled_image, columns, rows) where columns/rows are terminal cell counts.
+/// Scale an image using pixel-accurate dimensions for protocol rendering.
+///
+/// Uses the terminal's pixel-per-cell ratios (from [`WindowSize`]) to compute
+/// the exact pixel size the image should be, then resizes it with Lanczos3
+/// filtering for high quality.
+///
+/// A 5% horizontal margin is reserved so images do not touch the window edge.
+///
+/// # Returns
+///
+/// A tuple of `(scaled_image, columns, rows)` where `columns` and `rows` are
+/// the number of terminal cells the image will occupy.  The rendering code uses
+/// these to emit the correct escape sequence parameters and to reserve
+/// placeholder lines in the virtual buffer.
 pub fn scale_image_pixels(
     img: &RgbaImage,
     window: &WindowSize,

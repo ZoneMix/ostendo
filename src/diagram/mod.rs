@@ -1,3 +1,17 @@
+//! Adaptive ASCII diagram rendering.
+//!
+//! Supports box, bracket, and vertical layout styles with automatic fallback
+//! for narrow terminals. When the requested style produces output wider than the
+//! terminal, the renderer progressively tries more compact styles:
+//! `Box` -> `Bracket` -> `Vertical`. If even `Vertical` overflows, node labels
+//! are truncated with an ellipsis to fit.
+//!
+//! # Submodules
+//! - [`parser`] — Parses the `diagram` code block DSL (`A -> B -> C`) into a [`DiagramGraph`].
+//! - [`render_box`] — Box-style rendering with Unicode box-drawing characters (`+--+`).
+//! - [`render_bracket`] — Bracket-style rendering with `[Node]` notation.
+//! - [`render_vertical`] — Most compact style, one row per path with arrow separators.
+
 pub mod parser;
 pub mod render_box;
 pub mod render_bracket;

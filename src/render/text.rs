@@ -1,24 +1,69 @@
+//! Virtual buffer system for terminal rendering.
+//!
+//! [`StyledLine`] and [`StyledSpan`] represent formatted text in memory before it is
+//! written to the terminal.  This separation allows the rendering engine to build
+//! complete frames in memory and write them atomically -- preventing flicker and
+//! enabling features like word wrapping, padding, and animation without touching
+//! the terminal until the frame is ready.
+//!
+//! # Key types
+//!
+//! - [`StyledSpan`] -- a single run of text with uniform formatting (color, bold, etc.)
+//! - [`StyledLine`] -- a row of one or more spans, plus metadata like content type
+//! - [`LineContentType`] -- tag that tells animations which lines to target
+//!
+//! # Typical flow
+//!
+//! 1. The parser converts Markdown into slides.
+//! 2. The renderer builds `Vec<StyledLine>` for each slide.
+//! 3. Wrapping and padding helpers adjust lines to fit the terminal width.
+//! 4. The engine writes the final lines to stdout inside a synchronized update block.
+
 use crossterm::style::Color;
 use unicode_width::UnicodeWidthStr;
 
+/// A contiguous run of text that shares the same visual formatting.
+///
+/// Think of it like a `<span>` in HTML: it holds a piece of text plus style
+/// attributes (foreground color, bold, italic, etc.).  Multiple `StyledSpan`s
+/// are combined into a [`StyledLine`] to represent a full row of output.
+///
+/// # Builder pattern
+///
+/// `StyledSpan` uses the *builder pattern* (common in Rust) where each method
+/// consumes `self` and returns a modified copy.  This lets you chain calls:
+///
+/// ```ignore
+/// StyledSpan::new("hello").with_fg(Color::Red).bold().italic()
+/// ```
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct StyledSpan {
+    /// The raw text content of this span (no ANSI codes -- styling is applied at render time).
     pub text: String,
+    /// Foreground (text) color.  `None` means use the terminal's default.
     pub fg: Option<Color>,
+    /// Background color.  `None` means use the terminal's default.
     pub bg: Option<Color>,
+    /// Whether the text is rendered in bold weight.
     pub bold: bool,
+    /// Whether the text is rendered in italic style.
     pub italic: bool,
+    /// Whether the text is rendered with reduced brightness.
     pub dim: bool,
+    /// Whether the text is rendered with a horizontal line through the middle.
     pub strikethrough: bool,
+    /// Whether the text is rendered with an underline.
     pub underline: bool,
     /// OSC 66 text scale (0 = normal, 2-7 = scaled). Only effective when
     /// the terminal supports TextScaleCapability::Osc66.
+    /// Kitty terminal only -- other terminals ignore this field.
     pub text_scale: u8,
 }
 
 #[allow(dead_code)]
 impl StyledSpan {
+    /// Create a new span with the given text and no styling applied.
     pub fn new(text: &str) -> Self {
         Self {
             text: text.to_string(),
@@ -33,46 +78,60 @@ impl StyledSpan {
         }
     }
 
+    /// Set the foreground (text) color.  Builder method -- returns `self` for chaining.
     pub fn with_fg(mut self, color: Color) -> Self {
         self.fg = Some(color);
         self
     }
 
+    /// Set the background color.  Builder method -- returns `self` for chaining.
     pub fn with_bg(mut self, color: Color) -> Self {
         self.bg = Some(color);
         self
     }
 
+    /// Enable bold weight.  Builder method -- returns `self` for chaining.
     pub fn bold(mut self) -> Self {
         self.bold = true;
         self
     }
 
+    /// Enable italic style.  Builder method -- returns `self` for chaining.
     pub fn italic(mut self) -> Self {
         self.italic = true;
         self
     }
 
+    /// Enable dim (reduced brightness).  Builder method -- returns `self` for chaining.
     pub fn dim(mut self) -> Self {
         self.dim = true;
         self
     }
 
+    /// Enable strikethrough decoration.  Builder method -- returns `self` for chaining.
     pub fn strikethrough(mut self) -> Self {
         self.strikethrough = true;
         self
     }
 
+    /// Enable underline decoration.  Builder method -- returns `self` for chaining.
     pub fn underline(mut self) -> Self {
         self.underline = true;
         self
     }
 
+    /// Set the OSC 66 text scale factor (Kitty terminal only).
+    /// Values 2-7 enlarge the text; 0 or 1 means normal size.
     pub fn text_scale(mut self, scale: u8) -> Self {
         self.text_scale = scale;
         self
     }
 
+    /// Calculate the display width of this span in terminal columns.
+    ///
+    /// Uses Unicode width rules (e.g. CJK characters count as 2 columns).
+    /// If OSC 66 text scaling is active (scale >= 2), the width is multiplied
+    /// by the scale factor because each character occupies more columns.
     pub fn width(&self) -> usize {
         let base = UnicodeWidthStr::width(self.text.as_str());
         if self.text_scale >= 2 {
@@ -92,20 +151,37 @@ impl StyledSpan {
     }
 }
 
+/// Tag indicating what kind of content a [`StyledLine`] represents.
+///
+/// The animation system uses this to apply effects selectively.  For example,
+/// `sparkle(figlet)` only targets lines tagged as [`FigletTitle`], leaving
+/// code blocks and regular text untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[allow(dead_code)]
 pub enum LineContentType {
+    /// Normal body text, bullet points, blockquotes, etc.
     #[default]
     Text,
+    /// Large ASCII art title rendered with the FIGlet library.
     FigletTitle,
+    /// Image rendered as colored ASCII characters (fallback mode).
     AsciiImage,
+    /// Syntax-highlighted code block.
     CodeBlock,
+    /// Mermaid or other diagram rendered as ASCII.
     Diagram,
+    /// Empty spacing line used for vertical alignment or scaled-text placeholders.
     Padding,
 }
 
+/// A single row of terminal output, composed of one or more [`StyledSpan`]s.
+///
+/// This is the main unit of the virtual buffer.  The rendering engine builds a
+/// `Vec<StyledLine>` for each slide, then writes the whole vector to stdout in
+/// one pass.
 #[derive(Debug, Clone)]
 pub struct StyledLine {
+    /// The formatted text segments that make up this line, rendered left to right.
     pub spans: Vec<StyledSpan>,
     /// When true, this line is a placeholder row for a scaled multicell block
     /// above it and should be skipped during terminal output (not overwritten).
@@ -116,10 +192,12 @@ pub struct StyledLine {
 
 #[allow(dead_code)]
 impl StyledLine {
+    /// Create a blank line with no spans (renders as an empty row).
     pub fn empty() -> Self {
         Self { spans: Vec::new(), is_scale_placeholder: false, content_type: LineContentType::default() }
     }
 
+    /// Create a line containing a single unstyled text span.
     pub fn plain(text: &str) -> Self {
         Self {
             spans: vec![StyledSpan::new(text)],
@@ -128,6 +206,7 @@ impl StyledLine {
         }
     }
 
+    /// Create a line containing a single span with the given foreground color.
     pub fn styled(text: &str, fg: Color) -> Self {
         Self {
             spans: vec![StyledSpan::new(text).with_fg(fg)],
@@ -141,6 +220,7 @@ impl StyledLine {
         Self { spans: Vec::new(), is_scale_placeholder: true, content_type: LineContentType::Padding }
     }
 
+    /// Total display width of this line in terminal columns (sum of all span widths).
     pub fn width(&self) -> usize {
         self.spans.iter().map(|s| s.width()).sum()
     }
@@ -150,12 +230,26 @@ impl StyledLine {
         self.spans.iter().map(|s| s.height()).max().unwrap_or(1)
     }
 
+    /// Append a span to the end of this line.
     pub fn push(&mut self, span: StyledSpan) {
         self.spans.push(span);
     }
 }
 
-/// Wrap a styled line into multiple lines that fit within `max_width`.
+/// Word-wrap a slice of styled lines so every line fits within `max_width` columns.
+///
+/// Lines that already fit (or contain OSC 66 scaled spans) are passed through
+/// unchanged.  Long lines are split at word boundaries, inheriting the style of
+/// the first span in the original line.
+///
+/// # Parameters
+///
+/// - `lines` -- the input lines to wrap.
+/// - `max_width` -- the maximum allowed width in terminal columns.
+///
+/// # Returns
+///
+/// A new `Vec<StyledLine>` where every entry is at most `max_width` columns wide.
 #[allow(dead_code)]
 pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLine> {
     let mut result = Vec::new();
@@ -212,7 +306,14 @@ pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLi
     result
 }
 
-/// Pad or truncate a line to exactly `width` characters.
+/// Pad or truncate a line to exactly `width` terminal columns.
+///
+/// - If the line is shorter than `width`, spaces are appended.
+/// - If the line is longer, spans are truncated character-by-character.
+/// - If the line is already the right width, it is cloned unchanged.
+///
+/// This is used to produce fixed-width rows so the terminal background fills
+/// the entire window evenly (important for gradient themes).
 #[allow(dead_code)]
 pub fn pad_line(line: &StyledLine, width: usize) -> StyledLine {
     let current = line.width();

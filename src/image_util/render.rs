@@ -1,3 +1,29 @@
+//! Protocol-specific image rendering for terminal display.
+//!
+//! Supports four image protocols, each with different encoding and escape
+//! sequence requirements:
+//!
+//! - **Kitty Graphics Protocol** (native) -- PNG data sent via chunked APC
+//!   escape sequences.  Best quality and performance; supports Kitty and Ghostty.
+//! - **iTerm2 Inline Images** -- base64-encoded PNG wrapped in an OSC 1337
+//!   escape.  Supported by iTerm2, WezTerm, and many modern terminals.
+//! - **Sixel** (VT340 legacy) -- a bitmap encoding from the 1980s DEC terminals,
+//!   still supported by xterm, mlterm, and others.  Uses the `icy_sixel` crate.
+//! - **ASCII Art Fallback** -- converts the image to colored Unicode half-block
+//!   characters.  Works in any terminal but at much lower resolution.
+//!
+//! # tmux passthrough
+//!
+//! When running inside tmux, escape sequences destined for the outer terminal
+//! must be wrapped in DCS passthrough (`\ePtmux;...\e\\`).  The [`tmux_wrap`]
+//! helper handles this transparently.
+//!
+//! # Alpha compositing
+//!
+//! Images with transparency are composited onto the current theme's background
+//! color before encoding, because most terminal image protocols do not support
+//! alpha channels natively.
+
 use base64::Engine;
 use crossterm::style::Color;
 use std::io::Cursor;
@@ -7,13 +33,19 @@ use crate::render::layout::WindowSize;
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 use crate::terminal::protocols::ImageProtocol;
 
-/// Check if we're running inside tmux.
+/// Check if we are running inside tmux by looking for the `TMUX` env var.
 fn in_tmux() -> bool {
     std::env::var("TMUX").is_ok()
 }
 
-/// Wrap an escape sequence for tmux passthrough.
-/// Inside tmux, escape sequences to the outer terminal need DCS wrapping.
+/// Wrap an escape sequence for tmux DCS passthrough.
+///
+/// Inside tmux, escape sequences intended for the *outer* terminal (e.g.
+/// Kitty graphics or iTerm2 inline images) must be wrapped in a DCS
+/// passthrough envelope.  All embedded `\x1b` bytes are doubled so tmux
+/// does not interpret them.
+///
+/// Outside tmux this is a no-op -- the escape is returned unchanged.
 fn tmux_wrap(escape: &str) -> String {
     if !in_tmux() {
         return escape.to_string();
@@ -23,8 +55,13 @@ fn tmux_wrap(escape: &str) -> String {
     format!("\x1bPtmux;{}\x1b\\", doubled)
 }
 
-/// Composite an RGBA image onto a solid background color, producing an opaque result.
-/// This ensures protocol images (Kitty/iTerm2/Sixel) blend with the theme background.
+/// Composite an RGBA image onto a solid background color, producing a fully
+/// opaque result (alpha = 255 for every pixel).
+///
+/// This is necessary because Kitty, iTerm2, and Sixel protocols render
+/// transparent pixels as black (or undefined) rather than blending with the
+/// terminal background.  By pre-compositing, images seamlessly match the
+/// current theme's background color.
 fn composite_on_bg(img: &image::RgbaImage, bg_color: Color) -> image::RgbaImage {
     let (bg_r, bg_g, bg_b) = match bg_color {
         Color::Rgb { r, g, b } => (r, g, b),
@@ -43,11 +80,21 @@ fn composite_on_bg(img: &image::RgbaImage, bg_color: Color) -> image::RgbaImage 
 }
 
 /// Result of rendering a slide image.
+///
+/// The two variants reflect a fundamental difference in how image data reaches
+/// the terminal:
+///
+/// - **Lines** -- ASCII art rows that are mixed into the normal virtual buffer
+///   and written character-by-character like any other styled text.
+/// - **Protocol** -- a raw escape sequence blob that is written to stdout
+///   *after* the text frame has been flushed, because protocol images bypass
+///   the character grid entirely.
 pub enum RenderedImage {
-    /// Styled lines for ascii (can be mixed into the line buffer).
+    /// Styled lines for ASCII art rendering (mixed into the virtual line buffer).
     Lines(Vec<StyledLine>),
-    /// Protocol escape data to write directly to stdout after frame flush.
-    /// Includes placeholder height (number of blank lines to reserve in the buffer).
+    /// Raw escape sequence data to write directly to stdout after the text frame.
+    /// `placeholder_height` is the number of blank lines to reserve in the virtual
+    /// buffer so subsequent content is positioned below the image.
     Protocol {
         escape_data: String,
         placeholder_height: usize,
@@ -116,6 +163,11 @@ pub fn render_slide_image(
     }
 }
 
+/// Render an image as colored ASCII art using Unicode half-block characters.
+///
+/// This is the universal fallback that works in every terminal.  Each output
+/// row represents two pixel rows (upper half-block + background color), so
+/// the effective vertical resolution is doubled compared to simple character art.
 fn render_ascii(
     img: &image::RgbaImage,
     display_width: usize,
@@ -158,6 +210,11 @@ fn render_ascii(
     RenderedImage::Lines(lines)
 }
 
+/// Render an image using the Kitty Graphics Protocol.
+///
+/// The image is PNG-encoded, base64-encoded, and split into 4096-byte chunks
+/// (following the protocol spec).  Each chunk is sent as an APC escape sequence.
+/// The first chunk includes metadata (format, columns, rows, display mode).
 fn render_kitty(
     img: &image::RgbaImage,
     display_width: usize,
@@ -219,6 +276,11 @@ fn render_kitty(
     }
 }
 
+/// Render an image using the iTerm2 inline image protocol (OSC 1337).
+///
+/// The image is PNG-encoded and sent as a single base64-encoded blob inside
+/// an OSC 1337 escape sequence.  The terminal is told the desired column/row
+/// dimensions and handles scaling internally.
 fn render_iterm2(
     img: &image::RgbaImage,
     display_width: usize,
@@ -264,6 +326,11 @@ fn render_iterm2(
     }
 }
 
+/// Render an image using the Sixel graphics format (DEC VT340 protocol).
+///
+/// The image is converted to RGB bytes and encoded using the `icy_sixel` crate
+/// with Stucki dithering for the best visual quality within Sixel's 256-color
+/// palette limitation.
 fn render_sixel(
     img: &image::RgbaImage,
     display_width: usize,

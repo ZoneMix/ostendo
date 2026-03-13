@@ -1,8 +1,24 @@
+//! PDF export via headless browser.
+//!
+//! Converts the HTML export to PDF using headless Chrome (preferred) or
+//! `wkhtmltopdf` as a fallback. The workflow is:
+//! 1. The caller first generates a temporary HTML file via [`super::html::export_html`].
+//! 2. This module's [`export_pdf`] function detects an available converter and
+//!    shells out to it, producing the final PDF file.
+//! 3. The caller cleans up the temporary HTML file.
+//!
+//! Neither Chrome nor `wkhtmltopdf` is bundled — they must be installed on the
+//! system. If neither is found, a clear error message is returned.
+
 use anyhow::{bail, Result};
 use std::path::Path;
 use std::process::Command;
 
-/// Detect available PDF converter: headless Chrome/Chromium or wkhtmltopdf.
+/// Detect an available PDF converter installed on the system.
+///
+/// Checks for Chrome/Chromium first (multiple binary names including the macOS
+/// app bundle path), then falls back to `wkhtmltopdf`. Returns the command name
+/// or path of the first converter found, or `None` if nothing is available.
 pub fn detect_pdf_converter() -> Option<&'static str> {
     // Check for Chrome/Chromium
     let chrome_names = [
@@ -77,6 +93,10 @@ pub fn export_pdf(html_path: &Path, pdf_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Check whether a command exists on the system PATH (or at an absolute path).
+///
+/// For absolute paths (like the macOS Chrome bundle), checks if the file exists
+/// directly. For simple command names, shells out to `which` to search the PATH.
 fn which_exists(cmd: &str) -> bool {
     // Handle absolute paths (for macOS Chrome)
     if cmd.starts_with('/') {

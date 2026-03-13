@@ -1,3 +1,33 @@
+//! Terminal font size control protocols.
+//!
+//! Supports Kitty terminal's remote control protocol for per-slide font sizing,
+//! and Ghostty's keystroke injection via AppleScript on macOS.
+//!
+//! # How Font Sizing Works
+//!
+//! Each slide can have a font size directive (`<!-- font_size: 3 -->`). The
+//! presenter stores a per-slide font offset and computes the target font size
+//! as `original_font_size + (offset * 2pt)`. The offset can also be adjusted
+//! interactively with `]` (increase) and `[` (decrease).
+//!
+//! # Kitty Protocol
+//!
+//! Font changes use Kitty's remote control protocol via escape sequences:
+//! `\x1bP@kitty-cmd{JSON}\x1b\\`. The `no_response: true` flag prevents
+//! Kitty from sending response bytes that would confuse crossterm's input parser.
+//!
+//! # Ghostty Protocol
+//!
+//! Since Ghostty doesn't expose a remote control API, font size is changed by
+//! simulating Cmd+= and Cmd+- keystrokes via macOS AppleScript. This is slower
+//! than Kitty's direct protocol but functional.
+//!
+//! # Font Restoration
+//!
+//! The original font size is queried at startup (via `kitten @ get-font-size`
+//! for Kitty, or config file parsing for Ghostty) and restored on exit via
+//! `reset_font_size()`.
+
 use super::*;
 
 impl Presenter {
@@ -157,6 +187,11 @@ end tell"#,
     }
 
     /// Set the terminal's default background color via OSC 11.
+    ///
+    /// OSC 11 is a standard terminal escape sequence that changes the terminal's
+    /// default background. This is used so that when Kitty resizes cells during
+    /// font changes, the newly created cells inherit the theme background color
+    /// instead of flashing black.
     pub(crate) fn set_terminal_bg(color: Color) {
         if let Color::Rgb { r, g, b } = color {
             let esc = format!("\x1b]11;rgb:{:02x}/{:02x}/{:02x}\x1b\\", r, g, b);
@@ -173,6 +208,12 @@ end tell"#,
     }
 
     /// Compute the font size for the current slide and store it as pending.
+    ///
+    /// The font size is computed as: `original_font_size + (offset * 2.0)`.
+    /// The change is deferred by storing it in `pending_font_size` rather than
+    /// applying immediately. The actual font change happens at the beginning
+    /// of the next `render_frame()` call, where the terminal can be properly
+    /// queried for new dimensions after the resize.
     pub(crate) fn apply_slide_font(&mut self) {
         if !self.font_capability.is_available() {
             return;

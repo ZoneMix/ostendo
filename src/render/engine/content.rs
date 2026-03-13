@@ -1,6 +1,31 @@
+//! Content element renderers for tables, columns, ASCII art titles, code
+//! execution output, and decorated titles.
+//!
+//! Each function in this module appends styled lines to a `Vec<StyledLine>`
+//! buffer. They are called by `render_frame()` in `rendering.rs` during the
+//! content assembly phase.
+//!
+//! # Rendering Pattern
+//!
+//! All renderers follow the same pattern:
+//! 1. Accept a reference to `self` (for theme colors, highlighter, etc.).
+//! 2. Accept `pad` — a string of spaces for the left margin (content centering).
+//! 3. Accept `lines` — the mutable output buffer to append to.
+//! 4. Build `StyledLine` objects from `StyledSpan` parts and push them.
+
 use super::*;
 
 impl Presenter {
+    /// Render the output of the most recent code execution.
+    ///
+    /// Displays an "Output:" header in accent color followed by the captured
+    /// stdout/stderr. Long lines are word-wrapped to fit within the content area.
+    /// If no execution output exists (`exec_output` is `None`), this is a no-op.
+    ///
+    /// # Parameters
+    ///
+    /// - `pad` — Left margin spaces for centering content within the terminal.
+    /// - `lines` — The virtual buffer to append output lines to.
     pub(crate) fn render_exec_output(&self, pad: &str, lines: &mut Vec<StyledLine>) {
         if let Some(ref output) = self.exec_output {
             let prefix_width = pad.len() + 2; // pad + "  "
@@ -43,6 +68,18 @@ impl Presenter {
         }
     }
 
+    /// Render a slide title as large ASCII art using the FIGlet font.
+    ///
+    /// The rendering attempts three strategies in order:
+    /// 1. Render the full title as one FIGlet block — used if it fits within
+    ///    the content width.
+    /// 2. Split into words and render each word as a separate FIGlet block —
+    ///    used when the full title is too wide but individual words fit.
+    /// 3. Fall back to a plain bold title — used when even individual words
+    ///    are too wide for FIGlet rendering.
+    ///
+    /// Each FIGlet line is tagged with `LineContentType::FigletTitle` so that
+    /// targeted loop animations like `sparkle(figlet)` can identify them.
     pub(crate) fn render_ascii_title(&self, title: &str, pad: &str, lines: &mut Vec<StyledLine>) {
         let fig = match self.figfont.as_ref() {
             Some(f) => f,
@@ -112,6 +149,23 @@ impl Presenter {
         lines.push(line);
     }
 
+    /// Render a slide title with a decorative style.
+    ///
+    /// Supports four decoration modes (set via `<!-- title_decoration: ... -->`
+    /// or in the theme YAML):
+    ///
+    /// - `"underline"` — Title text followed by a line of `─` characters.
+    /// - `"box"` — Title enclosed in a Unicode box-drawing border (`┌─┐│└─┘`).
+    /// - `"banner"` — Full-width inverted bar (accent background, bg foreground).
+    /// - `"none"` or unrecognized — Plain bold title (same as no decoration).
+    ///
+    /// # Parameters
+    ///
+    /// - `title` — The title text to render.
+    /// - `decoration` — The decoration style name.
+    /// - `content_width` — Available width in columns (for banner full-width).
+    /// - `pad` — Left margin spaces.
+    /// - `lines` — Output buffer.
     pub(crate) fn render_title_decorated(
         &self,
         title: &str,
@@ -165,6 +219,24 @@ impl Presenter {
         }
     }
 
+    /// Render a markdown table with Unicode box-drawing borders.
+    ///
+    /// Builds a bordered table with:
+    /// - Top border: `┌───┬───┐`
+    /// - Header row: `│ Name │ Value │` (bold accent)
+    /// - Separator:  `├───┼───┤`
+    /// - Data rows:  `│ data │ data  │` (text color)
+    /// - Bottom:     `└───┴───┘`
+    ///
+    /// Column widths are auto-calculated from content. Each column respects
+    /// the alignment specified in the markdown separator row (`:---`, `:---:`, `---:`).
+    ///
+    /// # Parameters
+    ///
+    /// - `table` — The parsed table data (headers, rows, alignments).
+    /// - `content_width` — Maximum available width for the table.
+    /// - `pad` — Left margin spaces.
+    /// - `lines` — Output buffer.
     pub(crate) fn render_table(
         &self,
         table: &crate::presentation::Table,
@@ -276,6 +348,26 @@ impl Presenter {
         lines.push(bl);
     }
 
+    /// Render a multi-column layout with side-by-side content.
+    ///
+    /// Columns are defined by ratio (e.g., `[1, 1]` for equal halves, `[2, 1]`
+    /// for 2/3 + 1/3). Each column can contain bullets and code blocks.
+    ///
+    /// The rendering process:
+    /// 1. Calculate column widths from ratios and available space.
+    /// 2. Render each column's content independently into row vectors.
+    /// 3. Merge columns side-by-side, padding shorter columns with empty rows.
+    /// 4. Columns are separated by a dimmed `│` character.
+    ///
+    /// Code blocks within columns are syntax-highlighted and soft-wrapped to
+    /// fit the column width (unlike slide-level code blocks which truncate).
+    ///
+    /// # Parameters
+    ///
+    /// - `cols` — The parsed column layout (ratios and per-column content).
+    /// - `content_width` — Total available width for all columns combined.
+    /// - `pad` — Left margin spaces.
+    /// - `lines` — Output buffer.
     pub(crate) fn render_columns(
         &self,
         cols: &crate::presentation::ColumnLayout,

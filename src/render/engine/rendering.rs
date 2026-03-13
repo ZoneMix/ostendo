@@ -1,9 +1,44 @@
+//! Frame rendering pipeline.
+//!
+//! Contains the core `render_frame()` function that assembles slide content
+//! into a virtual buffer and writes it to the terminal, plus the optimized
+//! `render_status_bar_only()` for timer-only updates.
+//!
+//! # How `render_frame()` works
+//!
+//! 1. **Font change handling** — If a font size change is pending, apply it
+//!    before rendering (optionally with a scatter-dissolve transition).
+//! 2. **Mode dispatch** — Help and Overview modes have their own dedicated
+//!    renderers and return early.
+//! 3. **Smart redraw check** — If nothing changed since the last frame, only
+//!    the status bar is redrawn (avoids expensive image re-emission).
+//! 4. **Content assembly** — Builds a `Vec<StyledLine>` virtual buffer from
+//!    the slide's section label, title, subtitle, bullets, code blocks,
+//!    tables, block quotes, columns, images, and diagrams.
+//! 5. **Alignment** — Applies vertical and horizontal centering if requested.
+//! 6. **Animation overlays** — Applies transition, entrance, or loop animations
+//!    to the buffer.
+//! 7. **Viewport calculation** — Clamps scroll offset, determines visible lines.
+//! 8. **Terminal output** — Writes status bar, content, footer, notes panel,
+//!    and command bar within a synchronized update block.
+//! 9. **Protocol images** — Emits Kitty/iTerm2/Sixel escape data after text.
+//! 10. **Dissolve-in** — If a font-change transition just completed, runs a
+//!     scatter-reveal animation to smoothly bring in the new content.
+
 use super::*;
 
 impl Presenter {
-    // ── Rendering (buffered – no flicker) ──────────────────────────
-
+    /// Render a complete frame to the terminal.
+    ///
+    /// This is the heart of the rendering engine. It is called on every input
+    /// event, animation tick, timer update, or hot-reload change. The function
+    /// is designed to be fast for the common case (smart redraw skips most work
+    /// when only the timer changed) and thorough for the full case (rebuilds
+    /// the entire virtual buffer and flushes atomically).
+    ///
+    /// See the module-level docs for a step-by-step breakdown of the pipeline.
     pub(crate) fn render_frame(&mut self) -> Result<()> {
+        // --- Font Change and Dissolve Transition Handling ---
         // If font size is changing, apply it before rendering and re-query
         // dimensions.  The ioctl(TIOCGWINSZ) returns the new size
         // synchronously after Kitty processes the font change, so we don't
@@ -262,10 +297,14 @@ impl Presenter {
             self.needs_full_redraw = true;
         }
 
+        // --- Begin Synchronized Update Block ---
+        // Everything from here until EndSynchronizedUpdate is buffered and
+        // sent to the terminal atomically, preventing visible flicker.
         let stdout = io::stdout();
         let mut w = BufWriter::with_capacity(256 * 1024, stdout.lock());
         queue!(w, BeginSynchronizedUpdate)?;
 
+        // --- Mode Dispatch (Help / Overview early return) ---
         match self.mode {
             Mode::Help => {
                 self.last_rendered_mode = Mode::Help;
@@ -299,6 +338,7 @@ impl Presenter {
             _ => {}
         }
 
+        // --- Smart Redraw Check ---
         // Smart redraw: skip full re-render when nothing changed (timer-only ticks)
         let state_changed = self.needs_full_redraw
             || self.pending_dissolve_in
@@ -327,6 +367,11 @@ impl Presenter {
                 || self.last_rendered_scale != self.global_scale
                 || self.last_rendered_image_scale != self.image_scale_offset
                 || self.gif_current_frame != self.last_rendered_gif_frame);
+
+        // --- Content Assembly ---
+        // Build the virtual buffer line by line. The buffer is a Vec<StyledLine>
+        // that represents the slide's content area (everything between the status
+        // bar and the notes panel / footer).
 
         // Clone needed: slide fields are read throughout the frame while &mut self
         // methods (build_status_bar, queue_styled_line, etc.) borrow self mutably.
@@ -564,7 +609,10 @@ impl Presenter {
             }
         }
 
-        // Protocol images (Kitty/iTerm2) need escape data written after buffer flush
+        // --- Images and Diagrams ---
+        // Protocol images (Kitty/iTerm2/Sixel) can't be mixed into the styled line
+        // buffer — they need their raw escape data written after the text content.
+        // We track their positions here and emit them at the end of the frame.
         let mut pending_protocol_images: Vec<(String, usize)> = Vec::new();
 
         // Mermaid diagrams
@@ -736,6 +784,7 @@ impl Presenter {
             lines.push(StyledLine::empty());
         }
 
+        // --- Viewport Calculation and Alignment ---
         // Calculate available display area (excluding status bar rows)
         let has_slide_footer = slide.footer.is_some();
         let reserved_bottom =
@@ -793,7 +842,10 @@ impl Presenter {
             }
         }
 
-        // Apply animations to the buffer
+        // --- Animation Overlays ---
+        // Apply transition, entrance, or loop animations to the buffer.
+        // Transitions blend old and new buffers; entrance effects reveal
+        // content progressively; loops run continuously (sparkle, matrix, etc.).
         if let Some(ref mut anim) = self.active_animation {
             match anim.kind {
                 AnimationKind::Transition(tt) => {
@@ -831,7 +883,8 @@ impl Presenter {
             }
         }
 
-        // Clamp scroll
+        // --- Scroll Clamping ---
+        // Ensure scroll offset doesn't go past the end of content.
         if lines.len() > content_area {
             let max_scroll = lines.len().saturating_sub(content_area);
             self.scroll_offset = self.scroll_offset.min(max_scroll);
@@ -842,7 +895,7 @@ impl Presenter {
         let visible_start = self.scroll_offset;
         let visible_end = (visible_start + content_area).min(lines.len());
 
-        // ── Write buffered frame ──
+        // --- Terminal Output (Status Bar + Content + Gradient) ---
 
         // Render fixed status bar at rows 0-1 (only when not scroll-only change)
         let scroll_only = !self.needs_full_redraw
@@ -924,7 +977,7 @@ impl Presenter {
             write!(w, "{:width$}", "", width = tw)?;
         }
 
-        // Per-slide custom footer bar (rendered at bottom of content area)
+        // --- Per-Slide Footer Bar ---
         if has_slide_footer {
             if let Some(ref footer_text) = slide.footer {
                 use crate::presentation::FooterAlign;
@@ -956,7 +1009,9 @@ impl Presenter {
             }
         }
 
-        // Notes panel (fills entire reserved area with background)
+        // --- Notes Panel ---
+        // Speaker notes are shown in a fixed-height panel at the bottom
+        // with scrolling support (N/P keys). The panel has its own background.
         if self.show_notes && !slide.notes.is_empty() {
             let notes_rows = 6usize; // 1 separator + 5 content rows = 6, +1 reserved
             let notes_y = (th as u16).saturating_sub(7);
@@ -996,7 +1051,7 @@ impl Presenter {
             }
         }
 
-        // Command bar
+        // --- Command Bar / Goto Input ---
         if self.mode == Mode::Command {
             let y = th as u16 - 1;
             queue!(w, cursor::MoveTo(0, y), SetBackgroundColor(self.code_bg_color), SetForegroundColor(self.accent_color))?;
@@ -1010,6 +1065,7 @@ impl Presenter {
             write!(w, "goto: {}{:width$}", self.goto_buf, "", width = tw.saturating_sub(self.goto_buf.len() + 7))?;
         }
 
+        // --- Protocol Image Emission ---
         // Clear old Kitty images right before placing new content, so the
         // delete and new frame appear atomically within the synchronized update.
         if need_kitty_clear {
@@ -1035,10 +1091,11 @@ impl Presenter {
             }
         }
 
+        // --- End Synchronized Update ---
         queue!(w, EndSynchronizedUpdate, ResetColor)?;
         w.flush()?;
 
-        // Update smart redraw tracking
+        // --- Update Smart Redraw Tracking ---
         self.last_rendered_slide = Some(self.current);
         self.last_rendered_scroll = self.scroll_offset;
         self.last_rendered_width = self.width;
@@ -1049,7 +1106,7 @@ impl Presenter {
         self.last_rendered_gif_frame = self.gif_current_frame;
         self.needs_full_redraw = false;
 
-        // ── Dissolve-in: scatter-reveal new content after font transition ──
+        // --- Dissolve-In: Scatter-Reveal After Font Transition ---
         // Mirrors the dissolve-out so the transition feels symmetric.
         // Images are emitted on the final frame within the same sync block
         // so they appear atomically with the fully-revealed content.
@@ -1172,6 +1229,12 @@ impl Presenter {
     }
 
     /// Redraw only the status bar line (for timer-only updates without re-emitting images).
+    ///
+    /// This is the "smart redraw" fast path. When the presentation timer is
+    /// running but no other state has changed, we only need to repaint the
+    /// status bar (row 0) to update the elapsed time display. This avoids
+    /// the expensive full content rebuild and, crucially, avoids re-emitting
+    /// protocol image escape sequences (which would cause visible flicker).
     pub(crate) fn render_status_bar_only(&self, w: &mut impl Write) -> Result<()> {
         let tw = self.width as usize;
         if !self.show_fullscreen {

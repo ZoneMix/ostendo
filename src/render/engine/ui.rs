@@ -1,6 +1,37 @@
+//! UI chrome: status bar, help overlay, and overview grid mode.
+//!
+//! These are the "non-content" visual elements of the presentation. They are
+//! rendered separately from the slide content and have their own drawing logic:
+//!
+//! - **Status bar** — Always visible (unless fullscreen). Shows slide number,
+//!   timer, theme name, progress bar, and author/date footer.
+//! - **Help overlay** — Full-screen two-column reference of all keybindings,
+//!   directives, and CLI flags. Rendered directly to the terminal (bypasses
+//!   the virtual buffer) since it replaces all content.
+//! - **Overview grid** — Two-column list of all slides for quick navigation.
+//!   Also rendered directly to the terminal.
+
 use super::*;
 
 impl Presenter {
+    /// Build the status bar as a single `StyledLine`.
+    ///
+    /// The status bar layout (left to right):
+    /// - Slide counter badge: `Slide 3/42` (inverted accent colors)
+    /// - Timer display: `00:05:23` (on code_bg background)
+    /// - Theme name (optional, toggled with `T` key)
+    /// - Progress bar (fills remaining space)
+    /// - Author/date footer from front matter (right-aligned, dimmed)
+    ///
+    /// The footer text is truncated if it would overflow the available space.
+    ///
+    /// # Parameters
+    ///
+    /// - `width` — Terminal width in columns.
+    ///
+    /// # Returns
+    ///
+    /// A `StyledLine` representing the complete status bar, ready for rendering.
     pub(crate) fn build_status_bar(&self, width: usize) -> StyledLine {
         let slide_info = format!(" Slide {}/{} ", self.current + 1, self.slides.len());
         let timer = format!(" {} ", self.format_timer());
@@ -58,6 +89,19 @@ impl Presenter {
         line
     }
 
+    /// Render the full-screen help overlay directly to the terminal.
+    ///
+    /// This bypasses the virtual buffer and writes directly to the terminal
+    /// output using `crossterm::queue!()` macros. It clears any Kitty images,
+    /// fills the background, and renders a two-column layout of all keybindings
+    /// organized into sections (Navigation, Display, Font & Scale, Code Execution,
+    /// Animations, Commands, CLI Flags).
+    ///
+    /// The bottom of the screen shows diagnostic info (image protocol, font
+    /// size, theme name) and a "Press any key to close" hint.
+    ///
+    /// If the terminal is wide enough (>100 columns), a third section of
+    /// markdown directives is shown below the two columns.
     pub(crate) fn render_help_buf(&self, w: &mut impl Write) -> Result<()> {
         let tw = self.width as usize;
         let th = self.height as usize;
@@ -286,6 +330,17 @@ impl Presenter {
         Ok(())
     }
 
+    /// Render the slide overview grid directly to the terminal.
+    ///
+    /// Displays a two-column list of all slides with their numbers, titles,
+    /// and section labels. The currently selected slide is highlighted with
+    /// inverted colors (accent background).
+    ///
+    /// Navigation uses vim-style keys: `j`/`k` for up/down within a column,
+    /// `h`/`l` for jumping between columns, Enter to select, Esc to close.
+    ///
+    /// The grid fills top-down then left-to-right (first column fills
+    /// vertically before the second column begins).
     pub(crate) fn render_overview_buf(&self, w: &mut impl Write) -> Result<()> {
         let tw = self.width as usize;
         let th = self.height as usize;

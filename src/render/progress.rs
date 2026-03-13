@@ -1,3 +1,22 @@
+//! Progress bar rendering for the status bar.
+//!
+//! Produces a simple Unicode block-character progress bar (e.g. `[███░░░░]`)
+//! that shows the presenter how far through the slide deck they are.  The bar
+//! is rendered into a `String` and embedded in the status bar line by the
+//! rendering engine.
+
+/// Render a text-based progress bar showing `current` out of `total` progress.
+///
+/// # Parameters
+///
+/// - `current` -- the current position (e.g. slide index, 0-based is fine).
+/// - `total` -- the total number of items (e.g. total slides).
+/// - `width` -- how many characters wide the bar should be (excluding brackets).
+///
+/// # Returns
+///
+/// A string like `[████░░░░░░]`.  Returns an empty string if `total` is zero
+/// to avoid a division-by-zero panic.
 pub fn render_progress_bar(current: usize, total: usize, width: usize) -> String {
     if total == 0 {
         return String::new();

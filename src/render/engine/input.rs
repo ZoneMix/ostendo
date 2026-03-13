@@ -1,6 +1,36 @@
+//! Event loop and input handling.
+//!
+//! Processes keyboard events, mouse input (scroll wheel), terminal resize
+//! events, and commands from the optional WebSocket remote control server.
+//!
+//! # Event Loop Design
+//!
+//! The main loop uses `crossterm::event::poll()` with a dynamic timeout:
+//! - **33ms** (~30 fps) when animations or GIFs are active.
+//! - **100ms** when idle (saves CPU while still updating the timer).
+//!
+//! All pending events are drained in a tight inner loop before rendering,
+//! which prevents mouse scroll flooding from causing redundant redraws.
+//! After input handling, animation ticks, GIF frame advances, code execution
+//! polling, hot reload checks, and remote command polling all happen in sequence.
+
 use super::*;
 
 impl Presenter {
+    /// The main event loop that drives the presentation.
+    ///
+    /// This function blocks until the user presses `q` (or another quit trigger).
+    /// Each iteration:
+    /// 1. Checks for completed background GIF loading.
+    /// 2. Drains pre-rendered GIF frames from the background render thread.
+    /// 3. Polls for terminal events with a dynamic timeout.
+    /// 4. Drains all pending events (prevents mouse flooding).
+    /// 5. Renders a frame if input was received or the timer is running.
+    /// 6. Ticks active animations (transitions, entrances, loops).
+    /// 7. Advances GIF frames if their delay has elapsed.
+    /// 8. Polls for streaming code execution output.
+    /// 9. Checks for file changes (hot reload).
+    /// 10. Polls for WebSocket remote commands.
     pub(crate) fn event_loop(&mut self) -> Result<()> {
         self.render_frame()?;
         self.broadcast_state();
@@ -134,6 +164,16 @@ impl Presenter {
         }
     }
 
+    /// Poll the WebSocket remote control channel for incoming commands.
+    ///
+    /// Drains all queued commands without blocking. Each command maps to the
+    /// same action as its keyboard equivalent (next slide, toggle notes, etc.).
+    /// If any command was received, triggers a re-render and broadcasts the
+    /// updated state back to connected clients.
+    ///
+    /// The receiver is temporarily taken out of `self` via `Option::take()` to
+    /// avoid a borrow conflict (we need `&mut self` for the command handlers
+    /// while also reading from the receiver). It is put back after processing.
     pub(crate) fn poll_remote(&mut self) -> Result<()> {
         // Take the receiver out to avoid borrow conflict with &mut self
         let rx = match self.remote_rx.take() {
@@ -191,6 +231,12 @@ impl Presenter {
         Ok(())
     }
 
+    /// Broadcast the current presentation state to all connected WebSocket clients.
+    ///
+    /// Serializes a `StateMessage` containing the current slide number, title,
+    /// notes, timer, content, theme info, and all toggle states. This is sent
+    /// as JSON over the broadcast channel. If no receivers are connected,
+    /// the function returns immediately to avoid unnecessary work.
     pub(crate) fn broadcast_state(&self) {
         if let Some(ref tx) = self.state_broadcast {
             if tx.receiver_count() == 0 {
@@ -285,6 +331,16 @@ impl Presenter {
         }
     }
 
+    /// Handle a keyboard event, dispatching based on the current mode.
+    ///
+    /// Returns `Ok(true)` if the user wants to quit (pressed `q` in Normal mode),
+    /// `Ok(false)` otherwise. The function first checks the current mode:
+    ///
+    /// - **Command** — Routes to `handle_command_key()` for `:` command input.
+    /// - **Goto** — Routes to `handle_goto_key()` for numeric slide input.
+    /// - **Help** — Any key returns to Normal mode.
+    /// - **Overview** — Arrow keys / vim keys navigate, Enter selects, Esc closes.
+    /// - **Normal** — Full keybinding set (navigation, toggles, scale, font, etc.).
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
         match self.mode {
             Mode::Command => return self.handle_command_key(key),
@@ -386,6 +442,11 @@ impl Presenter {
         Ok(false)
     }
 
+    /// Handle keyboard input while in Command mode (`:` prompt at the bottom).
+    ///
+    /// Esc cancels, Enter executes the command, Backspace deletes, and any
+    /// printable character is appended to the command buffer. Always returns
+    /// `Ok(false)` since commands cannot quit the application directly.
     pub(crate) fn handle_command_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
@@ -401,6 +462,10 @@ impl Presenter {
         Ok(false)
     }
 
+    /// Handle keyboard input while in Goto mode (`g` then type a slide number).
+    ///
+    /// Only accepts digit characters. Enter jumps to the entered slide number
+    /// (1-based), Esc cancels.
     pub(crate) fn handle_goto_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
@@ -416,6 +481,16 @@ impl Presenter {
         Ok(false)
     }
 
+    /// Execute a colon command entered in Command mode.
+    ///
+    /// Supported commands:
+    /// - `:theme <slug>` — Switch to a named theme.
+    /// - `:goto <N>` — Jump to slide N (1-based).
+    /// - `:notes` — Toggle speaker notes panel.
+    /// - `:timer` / `:timer reset` — Start or reset the presentation timer.
+    /// - `:overview` — Enter overview grid mode.
+    /// - `:help` — Show the help overlay.
+    /// - `:reload` — Force-reload the presentation file from disk.
     pub(crate) fn execute_command(&mut self, cmd: &str) {
         let parts: Vec<&str> = cmd.trim().splitn(2, ' ').collect();
         match parts.first().copied() {

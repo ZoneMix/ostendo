@@ -1,3 +1,18 @@
+//! Ostendo -- AI-native terminal presentations from markdown.
+//!
+//! This is the CLI entry point using the `clap` argument parser. It handles
+//! argument validation, presentation loading, and launching the TUI presenter.
+//!
+//! # Execution Flow
+//! 1. Parse CLI arguments via [`Cli`] (powered by `clap`).
+//! 2. Load the theme registry (all 29 built-in themes).
+//! 3. Handle "early exit" flags: `--list-themes`, `--detect-protocol`, `--count`,
+//!    `--export-titles`, `--validate`, `--export`.
+//! 4. Parse the markdown file into slides via [`markdown::parse_presentation`].
+//! 5. Optionally start the WebSocket remote control server.
+//! 6. Create a [`render::Presenter`] and call [`run()`](render::Presenter::run)
+//!    to enter the interactive TUI loop.
+
 mod markdown;
 mod presentation;
 mod render;
@@ -15,6 +30,11 @@ use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
 
+/// Command-line arguments for the Ostendo presentation tool.
+///
+/// Parsed automatically by `clap` from `std::env::args`. The `#[derive(Parser)]`
+/// macro generates argument parsing code from the struct fields and their
+/// `#[arg(...)]` attributes. Each field becomes a CLI flag or positional argument.
 #[derive(Parser, Debug)]
 #[command(name = "ostendo", about = "Terminal-based presentation tool", version)]
 pub struct Cli {
@@ -94,9 +114,15 @@ pub struct Cli {
     pub remote_token: Option<String>,
 }
 
+/// Application entry point.
+///
+/// Returns `anyhow::Result` so that any error — from file I/O, parsing, or the
+/// TUI render loop — is printed with full context and a non-zero exit code.
 fn main() -> Result<()> {
+    // Parse CLI arguments. clap handles --help and --version automatically.
     let cli = Cli::parse();
 
+    // Load all built-in themes from compiled YAML sources.
     let registry = theme::ThemeRegistry::load();
 
     if cli.list_themes {
@@ -173,7 +199,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Export mode
+    // Export mode — generate HTML or PDF and exit without starting the TUI.
     if let Some(ref format) = cli.export {
         let output_path = cli.output.clone().unwrap_or_else(|| {
             let stem = file.file_stem().unwrap_or_default().to_string_lossy();
@@ -203,7 +229,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Start remote control server if requested
+    // Start WebSocket remote control server in a background thread if --remote is set.
+    // Returns a pair of channels for bidirectional communication with the presenter.
     let remote_channels = if cli.remote {
         let url = if let Some(ref token) = cli.remote_token {
             format!("http://127.0.0.1:{}/#token={}", cli.remote_port, token)

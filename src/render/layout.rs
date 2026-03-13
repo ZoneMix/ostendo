@@ -1,9 +1,30 @@
+//! Terminal dimension handling.
+//!
+//! Provides [`WindowSize`], which captures both the character-grid size
+//! (columns x rows) and the pixel dimensions of the terminal window.  Pixel
+//! dimensions are essential for rendering protocol images (Kitty, iTerm2, Sixel)
+//! at the correct resolution -- without them the engine would have to guess
+//! how many pixels each character cell occupies.
+//!
+//! On terminals that do not report pixel sizes, heuristic defaults of 8 px/column
+//! and 16 px/row are used (the most common cell dimensions for a 10-12 pt monospace
+//! font).
+
 /// Terminal window size with pixel dimensions for accurate image scaling.
+///
+/// Both character-grid dimensions (`columns`, `rows`) and pixel dimensions
+/// (`pixel_width`, `pixel_height`) are stored.  The pixel values are used by
+/// the image rendering pipeline to scale images to exact pixel counts before
+/// converting back to terminal cell counts.
 #[derive(Debug, Clone, Copy)]
 pub struct WindowSize {
+    /// Number of character columns (e.g. 80, 120, 200).
     pub columns: u16,
+    /// Number of character rows (e.g. 24, 40, 60).
     pub rows: u16,
+    /// Total window width in pixels (0 if the terminal does not report it).
     pub pixel_width: u16,
+    /// Total window height in pixels (0 if the terminal does not report it).
     pub pixel_height: u16,
 }
 

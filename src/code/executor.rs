@@ -1,20 +1,69 @@
+//! Code execution sandbox for live coding slides.
+//!
+//! Supports 8 languages: Python, Bash, JavaScript, Ruby, Rust, C, C++, and Go.
+//! Code blocks marked with `+exec` in a presentation can be executed by the
+//! presenter at runtime (Ctrl+E), with output displayed inline on the slide.
+//!
+//! # Security limits
+//!
+//! Every execution is subject to hard limits to prevent runaway processes from
+//! hanging the presentation or consuming excessive resources:
+//!
+//! - **Code size**: 64 KB maximum (`MAX_CODE_LENGTH`)
+//! - **Output size**: 1 MB maximum (`MAX_OUTPUT_SIZE`) -- truncated beyond this
+//! - **Timeout**: 30 seconds (`EXEC_TIMEOUT_SECS`) -- process killed after this
+//!
+//! # Auto-wrapping
+//!
+//! Compiled languages (Rust, C, C++, Go) support *auto-wrapping*: if the code
+//! snippet does not contain a `main` function, the executor wraps it in one
+//! automatically, adding common imports/includes.  This lets presenters show
+//! concise snippets like `println!("hello")` without boilerplate.
+//!
+//! # Streaming output
+//!
+//! [`execute_code_streaming`] runs code in a background thread and sends output
+//! lines through an `mpsc` channel as they become available, enabling real-time
+//! output display during execution.
+
 use anyhow::{bail, Result};
 use std::process::Command;
 use std::sync::mpsc;
 use std::time::Duration;
 
 /// Maximum code length allowed for execution (64 KB).
+/// Prevents accidentally pasting enormous files into a code block.
 const MAX_CODE_LENGTH: usize = 64 * 1024;
-/// Maximum output size allowed from execution (1 MB).
+
+/// Maximum output size captured from a child process (1 MB).
+/// Output beyond this limit is silently truncated with a notice appended.
 const MAX_OUTPUT_SIZE: usize = 1024 * 1024;
-/// Default execution timeout in seconds.
+
+/// Hard timeout for any single code execution (30 seconds).
+/// The child process is forcefully killed (`SIGKILL`) when this expires.
 const EXEC_TIMEOUT_SECS: u64 = 30;
 
+/// The captured output from running a code block.
 pub struct ExecutionResult {
+    /// Standard output from the child process.
     pub stdout: String,
+    /// Standard error from the child process (compiler errors end up here).
     pub stderr: String,
 }
 
+/// Execute a code snippet synchronously and return its captured output.
+///
+/// # Parameters
+///
+/// - `language` -- the language identifier (e.g. `"python"`, `"rust"`, `"c++"`).
+///   Aliases like `"py"`, `"js"`, `"rs"` are normalized automatically.
+/// - `code` -- the source code to execute.  Must be under 64 KB.
+/// - `working_dir` -- optional working directory for the child process.
+///
+/// # Errors
+///
+/// Returns an error if the code exceeds the size limit or the child process
+/// fails to spawn.  Compilation errors are returned inside `ExecutionResult.stderr`.
 pub fn execute_code(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
     if code.len() > MAX_CODE_LENGTH {
         bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
@@ -159,6 +208,10 @@ fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Pa
 }
 
 /// Normalize language identifiers to canonical forms.
+///
+/// Maps common aliases (e.g. `"py"` -> `"python"`, `"js"` -> `"javascript"`,
+/// `"rs"` -> `"rust"`) so the rest of the executor can match on a small set
+/// of canonical names.
 fn normalize_language(lang: &str) -> String {
     match lang.to_lowercase().as_str() {
         "python3" | "py" => "python".to_string(),
@@ -176,9 +229,18 @@ fn normalize_language(lang: &str) -> String {
 // Auto-wrapping: turn bare code snippets into compilable programs
 // ---------------------------------------------------------------------------
 
-/// Wrap bare code snippets in a main function so they compile as standalone
-/// programs.  Interpreted languages (python, bash, ruby, javascript) are
-/// returned unchanged — their runtimes already accept bare expressions.
+/// Wrap bare code snippets in a `main` function so they compile as standalone
+/// programs.  Interpreted languages (Python, Bash, Ruby, JavaScript) are
+/// returned unchanged because their runtimes already accept bare expressions.
+///
+/// For compiled languages the wrapper:
+/// 1. Checks if a `main` function already exists -- if so, returns code as-is.
+/// 2. Extracts top-level `use`/`#include` statements and helper function
+///    definitions, placing them *outside* `main`.
+/// 3. Wraps the remaining body lines inside a generated `main` function.
+/// 4. Adds common standard library imports (e.g. `stdio.h` for C, `fmt` for Go).
+///
+/// This lets presenters write concise snippets without boilerplate.
 fn wrap_for_execution(lang: &str, code: &str) -> String {
     match lang {
         "rust"       => wrap_rust(code),
@@ -498,7 +560,11 @@ fn detect_cpp_compiler() -> &'static str {
     "c++"
 }
 
-/// Compile C/C++ code from stdin and run the resulting binary.
+/// Compile C/C++ code via stdin pipe and run the resulting binary.
+///
+/// The code is piped to the compiler's stdin (using `-` as the input filename)
+/// which avoids writing a temporary source file.  The compiled binary is placed
+/// in a temporary directory and executed with the standard timeout.
 fn compile_and_run(code: &str, compiler: &str, extra_args: &[&str], working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
     let dir = tempfile::tempdir()?;
     let bin = dir.path().join("a.out");

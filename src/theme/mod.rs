@@ -1,28 +1,67 @@
+//! Theme registry and management.
+//!
+//! Loads 29 built-in YAML themes at startup (compiled into the binary by `build.rs`),
+//! validates WCAG 2.0 contrast ratios in tests, and supports runtime theme switching
+//! via the `:theme <slug>` command or the `D` key for light/dark variant toggling.
+//!
+//! # Submodules
+//! - [`schema`] — The `Theme` struct and its nested types (colors, fonts, gradients).
+//! - [`builtin`] — Auto-generated theme list populated at compile time from `themes/*.yaml`.
+//! - [`colors`] — Hex-to-color conversion and WCAG contrast ratio computation.
+//!
+//! # Contrast Requirements (enforced in tests)
+//! - `text:background` >= 4.5:1 (WCAG AA normal text)
+//! - `accent:background` >= 3.0:1 (WCAG AA large text / UI components)
+//! - `code_background:background` >= 1.2:1 (subtle distinction)
+
 pub mod schema;
 pub mod builtin;
 pub mod colors;
 
 pub use schema::Theme;
 
+/// In-memory registry of all available presentation themes.
+///
+/// Created once at startup via [`ThemeRegistry::load`] and then queried by slug
+/// throughout the application lifetime. The registry is immutable after creation —
+/// themes cannot be added or removed at runtime.
 pub struct ThemeRegistry {
+    /// The full list of parsed themes, loaded from the compiled-in YAML sources.
     themes: Vec<Theme>,
 }
 
 impl ThemeRegistry {
+    /// Load all built-in themes from the compiled YAML sources.
+    ///
+    /// This calls [`builtin::load_builtin_themes`] which deserializes each YAML
+    /// string into a `Theme` struct. Themes with invalid YAML are silently skipped
+    /// (via `filter_map`).
     pub fn load() -> Self {
         let themes = builtin::load_builtin_themes();
         Self { themes }
     }
 
+    /// Look up a theme by its unique slug identifier (e.g., `"dracula"`, `"nord"`).
+    ///
+    /// Returns `None` if no theme with that slug exists. The returned `Theme` is
+    /// a clone — callers get their own copy and cannot affect the registry.
     pub fn get(&self, slug: &str) -> Option<Theme> {
         self.themes.iter().find(|t| t.slug == slug).cloned()
     }
 
+    /// List all available theme slugs, in the order they were loaded.
+    ///
+    /// Used by the CLI `--list-themes` flag and the remote control theme dropdown.
     pub fn list(&self) -> Vec<String> {
         self.themes.iter().map(|t| t.slug.clone()).collect()
     }
 
     /// Get the light or dark variant of a theme, if it has one.
+    ///
+    /// Themes can declare `light_variant` or `dark_variant` slugs in their YAML.
+    /// When the user presses `D` to toggle dark/light mode, this method finds the
+    /// companion theme. Returns `None` if the theme has no variant in the
+    /// requested direction.
     pub fn get_variant(&self, theme: &Theme, want_light: bool) -> Option<Theme> {
         let variant_slug = if want_light {
             theme.light_variant.as_deref()

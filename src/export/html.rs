@@ -1,3 +1,17 @@
+//! Self-contained HTML export.
+//!
+//! Generates a single HTML file with embedded CSS and JavaScript that reproduces
+//! the presentation with theme colors, syntax highlighting, and slide navigation.
+//! All assets (images, styles, scripts) are inlined so the exported file can be
+//! opened in any browser without a server or external dependencies.
+//!
+//! The exported HTML supports:
+//! - Keyboard navigation (arrow keys, space, `h`/`l` for vim-style)
+//! - Speaker notes toggle (`N` key)
+//! - Progress bar and slide counter
+//! - Print/PDF via the browser's built-in print dialog (`@media print` rules)
+//! - Images embedded as base64 data URIs
+
 use anyhow::Result;
 use std::path::Path;
 
@@ -242,6 +256,11 @@ showSlide(0);
     Ok(())
 }
 
+/// Escape special HTML characters to prevent XSS in exported content.
+///
+/// Replaces `&`, `<`, `>`, and `"` with their HTML entity equivalents.
+/// This must be applied to all user-provided text (slide titles, bullets, code)
+/// before embedding in the HTML output.
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
      .replace('<', "&lt;")

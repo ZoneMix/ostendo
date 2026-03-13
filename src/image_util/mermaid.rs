@@ -1,17 +1,42 @@
+//! Mermaid diagram rendering via the external `mmdc` CLI tool.
+//!
+//! Converts Mermaid diagram syntax (flowcharts, sequence diagrams, Gantt charts,
+//! etc.) into PNG images with transparent backgrounds.  The rendered PNGs are
+//! then displayed using the normal image rendering pipeline.
+//!
+//! # External dependency
+//!
+//! Requires the `mmdc` command (Mermaid CLI) to be installed and available on
+//! `$PATH`.  Install it with `npm install -g @mermaid-js/mermaid-cli`.
+//! Use [`MermaidRenderer::is_available`] to check before attempting to render.
+//!
+//! # Caching
+//!
+//! Rendered diagrams are cached by a hash of `(source_text, width)`.  If the
+//! same diagram source and width are requested again, the cached PNG is returned
+//! immediately without re-invoking `mmdc`.  Cache files are stored in the OS
+//! temp directory under `ostendo-mermaid-cache/`.
+
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Renderer for Mermaid diagrams, with a hash-based cache to avoid re-rendering.
+/// Stateful renderer that invokes `mmdc` and caches the output PNG files.
+///
+/// Create one instance with [`MermaidRenderer::new`] and reuse it across slides
+/// to benefit from the content-hash cache.
 #[allow(dead_code)]
 pub struct MermaidRenderer {
+    /// Directory where cached `.mmd` source and `.png` output files are stored.
     cache_dir: PathBuf,
+    /// In-memory map from content hash to the path of the rendered PNG.
     cache: HashMap<u64, PathBuf>,
 }
 
 #[allow(dead_code)]
 impl MermaidRenderer {
+    /// Create a new renderer, initializing the cache directory in the OS temp folder.
     pub fn new() -> Self {
         let cache_dir = std::env::temp_dir().join("ostendo-mermaid-cache");
         let _ = std::fs::create_dir_all(&cache_dir);
@@ -32,8 +57,17 @@ impl MermaidRenderer {
             .unwrap_or(false)
     }
 
-    /// Render a Mermaid diagram to a PNG image.
-    /// Returns the path to the rendered PNG file.
+    /// Render a Mermaid diagram to a PNG image and return the file path.
+    ///
+    /// # Parameters
+    ///
+    /// - `source` -- the Mermaid diagram source text (e.g. `"graph LR; A-->B"`).
+    /// - `width` -- the desired output width in pixels, passed to `mmdc -w`.
+    ///
+    /// # Returns
+    ///
+    /// The path to the rendered PNG file (inside the cache directory).
+    /// On cache hit the file is returned immediately without invoking `mmdc`.
     pub fn render(&mut self, source: &str, width: usize) -> Result<PathBuf> {
         let hash = self.hash_source(source, width);
 
@@ -70,7 +104,10 @@ impl MermaidRenderer {
         Ok(output_path)
     }
 
-    /// Simple hash of source + width for cache keying.
+    /// Compute a deterministic hash of the diagram source and width for cache keying.
+    ///
+    /// Uses Rust's default `DefaultHasher` (SipHash).  Collisions are extremely
+    /// unlikely for the small number of diagrams in a typical presentation.
     fn hash_source(&self, source: &str, width: usize) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

@@ -1,50 +1,127 @@
+//! Animation system for slide transitions, entrance effects, and continuous loop animations.
+//! Supports fade, slide-left, dissolve transitions; typewriter, fade-in, slide-down entrance
+//! effects; and matrix, bounce, pulse, sparkle, spin loop animations with optional targeting
+//! (FIGlet, images).
+//!
+//! # Architecture
+//!
+//! This module is consumed by the render engine (`src/render/engine/`). When the presenter
+//! navigates to a new slide, the engine creates an `AnimationState` and calls the appropriate
+//! `render_*_frame()` function on every tick until the animation completes (or indefinitely
+//! for loop animations).
+//!
+//! # Three animation categories
+//!
+//! 1. **Transitions** play *between* two slides (old -> new). They blend two pre-rendered
+//!    buffers over a short duration (300-600 ms). The `exit_only` flag lets a transition
+//!    fade out without revealing the new content, deferring the reveal to an entrance animation.
+//!
+//! 2. **Entrance animations** play *on arrival* at a slide. They progressively reveal a single
+//!    buffer (the new slide's content) over ~500 ms.
+//!
+//! 3. **Loop animations** run continuously while a slide is displayed. They modify the rendered
+//!    buffer each frame to create ongoing visual effects. Loop animations never finish (`is_done`
+//!    always returns false).
+//!
+//! # Key Rust concepts
+//!
+//! - **`Instant`**: A monotonic clock timestamp from `std::time`. Used to measure elapsed time
+//!   since the animation started, which drives the `progress()` calculation.
+//! - **`Vec<StyledLine>`**: The "virtual buffer" — a list of styled text lines that represent
+//!   one full screen of terminal content. Every animation function takes buffer(s) as input
+//!   and returns a new buffer with the animation effect applied.
+
 use crossterm::style::Color;
 use std::time::Instant;
 
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 use crate::theme::colors::interpolate_color;
 
-/// Types of transition animations between slides.
+/// Available transition types that play when navigating between slides.
+///
+/// Transitions blend two buffers (old slide and new slide) over a short duration.
+/// Set via the `<!-- transition: fade -->` directive in Markdown.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransitionType {
+    /// Crossfade: old content fades to the background color, then new content fades in.
     Fade,
+    /// Horizontal slide: old content slides left off-screen while new content enters from the right.
     SlideLeft,
+    /// Per-character dissolve: cells jumble into random symbols and then resolve into new content.
     Dissolve,
 }
 
-/// Types of entrance animations (play once when slide appears).
+/// Available entrance animations that play once when a slide first appears.
+///
+/// Entrance effects progressively reveal the new slide's content over ~500 ms.
+/// Set via the `<!-- animation: typewriter -->` directive in Markdown.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EntranceAnimation {
+    /// Characters appear one at a time from left to right, like a typewriter.
     Typewriter,
+    /// All content fades in from the background color to full brightness.
     FadeIn,
+    /// Lines are revealed top-to-bottom, one row at a time.
     SlideDown,
 }
 
-/// Types of looping animations (continuous).
+/// Available continuous loop animations that run while a slide is displayed.
+///
+/// Loop animations modify the rendered buffer on every frame. They never complete and
+/// are replaced only when the user navigates to a different slide.
+/// Set via the `<!-- loop_animation: matrix -->` directive in Markdown.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LoopAnimation {
+    /// Green cascading characters (Matrix-style rain) that fill the background.
     Matrix,
+    /// A bouncing ball (`●`) that moves across the screen in a triangle-wave pattern.
     Bounce,
+    /// All content brightness oscillates via a sine wave (pulsing glow effect).
     Pulse,
+    /// Random cells briefly become sparkle/star characters (`✦`, `★`, etc.) in bright colors.
     Sparkle,
+    /// ASCII art characters cycle through the brightness ramp, creating a shimmering wave effect.
     Spin,
 }
 
-/// The kind of animation currently active.
+/// Wrapper enum that tags an animation with its category (transition, entrance, or loop).
+///
+/// The render engine stores this inside `AnimationState` to know which dispatch function
+/// to call on each tick.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnimationKind {
+    /// A transition blending old and new slide buffers.
     Transition(TransitionType),
+    /// An entrance effect revealing the new slide buffer.
     Entrance(EntranceAnimation),
+    /// A continuous loop effect modifying the current slide buffer.
     Loop(LoopAnimation),
 }
 
-/// State machine tracking an active animation.
+/// State machine tracking an active animation's lifecycle.
+///
+/// # Lifecycle
+///
+/// 1. **Creation**: One of the `new_transition()`, `new_entrance()`, or `new_loop()` constructors
+///    is called, which records the start time and stores the relevant buffer(s).
+/// 2. **Ticking**: On every render tick, the engine calls `tick()` to increment the frame counter,
+///    then calls `progress()` to get a 0.0-1.0 value that drives the animation.
+/// 3. **Completion**: `is_done()` returns true when `progress() >= 1.0` (transitions and entrances).
+///    Loop animations never complete — `is_done()` always returns false for them.
+/// 4. **Disposal**: When `is_done()` returns true, the engine discards this state and either
+///    chains the next animation (e.g., entrance after transition) or settles into static rendering.
 pub struct AnimationState {
+    /// Which kind of animation is running (transition, entrance, or loop).
     pub kind: AnimationKind,
+    /// When the animation started, used to calculate elapsed time.
     pub started: Instant,
+    /// Total duration in milliseconds. Set to `u64::MAX` for loop animations (effectively infinite).
     pub duration_ms: u64,
+    /// Frame counter, incremented each render tick by `tick()`.
     pub frame: u64,
+    /// The previous slide's rendered content (only used by transitions).
     pub old_buffer: Vec<StyledLine>,
+    /// The current/new slide's rendered content.
     pub new_buffer: Vec<StyledLine>,
     /// When true, the transition only fades/dissolves the old content out
     /// (to background) without revealing new content.  The entrance animation
@@ -53,6 +130,14 @@ pub struct AnimationState {
 }
 
 impl AnimationState {
+    /// Creates a new transition animation state.
+    ///
+    /// Duration varies by type: Dissolve = 600ms, Fade = 400ms, SlideLeft = 300ms.
+    ///
+    /// # Parameters
+    /// - `kind`: Which transition effect to use.
+    /// - `old_buffer`: The fully-rendered content of the slide being left.
+    /// - `new_buffer`: The fully-rendered content of the slide being entered.
     pub fn new_transition(
         kind: TransitionType,
         old_buffer: Vec<StyledLine>,
@@ -74,6 +159,11 @@ impl AnimationState {
         }
     }
 
+    /// Creates a new entrance animation state with a fixed 500ms duration.
+    ///
+    /// # Parameters
+    /// - `kind`: Which entrance effect to use.
+    /// - `buffer`: The fully-rendered content of the new slide to reveal.
     pub fn new_entrance(kind: EntranceAnimation, buffer: Vec<StyledLine>) -> Self {
         Self {
             kind: AnimationKind::Entrance(kind),
@@ -86,6 +176,11 @@ impl AnimationState {
         }
     }
 
+    /// Creates a new loop animation state that runs indefinitely (`duration_ms = u64::MAX`).
+    ///
+    /// # Parameters
+    /// - `kind`: Which loop effect to use.
+    /// - `buffer`: The fully-rendered content of the current slide.
     pub fn new_loop(kind: LoopAnimation, buffer: Vec<StyledLine>) -> Self {
         Self {
             kind: AnimationKind::Loop(kind),
@@ -118,7 +213,15 @@ impl AnimationState {
     }
 }
 
-/// Parse a transition type from a directive string.
+/// Parses a transition type from a directive string.
+///
+/// Called by the Markdown parser when it encounters `<!-- transition: <value> -->`.
+/// Returns `None` if the string does not match any known transition name.
+///
+/// # Accepted values
+/// - `"fade"` -> `TransitionType::Fade`
+/// - `"slide"` -> `TransitionType::SlideLeft`
+/// - `"dissolve"` -> `TransitionType::Dissolve`
 pub fn parse_transition(s: &str) -> Option<TransitionType> {
     match s {
         "fade" => Some(TransitionType::Fade),
@@ -128,7 +231,15 @@ pub fn parse_transition(s: &str) -> Option<TransitionType> {
     }
 }
 
-/// Parse an entrance animation from a directive string.
+/// Parses an entrance animation from a directive string.
+///
+/// Called by the Markdown parser when it encounters `<!-- animation: <value> -->`.
+/// Returns `None` if the string does not match any known entrance animation name.
+///
+/// # Accepted values
+/// - `"typewriter"` -> `EntranceAnimation::Typewriter`
+/// - `"fade_in"` -> `EntranceAnimation::FadeIn`
+/// - `"slide_down"` -> `EntranceAnimation::SlideDown`
 pub fn parse_entrance(s: &str) -> Option<EntranceAnimation> {
     match s {
         "typewriter" => Some(EntranceAnimation::Typewriter),
@@ -138,7 +249,17 @@ pub fn parse_entrance(s: &str) -> Option<EntranceAnimation> {
     }
 }
 
-/// Parse a loop animation from a directive string.
+/// Parses a loop animation from a directive string.
+///
+/// Called by the Markdown parser when it encounters `<!-- loop_animation: <value> -->`.
+/// Returns `None` if the string does not match any known loop animation name.
+///
+/// # Accepted values
+/// - `"matrix"` -> `LoopAnimation::Matrix`
+/// - `"bounce"` -> `LoopAnimation::Bounce`
+/// - `"pulse"` -> `LoopAnimation::Pulse`
+/// - `"sparkle"` -> `LoopAnimation::Sparkle`
+/// - `"spin"` -> `LoopAnimation::Spin`
 pub fn parse_loop_animation(s: &str) -> Option<LoopAnimation> {
     match s {
         "matrix" => Some(LoopAnimation::Matrix),
@@ -150,10 +271,27 @@ pub fn parse_loop_animation(s: &str) -> Option<LoopAnimation> {
     }
 }
 
-/// Render a transition animation frame, returning the blended buffer.
-/// When `exit_only` is true, the transition only fades/dissolves the old
-/// content out to the background without revealing the new content — the
-/// entrance animation that follows will handle the reveal.
+/// Dispatch function: renders one frame of a transition animation, returning the blended buffer.
+///
+/// This is the main entry point for transition rendering. The render engine calls this on
+/// every tick with the current `progress` (0.0 to 1.0) and it delegates to the appropriate
+/// effect function (`render_fade`, `render_slide_left`, or `render_dissolve`).
+///
+/// When `exit_only` is true, the transition only fades/dissolves the old content out to the
+/// background without revealing the new content — the entrance animation that follows will
+/// handle the reveal. This creates a two-phase effect: exit transition -> entrance animation.
+///
+/// # Parameters
+/// - `old`: The previous slide's rendered buffer.
+/// - `new`: The new slide's rendered buffer.
+/// - `progress`: Animation progress from 0.0 (start) to 1.0 (complete).
+/// - `transition`: Which transition effect to apply.
+/// - `bg`: The theme's background color (used as the "fade to" target).
+/// - `width`: Terminal width in columns (used by slide-left for shift calculation).
+/// - `exit_only`: If true, only fade/dissolve the old content out without showing new content.
+///
+/// # Returns
+/// A new buffer representing the blended frame to display.
 pub fn render_transition_frame(
     old: &[StyledLine],
     new: &[StyledLine],
@@ -170,8 +308,19 @@ pub fn render_transition_frame(
     }
 }
 
-/// Fade: interpolate fg colors old→bg→new over progress 0.0→1.0.
-/// When `exit_only`, the entire progress range fades old→bg (no new content).
+/// Renders a crossfade transition between old and new slide content.
+///
+/// The effect works in two halves (unless `exit_only` is set):
+/// - Progress 0.0-0.5: Old content's foreground colors are interpolated toward the background
+///   color, making the old text "dissolve" into the background.
+/// - Progress 0.5-1.0: New content's foreground colors are interpolated from the background
+///   color toward their actual colors, making the new text "materialize".
+///
+/// Color interpolation is done per-span using `interpolate_color()`, which linearly blends
+/// RGB components. This preserves the original text while smoothly transitioning its visibility.
+///
+/// When `exit_only` is true, the full progress range (0.0-1.0) fades old content to background
+/// without ever showing new content.
 fn render_fade(
     old: &[StyledLine],
     new: &[StyledLine],
@@ -229,9 +378,16 @@ fn render_fade(
     result
 }
 
-/// SlideLeft: old content slides left, new enters from right.
-/// Uses character-based slicing to avoid panics on multi-byte UTF-8.
-/// When `exit_only`, old slides left with blank space (no new content enters).
+/// Renders a horizontal sliding transition where old content exits left and new content enters
+/// from the right.
+///
+/// The shift amount is proportional to `progress * terminal_width`. At progress 0.0, the old
+/// content is fully visible. At progress 1.0, the old content has completely slid off-screen
+/// and the new content fills the view.
+///
+/// Uses character-based (not byte-based) slicing to avoid panics on multi-byte UTF-8 text
+/// like emoji or CJK characters. When `exit_only`, old content slides left and is replaced
+/// by blank space rather than new content.
 fn render_slide_left(
     old: &[StyledLine],
     new: &[StyledLine],
@@ -264,9 +420,17 @@ fn render_slide_left(
     result
 }
 
-/// Dissolve: characters jumble randomly and gradually resolve into the new content.
-/// Early phase: each cell shows a random character, progressively replaced by target text.
-/// When `exit_only`, cells dissolve to spaces instead of resolving to new content.
+/// Renders a per-character dissolve transition with random symbol jumbling.
+///
+/// Each character cell on screen transitions through three phases at a different rate:
+/// 1. **Old content**: The cell still shows its original character from the old slide.
+/// 2. **Jumbling**: The cell displays a random symbol (box-drawing chars, shapes, punctuation)
+///    that changes each frame, creating visual "noise".
+/// 3. **Resolved**: The cell shows the final character from the new slide.
+///
+/// The timing of each cell's transition is determined by a deterministic hash of its (row, col)
+/// position, so cells resolve in a pseudo-random spatial pattern rather than left-to-right.
+/// When `exit_only`, cells resolve to spaces instead of new content.
 fn render_dissolve(
     old: &[StyledLine],
     new: &[StyledLine],
@@ -353,7 +517,13 @@ fn render_dissolve(
     result
 }
 
-/// Rebuild a StyledLine replacing its text content while preserving span styling.
+/// Rebuilds a `StyledLine` by replacing its text characters while preserving each span's
+/// formatting (foreground color, bold, italic, etc.).
+///
+/// This is used by the dissolve transition to keep the original slide's colors while
+/// swapping in jumbled or resolved characters. Each span's character count determines how
+/// many characters from `new_text` it receives. Any leftover characters beyond the original
+/// spans are appended as unstyled text.
 fn rebuild_line_with_text(source: &StyledLine, new_text: &str, _max_cols: usize) -> StyledLine {
     let chars: Vec<char> = new_text.chars().collect();
     let mut line = StyledLine::empty();
@@ -385,7 +555,17 @@ fn rebuild_line_with_text(source: &StyledLine, new_text: &str, _max_cols: usize)
     line
 }
 
-/// Render an entrance animation frame.
+/// Dispatch function: renders one frame of an entrance animation, returning the partially-revealed buffer.
+///
+/// Called by the render engine on every tick with `progress` (0.0 to 1.0). At progress 0.0
+/// the slide is fully hidden; at 1.0 it is fully revealed. Delegates to the specific effect
+/// function based on `animation`.
+///
+/// # Parameters
+/// - `buffer`: The new slide's fully-rendered content.
+/// - `progress`: Animation progress from 0.0 (hidden) to 1.0 (fully revealed).
+/// - `animation`: Which entrance effect to apply.
+/// - `bg`: The theme's background color (used by `FadeIn` for color interpolation).
 pub fn render_entrance_frame(
     buffer: &[StyledLine],
     progress: f64,
@@ -399,7 +579,12 @@ pub fn render_entrance_frame(
     }
 }
 
-/// Typewriter: reveal characters left-to-right.
+/// Renders a typewriter entrance effect: characters appear one at a time from left to right.
+///
+/// The total character count across all lines is multiplied by `progress` to determine how
+/// many characters should be visible. Lines are processed top-to-bottom; once the reveal
+/// count is exhausted, remaining lines appear as empty. Partially-revealed lines show only
+/// their first N characters.
 fn render_typewriter(buffer: &[StyledLine], progress: f64) -> Vec<StyledLine> {
     let total_chars: usize = buffer.iter().map(line_char_count).sum();
     let reveal_count = (total_chars as f64 * progress) as usize;
@@ -424,7 +609,11 @@ fn render_typewriter(buffer: &[StyledLine], progress: f64) -> Vec<StyledLine> {
     result
 }
 
-/// FadeIn: interpolate fg from bg to full color.
+/// Renders a fade-in entrance effect: all content gradually becomes visible.
+///
+/// Every span's foreground color is interpolated from the background color (invisible) toward
+/// its target color. At progress 0.0 all text is the background color (hidden); at progress 1.0
+/// all text shows its original color (fully visible).
 fn render_fade_in(buffer: &[StyledLine], progress: f64, bg: Color) -> Vec<StyledLine> {
     let mut result = Vec::with_capacity(buffer.len());
     for line in buffer {
@@ -442,7 +631,10 @@ fn render_fade_in(buffer: &[StyledLine], progress: f64, bg: Color) -> Vec<Styled
     result
 }
 
-/// SlideDown: reveal lines top-to-bottom with delay.
+/// Renders a slide-down entrance effect: lines are revealed one row at a time from top to bottom.
+///
+/// The number of visible rows equals `total_lines * progress`. Lines below the reveal point
+/// are replaced with empty lines. This creates a "curtain dropping" visual effect.
 fn render_slide_down(buffer: &[StyledLine], progress: f64) -> Vec<StyledLine> {
     let total = buffer.len();
     let reveal_rows = (total as f64 * progress) as usize;
@@ -457,7 +649,22 @@ fn render_slide_down(buffer: &[StyledLine], progress: f64) -> Vec<StyledLine> {
     result
 }
 
-/// Render a loop animation frame, modifying the existing buffer.
+/// Dispatch function: renders one frame of a loop animation, returning the modified buffer.
+///
+/// Called by the render engine on every tick. Unlike transitions and entrances, loop animations
+/// use the `frame` counter (incrementing each tick) rather than a 0.0-1.0 progress value,
+/// because they run indefinitely.
+///
+/// # Parameters
+/// - `buffer`: The current slide's fully-rendered content.
+/// - `animation`: Which loop effect to apply.
+/// - `frame`: Monotonically increasing frame counter (drives animation timing).
+/// - `accent`: The theme's accent color (used by bounce ball, pulse, and sparkle).
+/// - `bg`: The theme's background color (used by pulse for interpolation).
+/// - `width`: Terminal width in columns (used by matrix and bounce for positioning).
+/// - `height`: Terminal height in rows (used by matrix and bounce for screen coverage).
+/// - `target`: Optional animation target filter. When `Some("figlet")` or `Some("image")`,
+///   only lines matching that content type are animated; other lines pass through unchanged.
 pub fn render_loop_frame(
     buffer: &[StyledLine],
     animation: LoopAnimation,
@@ -477,9 +684,25 @@ pub fn render_loop_frame(
     }
 }
 
-/// Matrix: falling green characters raining top-to-bottom across the full screen.
-/// Content is overlaid on top of the rain effect. Uses batched spans for performance.
-/// Rain fills whitespace cells even within content rows (character-level granularity).
+/// Renders the Matrix rain loop animation: green cascading characters falling top-to-bottom.
+///
+/// # Visual effect
+/// Columns of random alphanumeric characters "rain" down the screen at different speeds.
+/// The leading character of each rain stream is bright green; trailing characters fade through
+/// green, dim green, and dark green. Actual slide content is overlaid on top of the rain
+/// effect — non-whitespace content cells are preserved, while whitespace cells (even within
+/// content lines) are filled with rain characters. This creates the appearance of content
+/// floating in a Matrix-style digital rain.
+///
+/// # Performance
+/// Rain characters are batched into spans grouped by brightness level, reducing the number
+/// of terminal style-change escape sequences emitted per frame.
+///
+/// # Algorithm
+/// A `classify(col, row)` closure computes each cell's brightness (0=space, 1-4=dark to bright)
+/// based on a deterministic formula involving frame number, column speed, and column offset.
+/// Content rows are processed at character-level granularity using a flat `(char, span_index)`
+/// map to interleave rain and content spans.
 fn render_matrix(
     buffer: &[StyledLine],
     frame: u64,
@@ -606,6 +829,11 @@ fn render_matrix(
     result
 }
 
+/// Creates a styled span for matrix rain characters at the given brightness level.
+///
+/// Brightness levels: 4 = bright green + bold (leading drop), 3 = green, 2 = dim green,
+/// 1 = dark green, 0 = unstyled (space). This maps each level to the appropriate color
+/// and weight to create the depth/distance illusion in the rain effect.
 fn styled_rain_span(text: &str, brightness: u8, bright: Color, green: Color, dim: Color, dark: Color) -> StyledSpan {
     match brightness {
         4 => StyledSpan::new(text).with_fg(bright).bold(),
@@ -616,7 +844,17 @@ fn styled_rain_span(text: &str, brightness: u8, bright: Color, green: Color, dim
     }
 }
 
-/// Bounce: ASCII ball bouncing off screen edges, overlaid on top of all content.
+/// Renders the bounce loop animation: a filled circle (`●`) bouncing off the screen edges.
+///
+/// # Visual effect
+/// A single ball character in the theme's accent color moves across the screen, bouncing off
+/// all four edges. The ball is overlaid on top of the existing slide content — it replaces
+/// one character at its current position while preserving all surrounding content and styling.
+///
+/// # Physics
+/// The ball follows a triangle-wave pattern (not a sine wave), creating linear motion with
+/// instant direction reversal at the edges. The X and Y axes use different periods so the
+/// ball traces a Lissajous-like path rather than a simple diagonal.
 fn render_bounce(
     buffer: &[StyledLine],
     frame: u64,
@@ -716,7 +954,13 @@ fn render_bounce(
     result
 }
 
-/// Pulse: all content brightness oscillates via sine wave.
+/// Renders the pulse loop animation: all content brightness oscillates in a sine-wave pattern.
+///
+/// # Visual effect
+/// Every character on screen smoothly pulsates between dim and bright. The brightness factor
+/// oscillates between 0.3 and 1.0 using a sine wave based on the frame counter. All content
+/// (including different colors) is affected uniformly — each span's foreground is interpolated
+/// between the background color and its original color by the current brightness factor.
 fn render_pulse(
     buffer: &[StyledLine],
     frame: u64,
@@ -743,9 +987,20 @@ fn render_pulse(
     result
 }
 
-/// Sparkle: random star/sparkle characters twinkle on non-space cells.
-/// Each frame, a different set of cells briefly becomes a sparkle character
-/// in bright white/yellow, creating a twinkling starfield effect.
+/// Renders the sparkle loop animation: random cells twinkle as star/sparkle characters.
+///
+/// # Visual effect
+/// Non-whitespace cells periodically flash as sparkle characters (`✦`, `✧`, `★`, `☆`, etc.)
+/// in bright white, yellow, cyan, or the theme's accent color. Each cell has its own
+/// deterministic "sparkle period" (40-89 frames) based on a hash of its position, so different
+/// cells sparkle at different times, creating a natural twinkling starfield appearance.
+/// A cell sparkles for about 3 frames, then returns to its original content.
+///
+/// # Targeting
+/// The `target` parameter can limit the effect to specific content types:
+/// - `Some("figlet")` — only animate FIGlet ASCII title lines.
+/// - `Some("image")` — only animate ASCII art image lines.
+/// - `None` — animate all non-whitespace content.
 fn render_sparkle(
     buffer: &[StyledLine],
     frame: u64,
@@ -840,9 +1095,22 @@ fn render_sparkle(
     result
 }
 
-/// Spin: ASCII art characters cycle through the brightness ramp, creating
-/// a shimmering/morphing wave effect across the image. Each cell shifts
-/// through nearby ASCII ramp characters at a different phase.
+/// Renders the spin loop animation: ASCII art characters cycle through the brightness ramp.
+///
+/// # Visual effect
+/// Each ASCII art character is shifted along a brightness ramp (from space to `$`) by a
+/// sine-wave offset that varies by position and frame. This creates a shimmering, morphing
+/// wave that flows across the image. Characters near the top of the ramp (dark) shift toward
+/// lighter characters and vice versa, producing a liquid/metallic surface appearance.
+///
+/// # Algorithm
+/// 1. A 128-element lookup table maps ASCII byte values to their position in the ramp for O(1) access.
+/// 2. For each non-whitespace ASCII character, the ramp position is found and shifted by
+///    `±4` positions based on `sin(frame * speed + cell_phase)`.
+/// 3. The shifted position is clamped to [1, ramp_len-1] to avoid producing spaces (index 0).
+///
+/// # Targeting
+/// Like sparkle, the `target` parameter can limit the effect to `"figlet"` or `"image"` lines.
 fn render_spin(
     buffer: &[StyledLine],
     frame: u64,
@@ -927,10 +1195,14 @@ fn render_spin(
 
 // ── Helper functions ──
 
+/// Concatenates all span texts in a `StyledLine` into a single plain `String`,
+/// discarding all styling information. Useful for character-level manipulation.
 fn line_to_string(line: &StyledLine) -> String {
     line.spans.iter().map(|s| s.text.as_str()).collect()
 }
 
+/// Counts the total number of Unicode characters (not bytes) across all spans in a line.
+/// This is used by the typewriter animation to calculate how many characters to reveal.
 fn line_char_count(line: &StyledLine) -> usize {
     line.spans.iter().map(|s| s.text.chars().count()).sum()
 }
