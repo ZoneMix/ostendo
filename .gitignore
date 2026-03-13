@@ -7,3 +7,8 @@ SECURITY.md
 
 # Custom presentations (not distributed)
 presentations/dakotacon-2026/
+
+# Claude Code local settings
+.agents/
+.claude/
+CLAUDE.md.bak
