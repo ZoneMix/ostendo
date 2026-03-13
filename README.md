@@ -4,6 +4,8 @@
 
 AI-native terminal presentations from markdown.
 
+![Ostendo demo](demo.gif)
+
 ## Features
 
 - **20 built-in themes** — all WCAG 2.0 compliant contrast ratios
