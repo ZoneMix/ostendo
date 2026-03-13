@@ -636,7 +636,7 @@ impl Presenter {
         if self.active_animation.is_none() && !self.active_loop.is_empty() {
             let slide_loops = &self.slides[self.current].loop_animations;
             for (i, &(la, frame)) in self.active_loop.iter().enumerate() {
-                let target = slide_loops.get(i).and_then(|(_, t)| t.as_deref());
+                let target = slide_loops.get(i).and_then(|(_, t): &(_, _)| t.as_deref());
                 lines = render_loop_frame(
                     &lines, la, frame,
                     self.accent_color, self.bg_color,
