@@ -152,3 +152,29 @@ Use `AGENTS.md` feedback format: `Slide N - [Feature]: PASS/FAIL - [description]
 - [x] Security: `--no-exec`, `--remote-exec`, `--remote-token` CLI flags
 - [x] Security: WebSocket `execute_code` gated behind `--remote-exec`
 - [x] Security: Token-based WebSocket authentication
+
+## Development Workflow
+
+This project follows the development workflow defined in the global rules.
+Key practices: research first, plan, TDD, code review, then commit.
+
+## NLSpec References
+
+For AI pipeline and agent loop implementation:
+- **Attractor Pipeline**: See https://github.com/strongdm/attractor
+
+## Loaded Skills
+
+The following skills are available in this project (auto-discovered from `.claude/skills/`):
+- `coding-standards` — Universal coding standards (ECC plugin)
+- `tdd-workflow` — Test-driven development enforcement (ECC plugin)
+- `security-review` — Security vulnerability detection (ECC plugin)
+- `backend-patterns` — Backend architecture patterns (ECC plugin)
+
+## Code Quality
+
+- Immutable data patterns (never mutate existing objects)
+- Files under 800 lines, functions under 50 lines
+- 80%+ test coverage via TDD
+- Validate all inputs at system boundaries
+- No hardcoded secrets

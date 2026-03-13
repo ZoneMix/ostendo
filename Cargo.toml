@@ -1,6 +1,6 @@
 [package]
 name = "ostendo"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "AI-native terminal presentation tool — markdown to slides in your terminal"
 license = "GPL-3.0-only"
