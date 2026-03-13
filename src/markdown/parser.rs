@@ -17,251 +17,30 @@
 //!    directives (`<!-- directive: value -->`), Markdown headings, bullets, code fences, tables,
 //!    block quotes, and images.
 //! 5. Inline text formatting (bold, italic, code, strikethrough) is handled by
-//!    `parse_inline_formatting()`, called later during rendering — not during slide parsing.
+//!    `parse_inline_formatting()` in the `inline` submodule, called later during rendering.
 //!
-//! # Key Rust concepts used here
+//! # Submodules
 //!
-//! - **`LazyLock<Regex>`**: Each regex pattern is compiled exactly once on first use and then
-//!   cached for the lifetime of the program. `LazyLock` is Rust's standard lazy-initialization
-//!   primitive for `static` values (similar to `lazy_static!` but built into the standard library).
-//! - **`anyhow::Result`**: A flexible error type that can hold any error. Used here so that
-//!   `parse_presentation()` can return descriptive error messages without defining custom error types.
+//! - `regex_patterns` — All `LazyLock<Regex>` statics used by the parser.
+//! - `tables` — `TableParseState`, `parse_table_cells`, `parse_table_alignments`.
+//! - `inline` — `parse_inline_formatting` for inline Markdown formatting (bold, italic, etc.).
 
 use anyhow::Result;
 use regex::Regex;
 use std::path::Path;
-use std::sync::LazyLock;
 
 use crate::presentation::{
     BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnLayout, DiagramBlock, DiagramStyle,
     ExecMode, FooterAlign, ImagePosition, ImageRenderMode, MermaidBlock, PresentationMeta,
-    Slide, SlideAlignment, SlideImage, Table, TableAlign,
+    Slide, SlideAlignment, SlideImage, Table,
 };
 
-/// Matches the opening of a fenced code block with an optional language, exec mode, and label.
-/// Capture groups: (1) language, (2) `+exec` or `+pty`, (3) label text.
-/// Example: `` ```python +exec {label: "demo.py"} ``
-static FENCE_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^```(\w*)\s*(\+exec|\+pty)?\s*(?:\{label:\s*"([^"]*)"\s*\})?\s*$"#).unwrap()
-});
+use super::regex_patterns::*;
+use super::tables::{TableParseState, parse_table_cells, parse_table_alignments};
 
-/// Matches the opening of a diagram code block with an optional style parameter.
-/// Capture group: (1) style name (e.g., "bracket", "vertical").
-/// Example: `` ```diagram style=bracket ``
-static DIAGRAM_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^```diagram\s*(?:style=(\w+))?\s*$"#).unwrap()
-});
-
-/// Matches the closing of a fenced code block (three backticks on their own line).
-/// Example: `` ``` ``
-static FENCE_CLOSE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^```\s*$").unwrap());
-
-// ── Directive regex patterns ──
-//
-// Each `static` below is a lazily-compiled regular expression. `LazyLock` ensures the regex is
-// compiled exactly once (on first access) and then reused for every subsequent call. This avoids
-// the overhead of recompiling the same pattern inside a loop.
-
-/// Matches `<!-- section: <name> -->`. Assigns the slide to a named section.
-/// Example: `"<!-- section: intro -->"`
-static SECTION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*section:\s*(\S+)\s*-->").unwrap());
-
-/// Matches `<!-- timing: <minutes> -->`. Sets the speaker-time budget for a slide.
-/// Example: `"<!-- timing: 2.5 -->"`
-static TIMING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*timing:\s*([\d.]+)\s*-->").unwrap());
-
-/// Matches `<!-- ascii_title -->`. Enables FIGlet ASCII-art rendering for the slide title.
-/// Example: `"<!-- ascii_title -->"`
-static ASCII_TITLE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*ascii_title\s*-->").unwrap());
-
-/// Matches `<!-- image_position: left|right -->`. Places the image to the left or right of text.
-/// Example: `"<!-- image_position: left -->"`
-static IMAGE_POS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*image_position:\s*(left|right)\s*-->").unwrap());
-
-/// Matches `<!-- image_render: ascii|kitty|iterm|iterm2|sixel -->`. Forces a specific image protocol.
-/// Example: `"<!-- image_render: kitty -->"`
-static IMAGE_RENDER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*image_render:\s*(ascii|kitty|iterm2?|sixel)\s*-->").unwrap());
-
-/// Matches `<!-- image_scale: <percent> -->`. Scales the image (1-100%).
-/// Example: `"<!-- image_scale: 50 -->"`
-static IMAGE_SCALE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*image_scale:\s*(\d+)\s*-->").unwrap());
-
-/// Matches `<!-- image_color: <color> -->`. Overrides the tint color for ASCII-art images.
-/// Example: `"<!-- image_color: #FF5500 -->"`
-static IMAGE_COLOR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*image_color:\s*(\S+)\s*-->").unwrap());
-
-/// Matches the start of a multi-line speaker notes block. The block ends at `-->`.
-/// Example: `"<!-- notes:"`  (note: no closing `-->` on the same line)
-static NOTES_MULTI_START_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*notes:\s*$").unwrap());
-
-/// Matches a single-line speaker note. Capture group (1) is the note text.
-/// Example: `"<!-- notes: Remember to demo this -->"`
-static NOTES_SINGLE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*notes:\s*(.*?)\s*-->\s*$").unwrap());
-
-/// Matches the closing `-->` of a multi-line notes block.
-/// Example: `"-->"`
-static NOTES_END_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-->\s*$").unwrap());
-
-/// Matches any single-line HTML comment. Used as a catch-all to skip unrecognized directives.
-/// Example: `"<!-- any comment here -->"`
-static HTML_COMMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--.*-->\s*$").unwrap());
-
-/// Matches `<!-- column_layout: [ratios] -->`. Defines a multi-column layout with width ratios.
-/// Capture group (1) is the comma-separated ratio list.
-/// Example: `"<!-- column_layout: [1,2,1] -->"`
-static COLUMN_LAYOUT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*column_layout:\s*\[([^\]]+)\]\s*-->").unwrap());
-
-/// Matches `<!-- column: <index> -->`. Switches content output to the given column index.
-/// Example: `"<!-- column: 0 -->"`
-static COLUMN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*column:\s*(\d+)\s*-->").unwrap());
-
-/// Matches `<!-- reset_layout -->`. Ends the current column layout and returns to normal flow.
-/// Example: `"<!-- reset_layout -->"`
-static RESET_LAYOUT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*reset_layout\s*-->").unwrap());
-
-/// Matches `<!-- font_size: <n> -->`. Sets the terminal font size delta (-3 to 7).
-/// Negative values shrink below base; positive values enlarge. Kitty terminal only.
-/// Example: `"<!-- font_size: 3 -->"`
-static FONT_SIZE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_size:\s*(-?\d+)\s*-->").unwrap());
-
-/// Matches `<!-- font_transition: <mode> -->`. Controls how font size changes animate.
-/// Use `none` for instant changes. Kitty terminal only.
-/// Example: `"<!-- font_transition: none -->"`
-static FONT_TRANSITION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*font_transition:\s*(\w+)\s*-->").unwrap());
-
-/// Matches `<!-- text_scale: <n> -->`. Scales title + subtitle via OSC 66 protocol (1-7).
-/// Example: `"<!-- text_scale: 3 -->"`
-static TEXT_SCALE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*text_scale:\s*(\d+)\s*-->").unwrap());
-
-/// Matches `<!-- title_scale: <n> -->`. Scales title only via OSC 66 protocol (1-7).
-/// Example: `"<!-- title_scale: 5 -->"`
-static TITLE_SCALE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*title_scale:\s*(\d+)\s*-->").unwrap());
-
-/// Matches a Markdown level-1 heading (`# Title text`). Capture group (1) is the title.
-/// Example: `"# Welcome to My Presentation"`
-static TITLE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^#\s+(.+)$").unwrap());
-
-/// Matches a Markdown image reference. Capture groups: (1) alt text, (2) file path.
-/// Example: `"![architecture diagram](images/arch.png)"`
-static IMAGE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$").unwrap());
-
-/// Matches a Markdown bullet point (`-` or `*`). Capture groups: (1) leading whitespace (for
-/// nesting depth), (2) bullet text. Depth: 0 spaces = level 0, 2+ = level 1, 4+ = level 2.
-/// Example: `"  - Nested bullet item"`
-static BULLET_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\s*)[-*]\s*(.*)$").unwrap());
-
-/// Matches the `---` slide separator on its own line. The `(?m)` flag enables multi-line mode
-/// so that `^` and `$` match at line boundaries, not just the start/end of the whole string.
-/// Example: `"---"`
-static SLIDE_SEPARATOR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^---\s*$").unwrap());
-
-/// Matches a Markdown table data row (pipe-delimited cells). Does not distinguish header from body.
-/// Example: `"| Name | Value |"`
-static TABLE_ROW_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\|(.+)\|\s*$").unwrap());
-
-/// Matches a Markdown table separator row with dashes and optional colons for alignment.
-/// Example: `"| :--- | :---: | ---: |"`
-static TABLE_SEP_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)*\|\s*$").unwrap());
-
-/// Matches a Markdown block quote line. Capture group (1) is the text after `>`.
-/// Example: `"> This is a quote"`
-static BLOCKQUOTE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^>\s?(.*)$").unwrap());
-
-/// Matches `<!-- footer: <text> -->`. Sets a per-slide footer message.
-/// Example: `"<!-- footer: Confidential -->"`
-static FOOTER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*footer:\s*(.*?)\s*-->").unwrap());
-
-/// Matches `<!-- footer_align: left|center|right -->`. Controls footer text alignment.
-/// Example: `"<!-- footer_align: center -->"`
-static FOOTER_ALIGN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*footer_align:\s*(left|center|right)\s*-->").unwrap());
-
-/// Matches `<!-- align: top|center|vcenter|hcenter -->`. Controls vertical/horizontal alignment.
-/// `center` = both axes, `vcenter` = vertical only, `hcenter` = horizontal only.
-/// Example: `"<!-- align: center -->"`
-static ALIGN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*align:\s*(top|center|vcenter|hcenter)\s*-->").unwrap());
-
-/// Matches `<!-- title_decoration: underline|box|banner|none -->`. Adds visual decoration to
-/// the slide title.
-/// Example: `"<!-- title_decoration: box -->"`
-static TITLE_DECORATION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*title_decoration:\s*(underline|box|banner|none)\s*-->").unwrap());
-
-/// Matches `<!-- transition: fade|slide|dissolve -->`. Sets the transition animation when
-/// navigating to this slide.
-/// Example: `"<!-- transition: dissolve -->"`
-static TRANSITION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*transition:\s*(fade|slide|dissolve)\s*-->").unwrap());
-
-/// Matches `<!-- animation: typewriter|fade_in|slide_down -->`. Sets a one-shot entrance
-/// animation that plays when the slide first appears.
-/// Example: `"<!-- animation: typewriter -->"`
-static ANIMATION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*animation:\s*(typewriter|fade_in|slide_down)\s*-->").unwrap());
-
-/// Matches `<!-- loop_animation: <type>[(target)] -->`. Sets a continuous animation that runs
-/// while the slide is displayed. Optional `(target)` limits the effect to `figlet` or `image`.
-/// Multiple loop animations are allowed on a single slide.
-/// Example: `"<!-- loop_animation: sparkle(figlet) -->"`
-static LOOP_ANIMATION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*loop_animation:\s*(matrix|bounce|pulse|sparkle|spin)(?:\((\w+)\))?\s*-->").unwrap());
-
-/// Matches `<!-- fullscreen -->` or `<!-- fullscreen: true|false -->`. When enabled, the slide
-/// hides the status bar and uses the full terminal height.
-/// Example: `"<!-- fullscreen: true -->"`
-static FULLSCREEN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*fullscreen(?::\s*(true|false))?\s*-->").unwrap());
-
-/// Matches `<!-- show_section: true|false -->`. Controls whether the section name appears
-/// in the status bar for this slide.
-/// Example: `"<!-- show_section: false -->"`
-static SHOW_SECTION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*show_section:\s*(true|false)\s*-->").unwrap());
-
-/// Matches `<!-- theme: <slug> -->`. Overrides the presentation theme for this slide only.
-/// The slug must match a theme file in the `themes/` directory.
-/// Example: `"<!-- theme: cyber_red -->"`
-static THEME_OVERRIDE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*theme:\s*(\S+)\s*-->").unwrap());
-
-/// Matches `<!-- preamble_start: <language> -->`. Begins a code preamble block for the given
-/// language. Lines between this and `<!-- preamble_end -->` are prepended to executable code blocks.
-/// Example: `"<!-- preamble_start: python -->"`
-static PREAMBLE_START_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*preamble_start:\s*(\w+)\s*-->").unwrap());
-
-/// Matches `<!-- preamble_end -->`. Ends the current code preamble block.
-/// Example: `"<!-- preamble_end -->"`
-static PREAMBLE_END_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*preamble_end\s*-->").unwrap());
+// Re-export parse_inline_formatting at this path for backward compatibility.
+// External callers use `crate::markdown::parser::parse_inline_formatting`.
+pub use super::inline::parse_inline_formatting;
 
 /// Parses YAML-like front matter into a `PresentationMeta` struct.
 ///
@@ -310,72 +89,6 @@ fn parse_front_matter(block: &str) -> PresentationMeta {
     meta
 }
 
-/// Temporary state accumulated while parsing a Markdown table.
-///
-/// A valid Markdown table consists of:
-/// 1. A header row: `| Col A | Col B |`
-/// 2. A separator row: `| --- | :---: |`  (sets alignment; must appear to finalize the table)
-/// 3. Zero or more data rows: `| val1 | val2 |`
-///
-/// The parser collects lines into this struct. Only once `has_separator` is true are subsequent
-/// rows treated as data rows. If the separator never appears, the "table" is discarded.
-struct TableParseState {
-    /// Column header labels from the first row.
-    headers: Vec<String>,
-    /// Per-column alignment (left, center, right) inferred from the separator row's colons.
-    alignments: Vec<TableAlign>,
-    /// Data rows collected after the separator.
-    rows: Vec<Vec<String>>,
-    /// Whether the mandatory separator row (`| --- | --- |`) has been seen.
-    has_separator: bool,
-}
-
-/// Splits a pipe-delimited table row into individual cell strings.
-///
-/// Leading and trailing pipes produce empty strings which are filtered out, so
-/// `"| A | B |"` yields `["A", "B"]`.
-///
-/// # Parameters
-/// - `row`: A single line of a Markdown table, e.g. `"| Name | Value |"`.
-///
-/// # Returns
-/// A `Vec<String>` of trimmed cell values.
-fn parse_table_cells(row: &str) -> Vec<String> {
-    row.split('|')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// Determines per-column alignment from a Markdown table separator row.
-///
-/// The separator row uses colons to indicate alignment:
-/// - `:---` or `---` = left-aligned (default)
-/// - `:---:` = center-aligned
-/// - `---:` = right-aligned
-///
-/// # Parameters
-/// - `sep_row`: The separator line, e.g. `"| :--- | :---: | ---: |"`.
-///
-/// # Returns
-/// A `Vec<TableAlign>` with one entry per column.
-fn parse_table_alignments(sep_row: &str) -> Vec<TableAlign> {
-    sep_row
-        .split('|')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            let left = s.starts_with(':');
-            let right = s.ends_with(':');
-            match (left, right) {
-                (true, true) => TableAlign::Center,
-                (false, true) => TableAlign::Right,
-                _ => TableAlign::Left,
-            }
-        })
-        .collect()
-}
-
 /// Parses a single slide block into a `Slide` struct.
 ///
 /// This is the main per-slide parser. It scans every line of the raw slide text looking for:
@@ -384,7 +97,7 @@ fn parse_table_alignments(sep_row: &str) -> Vec<TableAlign> {
 ///    by boolean flags (`in_notes`, `in_code`, `in_diagram`). While inside one of these,
 ///    lines are accumulated until the closing delimiter is found.
 /// 2. **HTML comment directives** — each `<!-- key: value -->` line is matched against the
-///    static regex patterns defined above. Recognized directives set fields on the slide.
+///    static regex patterns defined in `regex_patterns`. Recognized directives set fields on the slide.
 /// 3. **Markdown content** — headings (`#`), images (`![]()`), bullets (`- text`), tables
 ///    (`| ... |`), and block quotes (`> text`) are parsed into their respective structs.
 /// 4. **Subtitle** — the first non-empty, non-directive line after the title heading.
@@ -1031,165 +744,10 @@ pub fn parse_presentation(source: &str, base_dir: Option<&Path>) -> Result<(Pres
     Ok((meta, slides))
 }
 
-/// Parses inline Markdown formatting into a vector of styled text spans.
-///
-/// This function is called during **rendering** (not during slide parsing) to convert a plain
-/// text string into a sequence of `StyledSpan` values, each carrying formatting flags.
-///
-/// # Supported formatting
-/// - `**bold**` — applies the `bold` flag. Supports nested `*italic*` inside bold.
-/// - `*italic*` or `_italic_` — applies the `italic` flag.
-/// - `` `inline code` `` — applies the `code_bg` background color and pads with spaces.
-/// - `~~strikethrough~~` — applies the `strikethrough` flag.
-///
-/// # Parameters
-/// - `text`: The raw inline text to parse (e.g., a bullet or subtitle string).
-/// - `base_fg`: The default foreground color for unstyled text.
-/// - `code_bg`: The background color used for inline code spans.
-///
-/// # Returns
-/// A `Vec<StyledSpan>` where each span covers a contiguous run of identically-formatted text.
-/// If the input contains no formatting markers, a single span wrapping the entire text is returned.
-///
-/// # Algorithm
-/// The function walks through the character array one position at a time, looking for opening
-/// markers (`**`, `~~`, `` ` ``, `*`, `_`). When it finds one, it flushes any accumulated
-/// plain text as a span, then scans forward for the matching closing marker. The text between
-/// the markers becomes a new span with the appropriate formatting flag set.
-pub fn parse_inline_formatting(
-    text: &str,
-    base_fg: crossterm::style::Color,
-    code_bg: crossterm::style::Color,
-) -> Vec<crate::render::text::StyledSpan> {
-    use crate::render::text::StyledSpan;
-
-    let mut spans = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut pos = 0;
-    let mut current = String::new();
-
-    while pos < chars.len() {
-        // Check for ** (bold) — recursively handles *italic* inside bold
-        if pos + 1 < chars.len() && chars[pos] == '*' && chars[pos + 1] == '*' {
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
-            }
-            pos += 2;
-            let mut inner = String::new();
-            while pos + 1 < chars.len() && !(chars[pos] == '*' && chars[pos + 1] == '*') {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos + 1 < chars.len() { pos += 2; } // skip closing **
-            if !inner.is_empty() {
-                // Parse inner content for nested italic (*...*) within bold
-                let inner_chars: Vec<char> = inner.chars().collect();
-                let mut ipos = 0;
-                let mut plain = String::new();
-                while ipos < inner_chars.len() {
-                    if inner_chars[ipos] == '*' {
-                        if !plain.is_empty() {
-                            spans.push(StyledSpan::new(&plain).with_fg(base_fg).bold());
-                            plain.clear();
-                        }
-                        ipos += 1;
-                        let mut italic_text = String::new();
-                        while ipos < inner_chars.len() && inner_chars[ipos] != '*' {
-                            italic_text.push(inner_chars[ipos]);
-                            ipos += 1;
-                        }
-                        if ipos < inner_chars.len() { ipos += 1; } // skip closing *
-                        if !italic_text.is_empty() {
-                            spans.push(StyledSpan::new(&italic_text).with_fg(base_fg).bold().italic());
-                        }
-                    } else {
-                        plain.push(inner_chars[ipos]);
-                        ipos += 1;
-                    }
-                }
-                if !plain.is_empty() {
-                    spans.push(StyledSpan::new(&plain).with_fg(base_fg).bold());
-                }
-            }
-            continue;
-        }
-        // Check for ~~ (strikethrough)
-        if pos + 1 < chars.len() && chars[pos] == '~' && chars[pos + 1] == '~' {
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
-            }
-            pos += 2;
-            let mut inner = String::new();
-            while pos + 1 < chars.len() && !(chars[pos] == '~' && chars[pos + 1] == '~') {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos + 1 < chars.len() { pos += 2; }
-            if !inner.is_empty() {
-                spans.push(StyledSpan::new(&inner).with_fg(base_fg).strikethrough());
-            }
-            continue;
-        }
-        // Check for ` (inline code)
-        if chars[pos] == '`' {
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
-            }
-            pos += 1;
-            let mut inner = String::new();
-            while pos < chars.len() && chars[pos] != '`' {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos < chars.len() { pos += 1; } // skip closing `
-            if !inner.is_empty() {
-                spans.push(StyledSpan::new(&format!(" {} ", inner)).with_fg(base_fg).with_bg(code_bg));
-            }
-            continue;
-        }
-        // Check for * or _ (italic) — single, not double
-        if (chars[pos] == '*' || chars[pos] == '_')
-            && (pos + 1 >= chars.len() || chars[pos + 1] != chars[pos])
-        {
-            let marker = chars[pos];
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
-            }
-            pos += 1;
-            let mut inner = String::new();
-            while pos < chars.len() && chars[pos] != marker {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos < chars.len() { pos += 1; } // skip closing marker
-            if !inner.is_empty() {
-                spans.push(StyledSpan::new(&inner).with_fg(base_fg).italic());
-            }
-            continue;
-        }
-        current.push(chars[pos]);
-        pos += 1;
-    }
-
-    if !current.is_empty() {
-        spans.push(StyledSpan::new(&current).with_fg(base_fg));
-    }
-
-    // If no formatting was found, return a single span
-    if spans.is_empty() {
-        spans.push(StyledSpan::new(text).with_fg(base_fg));
-    }
-
-    spans
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::TableAlign;
 
     fn parse(src: &str) -> Vec<Slide> {
         let (_meta, slides) = parse_presentation(src, None).unwrap();
