@@ -23,6 +23,10 @@ AI-native terminal presentations from markdown.
 ## Quick Start
 
 ```bash
+# Quickstart
+cargo run -- presentations/examples/demo.md --remote
+
+# Build Release Version
 cargo build --release
 ./target/release/ostendo presentations/examples/demo.md
 ./target/release/ostendo presentations/examples/demo.md --theme dracula
