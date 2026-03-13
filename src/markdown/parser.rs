@@ -4,13 +4,16 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::presentation::{
-    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnLayout, ExecMode, FooterAlign,
-    ImagePosition, ImageRenderMode, MermaidBlock, PresentationMeta, Slide, SlideAlignment,
-    SlideImage, Table, TableAlign,
+    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnLayout, DiagramBlock, DiagramStyle,
+    ExecMode, FooterAlign, ImagePosition, ImageRenderMode, MermaidBlock, PresentationMeta,
+    Slide, SlideAlignment, SlideImage, Table, TableAlign,
 };
 
 static FENCE_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"^```(\w*)\s*(\+exec|\+pty)?\s*(?:\{label:\s*"([^"]*)"\s*\})?\s*$"#).unwrap()
+});
+static DIAGRAM_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^```diagram\s*(?:style=(\w+))?\s*$"#).unwrap()
 });
 static FENCE_CLOSE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^```\s*$").unwrap());
@@ -83,6 +86,8 @@ static FULLSCREEN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*fullscreen(?::\s*(true|false))?\s*-->").unwrap());
 static SHOW_SECTION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*show_section:\s*(true|false)\s*-->").unwrap());
+static THEME_OVERRIDE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*theme:\s*(\S+)\s*-->").unwrap());
 static PREAMBLE_START_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*preamble_start:\s*(\w+)\s*-->").unwrap());
 static PREAMBLE_END_RE: LazyLock<Regex> =
@@ -177,18 +182,22 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut title_decoration: Option<String> = None;
     let mut transition: Option<crate::render::animation::TransitionType> = None;
     let mut entrance_animation: Option<crate::render::animation::EntranceAnimation> = None;
-    let mut loop_animation: Option<crate::render::animation::LoopAnimation> = None;
-    let mut loop_animation_target: Option<String> = None;
+    let mut loop_animations: Vec<(crate::render::animation::LoopAnimation, Option<String>)> = Vec::new();
     let mut fullscreen: Option<bool> = None;
     let mut show_section: Option<bool> = None;
     let mut code_preambles: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut preamble_lang: Option<String> = None;
     let mut preamble_lines: Vec<String> = Vec::new();
     let mut mermaid_blocks: Vec<MermaidBlock> = Vec::new();
+    let mut diagram_blocks: Vec<DiagramBlock> = Vec::new();
+    let mut theme_override: Option<String> = None;
     let mut font_transition: Option<String> = None;
 
     let mut in_notes = false;
     let mut in_code = false;
+    let mut in_diagram = false;
+    let mut diagram_style = DiagramStyle::Box;
+    let mut diagram_lines: Vec<String> = Vec::new();
     let mut code_lang = String::new();
     let mut code_label = String::new();
     let mut code_exec_mode: Option<ExecMode> = None;
@@ -214,6 +223,21 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
                 in_notes = false;
             } else {
                 notes_lines.push(line.to_string());
+            }
+            continue;
+        }
+
+        // Inside diagram block
+        if in_diagram {
+            if FENCE_CLOSE_RE.is_match(line) {
+                diagram_blocks.push(DiagramBlock {
+                    source: diagram_lines.join("\n"),
+                    style: diagram_style,
+                });
+                in_diagram = false;
+                diagram_lines.clear();
+            } else {
+                diagram_lines.push(line.to_string());
             }
             continue;
         }
@@ -249,6 +273,17 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             } else {
                 code_lines.push(line.to_string());
             }
+            continue;
+        }
+
+        // Diagram fence opening (check before general code fence)
+        if let Some(caps) = DIAGRAM_FENCE_RE.captures(line) {
+            in_diagram = true;
+            diagram_style = match caps.get(1).map(|m| m.as_str()) {
+                Some("bracket") => DiagramStyle::Bracket,
+                Some("vertical") => DiagramStyle::Vertical,
+                _ => DiagramStyle::Box,
+            };
             continue;
         }
 
@@ -353,16 +388,24 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             continue;
         }
 
-        // Loop animation directive
+        // Loop animation directive (multiple allowed per slide)
         if let Some(caps) = LOOP_ANIMATION_RE.captures(line) {
-            loop_animation = crate::render::animation::parse_loop_animation(&caps[1]);
-            loop_animation_target = caps.get(2).map(|m| m.as_str().to_string());
+            if let Some(la) = crate::render::animation::parse_loop_animation(&caps[1]) {
+                let target = caps.get(2).map(|m| m.as_str().to_string());
+                loop_animations.push((la, target));
+            }
             continue;
         }
 
         // Fullscreen directive (<!-- fullscreen --> or <!-- fullscreen: true/false -->)
         if let Some(caps) = FULLSCREEN_RE.captures(line) {
             fullscreen = Some(caps.get(1).map_or(true, |m| m.as_str() != "false"));
+            continue;
+        }
+
+        // Theme override directive (<!-- theme: slug -->)
+        if let Some(caps) = THEME_OVERRIDE_RE.captures(line) {
+            theme_override = Some(caps[1].to_string());
             continue;
         }
 
@@ -651,12 +694,13 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         title_decoration,
         transition,
         entrance_animation,
-        loop_animation,
-        loop_animation_target,
+        loop_animations,
         fullscreen,
         show_section,
         code_preambles,
         mermaid_blocks,
+        diagram_blocks,
+        theme_override,
         font_transition,
     };
 
@@ -1160,7 +1204,7 @@ mod tests {
         let src = "<!-- animation: typewriter -->\n<!-- loop_animation: matrix -->\n# Animated";
         let slides = parse(src);
         assert_eq!(slides[0].entrance_animation, Some(crate::render::animation::EntranceAnimation::Typewriter));
-        assert_eq!(slides[0].loop_animation, Some(crate::render::animation::LoopAnimation::Matrix));
+        assert_eq!(slides[0].loop_animations, vec![(crate::render::animation::LoopAnimation::Matrix, None)]);
     }
 
     #[test]
@@ -1235,5 +1279,19 @@ mod tests {
         let md = "---\n---\n# Slide\n<!-- font_transition: none -->\nHello";
         let (_, slides) = parse_presentation(md, None).unwrap();
         assert_eq!(slides[0].font_transition.as_deref(), Some("none"));
+    }
+
+    #[test]
+    fn test_theme_override_directive() {
+        let src = "<!-- theme: cyber_red -->\n# Red Slide";
+        let slides = parse(src);
+        assert_eq!(slides[0].theme_override.as_deref(), Some("cyber_red"));
+    }
+
+    #[test]
+    fn test_theme_override_default_none() {
+        let src = "# No Theme Override";
+        let slides = parse(src);
+        assert!(slides[0].theme_override.is_none());
     }
 }

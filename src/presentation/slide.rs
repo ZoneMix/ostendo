@@ -60,12 +60,13 @@ pub struct Slide {
     pub title_decoration: Option<String>,
     pub transition: Option<TransitionType>,
     pub entrance_animation: Option<EntranceAnimation>,
-    pub loop_animation: Option<LoopAnimation>,
-    pub loop_animation_target: Option<String>,
+    pub loop_animations: Vec<(LoopAnimation, Option<String>)>,
     pub fullscreen: Option<bool>,
     pub show_section: Option<bool>,
     pub code_preambles: HashMap<String, String>,
     pub mermaid_blocks: Vec<MermaidBlock>,
+    pub diagram_blocks: Vec<DiagramBlock>,
+    pub theme_override: Option<String>,
     pub font_transition: Option<String>,
 }
 
@@ -155,6 +156,20 @@ pub struct MermaidBlock {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum DiagramStyle {
+    #[default]
+    Box,
+    Bracket,
+    Vertical,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiagramBlock {
+    pub source: String,
+    pub style: DiagramStyle,
+}
+
 impl Default for Slide {
     fn default() -> Self {
         Self {
@@ -180,12 +195,13 @@ impl Default for Slide {
             title_decoration: None,
             transition: None,
             entrance_animation: None,
-            loop_animation: None,
-            loop_animation_target: None,
+            loop_animations: Vec::new(),
             fullscreen: None,
             show_section: None,
             code_preambles: HashMap::new(),
             mermaid_blocks: Vec::new(),
+            diagram_blocks: Vec::new(),
+            theme_override: None,
             font_transition: None,
         }
     }

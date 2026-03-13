@@ -27,7 +27,7 @@ impl Presenter {
 
             // Dynamic poll timeout: 33ms when animation/GIF active (~30fps), 100ms otherwise
             let has_active_gif = self.current_slide_has_gif();
-            let poll_ms = if self.active_animation.is_some() || self.active_loop.is_some() || has_active_gif { 33 } else { 100 };
+            let poll_ms = if self.active_animation.is_some() || !self.active_loop.is_empty() || has_active_gif { 33 } else { 100 };
             let mut had_input = false;
             if event::poll(std::time::Duration::from_millis(poll_ms))? {
                 // Drain ALL pending events before rendering (prevents mouse event flooding)
@@ -95,9 +95,11 @@ impl Presenter {
                 }
             }
 
-            // Tick loop animation
-            if let Some((_, ref mut frame)) = self.active_loop {
-                *frame += 1;
+            // Tick loop animations
+            if !self.active_loop.is_empty() {
+                for (_, ref mut frame) in self.active_loop.iter_mut() {
+                    *frame += 1;
+                }
                 self.needs_full_redraw = true;
                 // Only render loop when no transition/entrance is active
                 if self.active_animation.is_none() {
@@ -173,6 +175,7 @@ impl Presenter {
                     let registry = crate::theme::ThemeRegistry::load();
                     if let Some(new_theme) = registry.get(&slug) {
                         self.is_light_variant = new_theme.dark_variant.is_some();
+                        self.base_theme = new_theme.clone();
                         self.apply_theme(new_theme);
                     }
                 }
@@ -420,6 +423,7 @@ impl Presenter {
                 if let Some(slug) = parts.get(1) {
                     let registry = crate::theme::ThemeRegistry::load();
                     if let Some(new_theme) = registry.get(slug.trim()) {
+                        self.base_theme = new_theme.clone();
                         self.apply_theme(new_theme);
                     }
                 }

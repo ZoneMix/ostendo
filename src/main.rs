@@ -9,6 +9,7 @@ mod third_party;
 mod image_util;
 mod export;
 mod watch;
+mod diagram;
 
 use anyhow::Result;
 use clap::Parser;

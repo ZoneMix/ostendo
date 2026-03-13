@@ -209,7 +209,7 @@ pub struct Presenter {
     gradient_vertical: bool,
     is_light_variant: bool,
     active_animation: Option<crate::render::animation::AnimationState>,
-    active_loop: Option<(crate::render::animation::LoopAnimation, u64)>,
+    active_loop: Vec<(crate::render::animation::LoopAnimation, u64)>,
     last_rendered_buffer: Vec<StyledLine>,
     mermaid_renderer: Option<crate::image_util::mermaid::MermaidRenderer>,
     /// True when fullscreen was toggled by user (f key), not by a slide directive.
@@ -237,6 +237,7 @@ pub struct Presenter {
     needs_full_redraw: bool,
     image_scale_offset: i8,
     theme_slugs: Vec<String>,
+    base_theme: Theme,
     allow_exec: bool,
     allow_remote_exec: bool,
     figfont: Option<figlet_rs::FIGfont>,
@@ -357,6 +358,7 @@ impl Presenter {
                 None
             };
 
+        let base_theme = theme.clone();
         let mut presenter = Self {
             current: restored_slide.min(slides.len().saturating_sub(1)),
             slides,
@@ -416,7 +418,7 @@ impl Presenter {
             gradient_vertical,
             is_light_variant: false,
             active_animation: None,
-            active_loop: None,
+            active_loop: Vec::new(),
             last_rendered_buffer: Vec::new(),
             mermaid_renderer: None,
             user_fullscreen_override: None,
@@ -426,6 +428,7 @@ impl Presenter {
             text_scale_cap: protocols::detect_text_scale_capability(),
             pending_dissolve_in: false,
             theme_slugs: crate::theme::ThemeRegistry::load().list(),
+            base_theme,
             allow_exec: !no_exec,
             allow_remote_exec: remote_exec,
             figfont: {
@@ -446,6 +449,7 @@ impl Presenter {
                 if saved_slug != presenter.theme.slug {
                     let registry = crate::theme::ThemeRegistry::load();
                     if let Some(saved_theme) = registry.get(saved_slug) {
+                        presenter.base_theme = saved_theme.clone();
                         presenter.apply_theme(saved_theme);
                     }
                 }
@@ -612,10 +616,12 @@ impl Presenter {
         self.prerender_images();
         // Apply initial slide's font offset (if restored from saved state)
         self.apply_slide_font();
+        // Apply per-slide theme override for the starting slide
+        self.apply_slide_theme();
         // Initialize loop/entrance animations for the starting slide
         {
             let slide = &self.slides[self.current];
-            self.active_loop = slide.loop_animation.map(|la| (la, 0));
+            self.active_loop = slide.loop_animations.iter().map(|(la, _)| (*la, 0)).collect();
             if let Some(fs) = slide.fullscreen {
                 self.show_fullscreen = fs;
             }

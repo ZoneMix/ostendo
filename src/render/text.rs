@@ -100,6 +100,7 @@ pub enum LineContentType {
     FigletTitle,
     AsciiImage,
     CodeBlock,
+    Diagram,
     Padding,
 }
 

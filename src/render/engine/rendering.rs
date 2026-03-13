@@ -650,6 +650,30 @@ impl Presenter {
             lines.push(StyledLine::empty());
         }
 
+        // Native diagram blocks (adaptive: auto-downgrades style if too wide)
+        for diagram_block in &slide.diagram_blocks {
+            let graph = crate::diagram::parser::parse(&diagram_block.source);
+            let dim = match self.text_color {
+                Color::Rgb { r, g, b } => Color::Rgb {
+                    r: r / 2,
+                    g: g / 2,
+                    b: b / 2,
+                },
+                _ => Color::Rgb { r: 128, g: 128, b: 128 },
+            };
+            let diagram_lines = crate::diagram::render_adaptive(
+                &graph,
+                diagram_block.style,
+                content_width,
+                tw,
+                self.accent_color,
+                self.text_color,
+                dim,
+                &pad,
+            );
+            lines.extend(diagram_lines);
+        }
+
         // Image rendering (cached)
         if let Some(ref img) = slide.image {
             // Per-image render mode override from markdown directives
@@ -792,16 +816,17 @@ impl Presenter {
             }
         }
 
-        // Apply loop animation (runs independently, only when no transition/entrance active)
+        // Apply loop animations (runs independently, only when no transition/entrance active)
         // Use full terminal width (tw) so matrix/bounce fill edge-to-edge
-        if self.active_animation.is_none() {
-            if let Some((la, frame)) = self.active_loop {
-                let loop_target = self.slides[self.current].loop_animation_target.as_deref();
+        if self.active_animation.is_none() && !self.active_loop.is_empty() {
+            let slide_loops = &self.slides[self.current].loop_animations;
+            for (i, &(la, frame)) in self.active_loop.iter().enumerate() {
+                let target = slide_loops.get(i).and_then(|(_, t)| t.as_deref());
                 lines = render_loop_frame(
                     &lines, la, frame,
                     self.accent_color, self.bg_color,
                     tw, content_area,
-                    loop_target,
+                    target,
                 );
             }
         }

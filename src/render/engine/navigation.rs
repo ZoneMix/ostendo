@@ -21,7 +21,7 @@ impl Presenter {
         }
 
         // Set up loop animation (runs independently after transition/entrance complete)
-        self.active_loop = slide.loop_animation.map(|la| (la, 0));
+        self.active_loop = slide.loop_animations.iter().map(|(la, _)| (*la, 0)).collect();
 
         self.needs_full_redraw = true;
     }
@@ -39,6 +39,8 @@ impl Presenter {
         // Font transition animation: default to dissolve, but allow per-slide override
         let use_dissolve = self.slides[self.current].font_transition.as_deref() != Some("none");
         self.font_change_is_slide_transition = use_dissolve;
+        // Apply per-slide theme override (or restore base theme)
+        self.apply_slide_theme();
         // Apply per-slide fullscreen directive. User toggle (f key) is sticky
         // until the next slide change, then directives take control again.
         self.user_fullscreen_override = None;
@@ -54,6 +56,24 @@ impl Presenter {
         }
         self.apply_slide_font();
         self.start_slide_animations();
+    }
+
+    /// Apply per-slide theme override or restore the base theme.
+    pub(crate) fn apply_slide_theme(&mut self) {
+        let desired_slug = self.slides[self.current]
+            .theme_override
+            .as_deref()
+            .unwrap_or(&self.base_theme.slug);
+        if self.theme.slug != desired_slug {
+            if desired_slug == self.base_theme.slug {
+                self.apply_theme(self.base_theme.clone());
+            } else {
+                let registry = crate::theme::ThemeRegistry::load();
+                if let Some(override_theme) = registry.get(desired_slug) {
+                    self.apply_theme(override_theme);
+                }
+            }
+        }
     }
 
     pub(crate) fn next_slide(&mut self) {

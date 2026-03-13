@@ -27,6 +27,7 @@ impl Presenter {
         let registry = crate::theme::ThemeRegistry::load();
         if let Some(variant) = registry.get_variant(&self.theme, !self.is_light_variant) {
             self.is_light_variant = !self.is_light_variant;
+            self.base_theme = variant.clone();
             self.apply_theme(variant);
         }
     }
