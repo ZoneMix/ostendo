@@ -30,7 +30,8 @@ Press Ctrl+E on executable code blocks to run them live.
 # What is Ostendo?
 <!-- section: Introduction -->
 <!-- title_decoration: underline -->
-<!-- font_size: 5 -->
+<!-- font_size: 4 -->
+<!-- animation: fade_in -->
 
 A **Rust-powered** presentation engine that renders *beautiful slide decks* directly in your terminal.
 
@@ -55,7 +56,8 @@ synchronized update to eliminate flicker. No curses library needed.
 # Rich Markdown Formatting
 <!-- section: Formatting -->
 <!-- title_decoration: box -->
-<!-- font_size: 5 -->
+<!-- font_size: 4 -->
+<!-- animation: fade_in -->
 
 All standard inline formatting works everywhere -- bullets, subtitles, and block quotes:
 
@@ -80,7 +82,7 @@ background-highlighted (code) spans in any terminal that supports SGR sequences.
 
 # Block Quotes and Attribution
 <!-- section: Formatting -->
-<!-- font_size: 5 -->
+<!-- font_size: 4 -->
 
 Callouts, quotations, and emphasis blocks:
 
@@ -107,7 +109,7 @@ of '>' lines becomes a separate BlockQuote element.
 
 # Data Tables
 <!-- section: Formatting -->
-<!-- font_size: 5 -->
+<!-- font_size: 4 -->
 
 Standard Markdown pipe tables with column alignment:
 
@@ -134,6 +136,7 @@ Unicode box-drawing characters for clean borders.
 <!-- section: Code Execution -->
 <!-- title_decoration: banner -->
 <!-- font_size: 4 -->
+<!-- animation: fade_in -->
 
 Mark code blocks with `+exec` and press **Ctrl+E** to execute live:
 
@@ -163,7 +166,8 @@ The +exec badge appears in the top-right corner of the code block.
 
 # Code: Rust (Auto-Wrap)
 <!-- section: Code Execution -->
-<!-- font_size: 2 -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
 
 No `fn main()` needed -- Ostendo auto-wraps bare Rust code:
 
@@ -198,7 +202,8 @@ This lets you write concise code examples without boilerplate.
 
 # Multi-Language Columns
 <!-- section: Code Execution -->
-<!-- font_size: 3 -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
 
 <!-- column_layout: [1, 1] -->
 <!-- column: 0 -->
@@ -247,6 +252,7 @@ The +exec badge appears on each block to indicate it's runnable.
 # Code Preambles
 <!-- section: Code Execution -->
 <!-- font_size: 4 -->
+<!-- animation: fade_in -->
 
 Hidden imports injected before execution with `preamble_start`/`preamble_end`:
 
@@ -281,7 +287,7 @@ are imported silently so the visible code stays focused on the interesting parts
 # Column Layouts
 <!-- section: Layouts -->
 <!-- title_decoration: banner -->
-<!-- font_size: 5 -->
+<!-- font_size: 4 -->
 
 <!-- column_layout: [1, 1, 1] -->
 <!-- column: 0 -->
@@ -326,7 +332,8 @@ the left column twice the width of the right).
 
 # Weighted Columns
 <!-- section: Layouts -->
-<!-- font_size: 3 -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
 
 Asymmetric layouts with `column_layout: [2, 1]`:
 
@@ -372,6 +379,7 @@ provides context. The ratio [2, 1] gives 2/3 width to the left column.
 <!-- title_decoration: underline -->
 <!-- image_scale: 50 -->
 <!-- font_size: 4 -->
+<!-- animation: fade_in -->
 
 Ostendo detects the best image protocol for your terminal:
 
@@ -396,7 +404,8 @@ sets the initial size as a percentage of terminal width.
 <!-- image_render: ascii -->
 <!-- image_color: #00FF88 -->
 <!-- image_scale: 45 -->
-<!-- font_size: -3 -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
 
 Force ASCII rendering with custom color override:
 
@@ -419,7 +428,8 @@ text terminals and serial consoles.
 <!-- section: Images -->
 <!-- align: center -->
 <!-- image_scale: 60 -->
-<!-- font_size: 3 -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
 
 ![Cat GIF](../../images/cat.gif)
 
@@ -440,7 +450,8 @@ happens within synchronized update blocks to prevent flicker.
 # Diagram: Box Style
 <!-- section: Diagrams -->
 <!-- title_decoration: banner -->
-<!-- font_size: 3 -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
 
 Native ASCII diagrams with the built-in diagram engine (no external tools):
 
@@ -465,7 +476,7 @@ Box style is the default and uses Unicode box-drawing characters.
 
 # Diagram: Bracket Style
 <!-- section: Diagrams -->
-<!-- font_size: 5 -->
+<!-- font_size: 4 -->
 
 Compact bracket notation for tighter layouts:
 
@@ -490,6 +501,7 @@ width is limited or when you want a lighter visual weight.
 # Diagram: Vertical Flow
 <!-- section: Diagrams -->
 <!-- font_size: 4 -->
+<!-- animation: fade_in -->
 
 Top-to-bottom layout for hierarchical flows:
 
