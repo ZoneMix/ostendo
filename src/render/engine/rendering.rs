@@ -375,8 +375,9 @@ impl Presenter {
         // --- Images and Diagrams ---
         // Protocol images (Kitty/iTerm2/Sixel) can't be mixed into the styled line
         // buffer — they need their raw escape data written after the text content.
-        // We track their positions here and emit them at the end of the frame.
-        let mut pending_protocol_images: Vec<(String, usize)> = Vec::new();
+        // Tuple: (escape_data, line_offset, image_cols_for_centering)
+        // image_cols is 0 for legacy Protocol images (they embed their own padding).
+        let mut pending_protocol_images: Vec<(String, usize, usize)> = Vec::new();
 
         // Mermaid diagrams
         for mermaid_block in &slide.mermaid_blocks {
@@ -414,7 +415,7 @@ impl Presenter {
                                 for _ in 0..placeholder_height {
                                     lines.push(StyledLine::empty());
                                 }
-                                pending_protocol_images.push((escape_data, image_line_offset));
+                                pending_protocol_images.push((escape_data, image_line_offset, 0));
                             }
                             RenderedImage::KittyPlacement { cols, rows, transmit_escape: _, image_id: _ } => {
                                 // TODO(v0.5.0 step 1.6): use placement command instead
@@ -554,7 +555,7 @@ impl Presenter {
                         lines.push(StyledLine::empty());
                     }
                     let placement = crate::image_util::kitty::placement_escape(*image_id, *cols, *rows);
-                    pending_protocol_images.push((placement, image_line_offset));
+                    pending_protocol_images.push((placement, image_line_offset, *cols));
                 }
                 CachedImage::Protocol { escape_data, placeholder_height } => {
                     // Record line offset where image should be drawn
@@ -562,7 +563,7 @@ impl Presenter {
                     for _ in 0..*placeholder_height {
                         lines.push(StyledLine::empty());
                     }
-                    pending_protocol_images.push((escape_data.clone(), image_line_offset));
+                    pending_protocol_images.push((escape_data.clone(), image_line_offset, 0));
                 }
             }
             lines.push(StyledLine::empty());
@@ -594,7 +595,7 @@ impl Presenter {
                 padded.append(&mut lines);
                 lines = padded;
                 // Shift protocol image offsets to account for centering padding
-                for (_, offset) in &mut pending_protocol_images {
+                for (_, offset, _) in &mut pending_protocol_images {
                     *offset += padding_rows;
                 }
             }
@@ -865,11 +866,18 @@ impl Presenter {
             Some(ref a) if matches!(a.kind, AnimationKind::Transition(_) | AnimationKind::Entrance(_))
         );
         if !self.pending_dissolve_in && !animation_active {
-            for (escape_data, line_offset) in &pending_protocol_images {
+            for (escape_data, line_offset, img_cols) in &pending_protocol_images {
                 if *line_offset >= visible_start && *line_offset < visible_end {
                     let display_row = line_offset - visible_start;
                     let screen_row = (status_bar_rows + display_row) as u16;
-                    queue!(w, cursor::MoveTo(0, screen_row))?;
+                    if *img_cols > 0 {
+                        // Kitty v2: center image within terminal width
+                        let center_col = (tw.saturating_sub(*img_cols) / 2) as u16;
+                        queue!(w, cursor::MoveTo(center_col, screen_row))?;
+                    } else {
+                        // Legacy Protocol: padding embedded in escape_data
+                        queue!(w, cursor::MoveTo(0, screen_row))?;
+                    }
                     write!(w, "{}", escape_data)?;
                 }
             }
@@ -1163,7 +1171,7 @@ impl Presenter {
     /// they appear atomically with the fully-revealed content.
     fn render_dissolve_in(
         &mut self,
-        pending_protocol_images: &[(String, usize)],
+        pending_protocol_images: &[(String, usize, usize)],
         visible_start: usize,
         visible_end: usize,
         status_bar_rows: usize,
@@ -1269,7 +1277,7 @@ impl Presenter {
 
             // Emit protocol images on the final frame
             if is_last {
-                for (escape_data, line_offset) in pending_protocol_images {
+                for (escape_data, line_offset, _img_cols) in pending_protocol_images {
                     if *line_offset >= visible_start && *line_offset < visible_end {
                         let display_row = line_offset - visible_start;
                         let screen_row = (status_bar_rows + display_row) as u16;

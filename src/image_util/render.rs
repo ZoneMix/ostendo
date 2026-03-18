@@ -234,60 +234,26 @@ fn render_kitty(
     img: &image::RgbaImage,
     display_width: usize,
     max_height: usize,
-    pad_cols: usize,
+    _pad_cols: usize,
     window_size: &WindowSize,
 ) -> RenderedImage {
+    use crate::image_util::kitty;
+
     let (scaled, cols, rows) = crate::image_util::scale_image_pixels(
         img, window_size, display_width, max_height,
     );
-    let (sw, sh) = scaled.dimensions();
 
-    // Encode as PNG
-    let mut png_bytes = Vec::new();
-    let encoder = image::codecs::png::PngEncoder::new(Cursor::new(&mut png_bytes));
-    if image::ImageEncoder::write_image(
-        encoder,
-        scaled.as_raw(),
-        sw,
-        sh,
-        image::ExtendedColorType::Rgba8,
-    ).is_err() {
-        return RenderedImage::Lines(vec![]);
-    }
-
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
-
-    // Build Kitty escape sequence (chunked at 4096 bytes like presenterm)
-    let mut kitty_escape = String::new();
-
-    let chunk_size = 4096;
-    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(chunk_size).collect();
-
-    for (i, chunk) in chunks.iter().enumerate() {
-        let m = if i == chunks.len() - 1 { 0 } else { 1 };
-        let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
-        if i == 0 {
-            // a=T: transmit+display, f=100: PNG format, t=d: direct data
-            // c/r: columns/rows to occupy, q=2: suppress responses
-            kitty_escape.push_str(&format!(
-                "\x1b_Ga=T,f=100,t=d,c={},r={},q=2,m={};{}\x1b\\",
-                cols, rows, m, chunk_str
-            ));
-        } else {
-            kitty_escape.push_str(&format!("\x1b_Gm={};{}\x1b\\", m, chunk_str));
-        }
-    }
-
-    let wrapped = tmux_wrap(&kitty_escape);
-    let mut escape = String::new();
-    if pad_cols > 0 {
-        escape.push_str(&format!("\x1b[{}C", pad_cols));
-    }
-    escape.push_str(&wrapped);
-
-    RenderedImage::Protocol {
-        escape_data: escape,
-        placeholder_height: rows,
+    // Kitty v2: transmit once (a=t), display by ID (a=p).
+    // Centering is handled by cursor positioning at emit time, not by pad_cols.
+    let image_id = kitty::next_image_id();
+    match kitty::transmit_escape(image_id, &scaled) {
+        Some(transmit) => RenderedImage::KittyPlacement {
+            image_id,
+            cols,
+            rows,
+            transmit_escape: transmit,
+        },
+        None => RenderedImage::Lines(vec![]),
     }
 }
 
