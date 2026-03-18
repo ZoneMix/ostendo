@@ -962,7 +962,8 @@ impl Presenter {
         let mut font_applied = false;
 
         // ── Slide transition: scatter-dissolve interleaved with font stepping ──
-        if self.font_change_is_slide_transition {
+        if self.font_change_is_slide_transition != FontTransitionMode::None {
+            let use_fade = self.font_change_is_slide_transition == FontTransitionMode::Fade;
             let old_buf = self.last_rendered_buffer.clone();
             if !old_buf.is_empty() {
                 // Clear Kitty images before the transition
@@ -1043,18 +1044,26 @@ impl Presenter {
                                     for ch in span.text.chars() {
                                         if col >= tw { break; }
                                         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-                                        let group = col / 2;
-                                        let hash = (row as u64).wrapping_mul(31)
-                                            .wrapping_add(group as u64)
-                                            .wrapping_mul(7919) % 1000;
-                                        let threshold = hash as f64 / 1000.0;
-                                        if threshold < progress {
-                                            queue!(fw, SetBackgroundColor(row_bg))?;
-                                            for _ in 0..cw { write!(fw, " ")?; }
-                                        } else {
+                                        if use_fade {
+                                            // Smooth fade: uniformly dim all content toward bg
                                             queue!(fw, SetBackgroundColor(dimmed_bg))?;
                                             queue!(fw, SetForegroundColor(dimmed_fg))?;
                                             write!(fw, "{}", ch)?;
+                                        } else {
+                                            // Scatter dissolve: randomly replace chars with spaces
+                                            let group = col / 2;
+                                            let hash = (row as u64).wrapping_mul(31)
+                                                .wrapping_add(group as u64)
+                                                .wrapping_mul(7919) % 1000;
+                                            let threshold = hash as f64 / 1000.0;
+                                            if threshold < progress {
+                                                queue!(fw, SetBackgroundColor(row_bg))?;
+                                                for _ in 0..cw { write!(fw, " ")?; }
+                                            } else {
+                                                queue!(fw, SetBackgroundColor(dimmed_bg))?;
+                                                queue!(fw, SetForegroundColor(dimmed_fg))?;
+                                                write!(fw, "{}", ch)?;
+                                            }
                                         }
                                         col += cw;
                                     }
@@ -1114,7 +1123,7 @@ impl Presenter {
                 font_applied = true;
                 self.pending_dissolve_in = true;
             }
-            self.font_change_is_slide_transition = false;
+            self.font_change_is_slide_transition = FontTransitionMode::None;
         }
 
         // ── Plain font stepping (interactive ] / [ or slide with font_transition: none) ──

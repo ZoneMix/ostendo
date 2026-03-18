@@ -199,6 +199,17 @@ struct ImageCacheKey {
     color_override: String,
 }
 
+/// How font size changes are animated during slide transitions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum FontTransitionMode {
+    /// No animation — font changes instantly.
+    None,
+    /// Scatter-dissolve: characters randomly replaced by spaces during transition.
+    Dissolve,
+    /// Smooth fade: content uniformly dims to background, font changes, then fades in.
+    Fade,
+}
+
 /// Cached rendered image data.
 ///
 /// There are two rendering paths depending on the terminal's image protocol:
@@ -415,7 +426,7 @@ pub struct Presenter {
     last_applied_font_size: Option<f64>,
     /// True when font change was triggered by slide navigation (fade out old content).
     /// False when triggered by `]`/`[` interactive adjustment (no fade).
-    font_change_is_slide_transition: bool,
+    font_change_is_slide_transition: FontTransitionMode,
     /// OSC 66 text scaling capability. When Osc66, titles render at 2x-3x
     /// natively instead of using FIGlet ASCII art.
     text_scale_cap: TextScaleCapability,
@@ -533,6 +544,7 @@ impl Presenter {
         let (w, h) = (window_size.columns, window_size.rows);
         let state = StateManager::load(presentation_path);
         // Restore slide position from saved state (CLI --slide flag overrides)
+        let restored_image_scale = state.get_image_scale_offset();
         let restored_slide = if start == 0 {
             state.get_current_slide()
         } else {
@@ -660,7 +672,7 @@ impl Presenter {
             last_rendered_image_scale: 0,
             last_rendered_gif_frame: 0,
             needs_full_redraw: true,
-            image_scale_offset: 0,
+            image_scale_offset: restored_image_scale,
             gradient_from,
             gradient_to,
             gradient_vertical,
@@ -672,7 +684,7 @@ impl Presenter {
             user_fullscreen_override: None,
             pending_font_size: None,
             last_applied_font_size: None,
-            font_change_is_slide_transition: false,
+            font_change_is_slide_transition: FontTransitionMode::None,
             text_scale_cap: protocols::detect_text_scale_capability(),
             pending_dissolve_in: false,
             theme_slugs: crate::theme::ThemeRegistry::load().list(),

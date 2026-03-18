@@ -47,6 +47,11 @@ pub struct PresentationState {
     /// When present, the renderer loads this theme on startup instead of the default.
     #[serde(default)]
     pub theme_slug: Option<String>,
+
+    /// Global image scale offset from `>` / `<` keys (-90 to +100).
+    /// Persisted so the user's preferred image size survives restarts.
+    #[serde(default)]
+    pub image_scale_offset: i8,
 }
 
 /// Manages loading, querying, mutating, and saving [`PresentationState`].
@@ -170,6 +175,16 @@ impl StateManager {
     /// - `slug` — the unique identifier for a theme (e.g., `"dracula"`).
     pub fn set_theme_slug(&mut self, slug: &str) {
         self.state.theme_slug = Some(slug.to_string());
+    }
+
+    /// Get the saved image scale offset.
+    pub fn get_image_scale_offset(&self) -> i8 {
+        self.state.image_scale_offset
+    }
+
+    /// Save the image scale offset.
+    pub fn set_image_scale_offset(&mut self, offset: i8) {
+        self.state.image_scale_offset = offset;
     }
 
     /// Writes the current in-memory state to the JSON file on disk.

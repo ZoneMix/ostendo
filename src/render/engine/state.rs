@@ -74,7 +74,7 @@ impl Presenter {
             let new = cur + delta;
             if (-20..=20).contains(&new) {
                 self.slide_font_offsets.insert(self.current, new);
-                self.font_change_is_slide_transition = false;
+                self.font_change_is_slide_transition = FontTransitionMode::None;
                 self.apply_slide_font();
                 self.needs_full_redraw = true;
                 self.save_state();
@@ -85,7 +85,7 @@ impl Presenter {
     pub(crate) fn reset_font_offset(&mut self) {
         if self.font_capability.is_available() {
             self.slide_font_offsets.remove(&self.current);
-            self.font_change_is_slide_transition = false;
+            self.font_change_is_slide_transition = FontTransitionMode::None;
             self.apply_slide_font();
             self.needs_full_redraw = true;
             self.save_state();
@@ -128,13 +128,14 @@ impl Presenter {
         }
     }
 
-    /// Persist current state (slide position, font offsets, theme) to disk.
+    /// Persist current state (slide position, font offsets, theme, image scale) to disk.
     pub(crate) fn save_state(&mut self) {
         self.state.set_current_slide(self.current);
         for (&slide, &offset) in &self.slide_font_offsets {
             self.state.set_font_offset(slide, offset);
         }
         self.state.set_theme_slug(&self.theme.slug);
+        self.state.set_image_scale_offset(self.image_scale_offset);
         let _ = self.state.save();
     }
 

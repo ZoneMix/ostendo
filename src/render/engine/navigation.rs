@@ -44,9 +44,13 @@ impl Presenter {
         // Reset GIF animation to first frame on slide change
         self.gif_current_frame = 0;
         self.gif_last_advance = std::time::Instant::now();
-        // Font transition animation: default to dissolve, but allow per-slide override
-        let use_dissolve = self.slides[self.current].font_transition.as_deref() != Some("none");
-        self.font_change_is_slide_transition = use_dissolve;
+        // Font transition animation: parse per-slide directive
+        self.font_change_is_slide_transition = match self.slides[self.current].font_transition.as_deref() {
+            Some("none") => FontTransitionMode::None,
+            Some("fade") => FontTransitionMode::Fade,
+            Some("dissolve") => FontTransitionMode::Dissolve,
+            _ => FontTransitionMode::Fade, // Default: smooth fade (not scatter dissolve)
+        };
         // Apply per-slide theme override (or restore base theme)
         self.apply_slide_theme();
         // Apply per-slide fullscreen directive. User toggle (f key) is sticky
