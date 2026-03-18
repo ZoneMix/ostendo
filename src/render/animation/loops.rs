@@ -26,6 +26,7 @@ use super::{LoopAnimation, line_to_string};
 /// - `height`: Terminal height in rows (used by matrix and bounce for screen coverage).
 /// - `target`: Optional animation target filter. When `Some("figlet")` or `Some("image")`,
 ///   only lines matching that content type are animated; other lines pass through unchanged.
+#[allow(clippy::too_many_arguments)]
 pub fn render_loop_frame(
     buffer: &[StyledLine],
     animation: LoopAnimation,

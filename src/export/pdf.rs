@@ -75,7 +75,6 @@ pub fn export_pdf(html_path: &Path, pdf_path: &Path) -> Result<()> {
         let status = Command::new(converter)
             .arg("--headless")
             .arg("--disable-gpu")
-            .arg("--no-sandbox")
             .arg("--print-to-pdf-no-header")
             .arg("--run-all-compositor-stages-before-draw")
             .arg("--virtual-time-budget=5000")

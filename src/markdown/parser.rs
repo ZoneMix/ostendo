@@ -368,7 +368,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Fullscreen directive (<!-- fullscreen --> or <!-- fullscreen: true/false -->)
         if let Some(caps) = FULLSCREEN_RE.captures(line) {
-            fullscreen = Some(caps.get(1).map_or(true, |m| m.as_str() != "false"));
+            fullscreen = Some(caps.get(1).is_none_or(|m| m.as_str() != "false"));
             continue;
         }
 
@@ -927,7 +927,7 @@ mod tests {
             assert!(table_slides.len() >= 2, "Expected at least 2 slides with tables");
             // Verify block quotes parsed
             let quote_slides: Vec<_> = slides.iter().filter(|s| !s.block_quotes.is_empty()).collect();
-            assert!(quote_slides.len() >= 1, "Expected at least 1 slide with block quotes");
+            assert!(!quote_slides.is_empty(), "Expected at least 1 slide with block quotes");
             // Verify columns parsed
             let col_slides: Vec<_> = slides.iter().filter(|s| s.columns.is_some()).collect();
             assert!(col_slides.len() >= 2, "Expected at least 2 slides with columns");

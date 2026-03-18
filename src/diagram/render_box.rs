@@ -7,7 +7,6 @@
 /// └──────────┘    └──────────┘    └──────────┘
 ///   annotation     annotation      annotation
 /// ```
-
 use crossterm::style::Color;
 
 use crate::diagram::parser::{DiagramGraph, DiagramRow};

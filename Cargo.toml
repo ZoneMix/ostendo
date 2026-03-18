@@ -21,6 +21,8 @@ figlet-rs = "0.1"
 icy_sixel = "0.1"
 image = "0.25"
 indexmap = { version = "2", features = ["serde"] }
+libc = "0.2"
+fast_image_resize = "5"
 portable-pty = "0.9"
 regex = "1"
 serde = { version = "1", features = ["derive"] }

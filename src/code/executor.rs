@@ -27,9 +27,20 @@
 //! output display during execution.
 
 use anyhow::{bail, Result};
+use regex::Regex;
 use std::process::Command;
-use std::sync::mpsc;
+use std::sync::{mpsc, LazyLock};
 use std::time::Duration;
+
+/// Regex for detecting C function definitions (used by auto-wrap heuristic).
+static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
+    Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool)\s+\w+\s*\(").unwrap()
+);
+
+/// Regex for detecting C++ function definitions (extended type set).
+static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
+    Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector)\s+\w+\s*\(").unwrap()
+);
 
 /// Maximum code length allowed for execution (64 KB).
 /// Prevents accidentally pasting enormous files into a code block.
@@ -75,16 +86,16 @@ pub fn execute_code(language: &str, code: &str, working_dir: Option<&std::path::
 
     match lang.as_str() {
         "python" => {
-            return run_with_timeout("python3", &["-c", &code], working_dir);
+            run_with_timeout("python3", &["-c", &code], working_dir)
         }
         "bash" | "sh" => {
-            return run_with_timeout("bash", &["-c", &code], working_dir);
+            run_with_timeout("bash", &["-c", &code], working_dir)
         }
         "javascript" => {
-            return run_with_timeout("node", &["-e", &code], working_dir);
+            run_with_timeout("node", &["-e", &code], working_dir)
         }
         "ruby" => {
-            return run_with_timeout("ruby", &["-e", &code], working_dir);
+            run_with_timeout("ruby", &["-e", &code], working_dir)
         }
         "rust" => {
             let dir = tempfile::tempdir()?;
@@ -103,24 +114,24 @@ pub fn execute_code(language: &str, code: &str, working_dir: Option<&std::path::
                 });
             }
             let bin_str = bin.to_string_lossy().to_string();
-            return run_with_timeout(&bin_str, &[], working_dir);
+            run_with_timeout(&bin_str, &[], working_dir)
         }
         "c" => {
-            return compile_and_run(&code, detect_c_compiler(), &["-x", "c", "-o"], working_dir);
+            compile_and_run(&code, detect_c_compiler(), &["-x", "c", "-o"], working_dir)
         }
         "cpp" | "c++" => {
-            return compile_and_run(&code, detect_cpp_compiler(), &["-x", "c++", "-std=c++17", "-o"], working_dir);
+            compile_and_run(&code, detect_cpp_compiler(), &["-x", "c++", "-std=c++17", "-o"], working_dir)
         }
         "go" => {
             let dir = tempfile::tempdir()?;
             let src = dir.path().join("main.go");
             std::fs::write(&src, &*code)?;
             let src_str = src.to_string_lossy().to_string();
-            return run_with_timeout("go", &["run", &src_str], working_dir);
+            run_with_timeout("go", &["run", &src_str], working_dir)
         }
         _ => {
             // Fallback to shell
-            return run_with_timeout("sh", &["-c", &code], working_dir);
+            run_with_timeout("sh", &["-c", &code], working_dir)
         }
     }
 }
@@ -162,8 +173,11 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
     Ok(rx)
 }
 
-/// Run a command with a timeout. Kills the process if it exceeds EXEC_TIMEOUT_SECS.
+/// Run a command with a timeout. Kills the entire process group if it exceeds
+/// EXEC_TIMEOUT_SECS, preventing fork bombs and orphaned child processes.
 fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
+    use std::os::unix::process::CommandExt;
+
     let mut command = Command::new(cmd);
     command.args(args)
         .stdout(std::process::Stdio::piped())
@@ -171,7 +185,16 @@ fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Pa
     if let Some(wd) = working_dir {
         command.current_dir(wd);
     }
+    // Create a new process group so we can kill all descendants on timeout.
+    // SAFETY: pre_exec runs between fork() and exec(); setsid() is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
     let mut child = command.spawn()?;
+    let child_pid = child.id();
 
     let timeout = Duration::from_secs(EXEC_TIMEOUT_SECS);
     let start = std::time::Instant::now();
@@ -193,6 +216,8 @@ fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Pa
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
+                    // Kill entire process group (negative PID = process group)
+                    unsafe { libc::kill(-(child_pid as i32), libc::SIGKILL); }
                     let _ = child.kill();
                     let _ = child.wait();
                     return Ok(ExecutionResult {
@@ -334,8 +359,6 @@ fn wrap_c(code: &str) -> String {
     let mut brace_depth: usize = 0;
 
     // Simple heuristic: a line starting with a C type followed by identifier( is a function def
-    let fn_pattern = regex::Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool)\s+\w+\s*\(").unwrap();
-
     for line in code.lines() {
         let trimmed = line.trim();
         if in_fn {
@@ -345,7 +368,7 @@ fn wrap_c(code: &str) -> String {
             if brace_depth == 0 {
                 in_fn = false;
             }
-        } else if fn_pattern.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
+        } else if C_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
             in_fn = true;
             brace_depth = trimmed.chars().filter(|&c| c == '{').count();
             brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
@@ -397,8 +420,6 @@ fn wrap_cpp(code: &str) -> String {
     let mut in_fn = false;
     let mut brace_depth: usize = 0;
 
-    let fn_pattern = regex::Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector)\s+\w+\s*\(").unwrap();
-
     for line in code.lines() {
         let trimmed = line.trim();
         if in_fn {
@@ -408,7 +429,7 @@ fn wrap_cpp(code: &str) -> String {
             if brace_depth == 0 {
                 in_fn = false;
             }
-        } else if fn_pattern.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
+        } else if CPP_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
             in_fn = true;
             brace_depth = trimmed.chars().filter(|&c| c == '{').count();
             brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());

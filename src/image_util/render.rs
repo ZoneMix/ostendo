@@ -103,6 +103,7 @@ pub enum RenderedImage {
 
 /// Render a slide image using the specified protocol.
 /// If `preloaded` is Some, use that image data instead of loading from disk.
+#[allow(clippy::too_many_arguments)]
 pub fn render_slide_image(
     image: &SlideImage,
     content_width: usize,

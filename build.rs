@@ -13,7 +13,7 @@ fn main() {
         for entry in fs::read_dir(themes_dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "yaml" || e == "yml") {
+            if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
                 let stem = path.file_stem().unwrap().to_string_lossy().to_string();
                 let rel = path.to_string_lossy().to_string();
                 entries.push((stem, rel));

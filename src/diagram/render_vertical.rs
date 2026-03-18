@@ -11,7 +11,6 @@
 ///     ▼
 ///   Node C
 /// ```
-
 use crossterm::style::Color;
 
 use crate::diagram::parser::DiagramGraph;

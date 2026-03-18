@@ -2,7 +2,7 @@
 
 ## Origin Story
 
-Ostendo was built in a weekend as a "PowerPoint killer for hackers" — an AI-native terminal presentation tool written entirely through AI-agent driven development using Claude Code Max (Opus 4.6). The entire codebase, all 20 themes, image protocol support, and documentation were generated through conversation with Claude.
+Ostendo was built in a weekend as a "PowerPoint killer for hackers" — an AI-native terminal presentation tool written entirely through AI-agent driven development using Claude Code Max (Opus 4.6). The entire codebase, all 29 themes, image protocol support, and documentation were generated through conversation with Claude.
 
 ## Contributions Welcome
 
@@ -22,7 +22,7 @@ We're open to contributions of all kinds:
 
 ```bash
 cargo build --release
-cargo test                # 77 tests should pass
+cargo test                # 158 tests should pass
 cargo clippy              # No warnings
 ```
 
@@ -37,7 +37,7 @@ cargo clippy              # No warnings
 - Follow existing code style and patterns
 - Add tests for new functionality
 - Ensure `cargo clippy` produces no warnings
-- All 77 existing tests must continue to pass
+- All 158 existing tests must continue to pass
 - Run `ostendo --validate` against test presentations before submitting
 
 ## Theme Contributions

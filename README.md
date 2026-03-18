@@ -8,7 +8,7 @@ AI-native terminal presentations from markdown.
 
 ## Features
 
-- **20 built-in themes** — all WCAG 2.0 compliant contrast ratios
+- **29 built-in themes** — all WCAG 2.0 compliant contrast ratios
 - **Native image protocols** — Kitty, iTerm2, Sixel, and ASCII fallback with auto-detection
 - **Live code execution** — `+exec` and `+pty` blocks with real-time streaming output
 - **Per-slide font sizing** — via Kitty remote control protocol
@@ -88,7 +88,7 @@ Ostendo is designed for AI agents to build presentations automatically:
 3. The agent generates a complete presentation in `presentations/<name>/presentation.md`
 4. Hot reload lets you preview changes as the AI writes them
 
-Ostendo itself was built with Claude Code Max (Opus 4.6) in a weekend — 5557 lines of Rust source code, 20 themes, and full image protocol support, all generated through AI-driven development.
+Ostendo itself was built with Claude Code Max (Opus 4.6) in a weekend — over 14,600 lines of Rust source code, 29 themes, and full image protocol support, all generated through AI-driven development.
 
 ## Themes
 

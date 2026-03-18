@@ -28,6 +28,7 @@ use parser::DiagramGraph;
 /// Tries the requested style first. If any rendered line exceeds `max_width`,
 /// falls back to progressively more compact styles: Box → Bracket → Vertical.
 /// If even Vertical overflows, truncates node labels so it fits.
+#[allow(clippy::too_many_arguments)]
 pub fn render_adaptive(
     graph: &DiagramGraph,
     style: DiagramStyle,

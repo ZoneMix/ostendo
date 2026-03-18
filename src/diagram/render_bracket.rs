@@ -5,7 +5,6 @@
 /// [Node A] → [Node B] → [Node C]
 ///  note A     note B     note C
 /// ```
-
 use crossterm::style::Color;
 
 use crate::diagram::parser::DiagramGraph;

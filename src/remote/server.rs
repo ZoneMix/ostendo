@@ -15,16 +15,20 @@
 //! - `broadcast::Sender<String>` — state JSON flows from the presenter to all clients.
 
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::html::REMOTE_HTML;
 use super::{RemoteCommand, RemoteCommandMsg};
+
+/// Maximum concurrent WebSocket connections to prevent resource exhaustion.
+const MAX_CONNECTIONS: usize = 8;
 
 /// Entry point for launching the WebSocket remote control server.
 ///
@@ -46,14 +50,22 @@ impl RemoteServer {
                     .await
                     .expect("failed to bind remote control server");
 
+                // Rate-limit concurrent connections to prevent resource exhaustion
+                let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+
                 loop {
                     if let Ok((stream, _)) = listener.accept().await {
+                        let permit = match semaphore.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => continue, // Drop connection if at capacity
+                        };
                         let cmd_tx = cmd_tx.clone();
                         let state_rx = state_tx_clone.subscribe();
                         let token = token.clone();
 
                         tokio::spawn(async move {
                             handle_connection(stream, cmd_tx, state_rx, token).await;
+                            drop(permit); // Release slot when connection closes
                         });
                     }
                 }
@@ -156,7 +168,7 @@ async fn handle_connection(
              Connection: close\r\n\
              X-Content-Type-Options: nosniff\r\n\
              X-Frame-Options: DENY\r\n\
-             Content-Security-Policy: default-src 'self' 'unsafe-inline'; connect-src ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com\r\n\
+             Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; connect-src ws://127.0.0.1:* ws://localhost:*; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:\r\n\
              \r\n{}",
             REMOTE_HTML.len(),
             REMOTE_HTML
@@ -261,14 +273,37 @@ async fn handle_websocket(
     sink_task.abort();
 }
 
+/// Constant-time string comparison to prevent timing attacks on token auth.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        // Still do a dummy comparison to avoid leaking length info via timing
+        let mut _acc = 0u8;
+        for &byte in a_bytes {
+            _acc |= byte;
+        }
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Check for `Authorization: Bearer <token>` header in the HTTP request.
+/// Uses constant-time comparison to prevent timing attacks.
 fn check_bearer_token(request: &str, expected: &str) -> bool {
     for line in request.lines() {
         let lower = line.to_lowercase();
         if lower.starts_with("authorization:") {
             let value = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
-            if let Some(bearer) = value.strip_prefix("Bearer ") {
-                return bearer.trim() == expected;
+            // RFC 7235: auth scheme is case-insensitive
+            let value_lower = value.to_lowercase();
+            if value_lower.starts_with("bearer ") {
+                let token = value[7..].trim(); // "bearer " is 7 chars
+                return constant_time_eq(token, expected);
             }
         }
     }
@@ -276,6 +311,7 @@ fn check_bearer_token(request: &str, expected: &str) -> bool {
 }
 
 /// Check for token in `Sec-WebSocket-Protocol` header (browser WebSocket token carrier).
+/// Uses constant-time comparison to prevent timing attacks.
 fn check_ws_protocol_token(request: &str, expected: &str) -> bool {
     for line in request.lines() {
         let lower = line.to_lowercase();
@@ -283,7 +319,7 @@ fn check_ws_protocol_token(request: &str, expected: &str) -> bool {
             let value = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
             // The protocol field may contain multiple values separated by commas
             for proto in value.split(',') {
-                if proto.trim() == expected {
+                if constant_time_eq(proto.trim(), expected) {
                     return true;
                 }
             }

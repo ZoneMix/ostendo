@@ -1,180 +1,161 @@
 # Ostendo Development Guide
 
+**Version**: v0.4.0 | **LOC**: ~14,600 | **Tests**: 158 | **Themes**: 29
+
 ## Build & Test
 
 ```bash
-cargo build --release          # Release build
-cargo test                     # Run all tests (128 tests)
-cargo run --release -- --validate presentations/examples/test_presentation.md  # Validate presentation
+cargo build --release          # Release build (LTO enabled)
+cargo test                     # Run all 158 tests
+cargo clippy --all-targets     # Lint (must be 0 warnings)
+cargo run --release -- --validate presentations/examples/test_presentation.md
 ```
 
 ## Architecture
 
 ```
-src/
-  main.rs              # CLI (clap), entry point
-  render/engine/       # Core renderer (split into submodules)
-    mod.rs             # Presenter struct, lifecycle (new/run), shared helpers (~650 lines)
-    rendering.rs       # render_frame(), status bar redraw (~1175 lines)
-    input.rs           # Event loop, key handling, remote polling (~440 lines)
-    content.rs         # Tables, columns, titles, exec output (~450 lines)
-    ui.rs              # Status bar, help overlay, overview grid (~350 lines)
-    font.rs            # Terminal font/bg control protocols (~200 lines)
-    state.rs           # Toggles, scale, theme, persistence (~137 lines)
-    navigation.rs      # Slide movement, scrolling, animations (~120 lines)
-  render/layout.rs     # WindowSize, terminal dimensions
-  render/text.rs       # StyledLine/StyledSpan (virtual buffer)
-  render/progress.rs   # Progress bar rendering
-  markdown/parser.rs   # Markdown -> Vec<Slide> parser
-  presentation/        # Slide struct, StateManager (JSON persistence)
-  terminal/protocols.rs # Image protocol detection, FontSizeCapability
-  theme/               # Theme registry, schema, color utilities
-  code/                # Syntax highlighting, code execution
-  image_util/          # Image loading, rendering (protocol-specific)
-  image_util/mermaid.rs # Mermaid diagram rendering via mmdc CLI
-  export/html.rs       # Self-contained HTML export
-  export/pdf.rs        # PDF export via headless Chrome/wkhtmltopdf
-  render/animation.rs  # Slide transitions + entrance/looping animations
-  watch.rs             # File watcher for hot reload
-  remote/              # WebSocket remote control server
+src/                              # 14,599 lines across 52 files
+  main.rs                         # CLI (clap), entry point (~261 lines)
+  render/engine/                  # Core renderer (8 submodules, ~4,718 lines)
+    mod.rs                        # Presenter struct, lifecycle, tests (~1,470 lines) ⚠️ over 800 cap
+    rendering.rs                  # render_frame(), status bar redraw (~1,272 lines) ⚠️ over 800 cap
+    input.rs                      # Event loop, key/mouse handling, remote polling (~525 lines)
+    content.rs                    # Tables, columns, titles, exec output (~537 lines)
+    ui.rs                         # Status bar, help overlay, overview grid (~407 lines)
+    font.rs                       # Kitty RC / Ghostty AppleScript font control (~233 lines)
+    state.rs                      # Toggles, scale, theme, persistence (~137 lines)
+    navigation.rs                 # Slide movement, scrolling, animations (~137 lines)
+  render/animation/               # Animation system (4 files, ~1,102 lines)
+    mod.rs                        # Animation dispatch, types, tests (~347 lines)
+    transitions.rs                # Fade, slide-left, dissolve (~277 lines)
+    entrance.rs                   # Typewriter, fade_in, slide_down (~104 lines)
+    loops.rs                      # Matrix, bounce, pulse, sparkle, spin (~478 lines)
+  render/layout.rs                # WindowSize, terminal dimensions
+  render/text.rs                  # StyledLine/StyledSpan (virtual buffer)
+  render/progress.rs              # Progress bar rendering
+  markdown/                       # Presentation parser (~1,573 lines)
+    parser.rs                     # Markdown -> Vec<Slide> (~1,166 lines) ⚠️ over 800 cap
+    regex_patterns.rs             # Centralized directive regexes (~229 lines)
+    inline.rs                     # Bold/italic/code/strikethrough parser (~158 lines)
+    tables.rs                     # Table cell parsing, alignment (~72 lines)
+  presentation/                   # Data structures (~670 lines)
+    slide.rs                      # Slide struct, content types (~428 lines)
+    state.rs                      # StateManager (JSON persistence) (~245 lines)
+  terminal/                       # Terminal protocols (~380 lines)
+    protocols.rs                  # Image protocol & font capability detection (~177 lines)
+    ascii_art.rs                  # ASCII art image renderer (~203 lines)
+  theme/                          # Theme system (~616 lines)
+    mod.rs                        # Registry, WCAG contrast validation
+    colors.rs                     # Hex parsing, interpolation, HSV
+    builtin.rs                    # Compile-time embedded themes (generated by build.rs)
+  code/                           # Code execution (~476 lines)
+    executor.rs                   # Language execution, timeout, sandbox
+    highlight.rs                  # Syntax highlighting (syntect)
+    pty.rs                        # PTY execution for interactive blocks
+  image_util/                     # Image handling (~622 lines)
+    render.rs                     # Protocol-specific rendering (Kitty/iTerm2/Sixel/ASCII)
+    mermaid.rs                    # Mermaid diagram rendering via mmdc CLI
+  diagram/                        # ASCII diagram rendering (~1,067 lines)
+    mod.rs                        # Adaptive renderer, style selection
+    parser.rs                     # Graph DSL parser
+    render_box.rs                 # Box-drawing style (Unicode borders)
+    render_bracket.rs             # Bracket style (compact)
+    render_vertical.rs            # Vertical flow style (pipes)
+  export/                         # Export functionality (~444 lines)
+    html.rs                       # Self-contained HTML export
+    pdf.rs                        # PDF via headless Chrome/wkhtmltopdf
+  remote/                         # WebSocket remote control (~953 lines)
+    mod.rs                        # Commands, state types
+    server.rs                     # WS server, auth, rate limiting
+    html.rs                       # Embedded HTML remote control UI
+  watch.rs                        # File watcher for hot reload
 ```
 
 ## Key Patterns
 
-- **Virtual buffer**: Rendering builds `Vec<StyledLine>` in memory, then writes to terminal in one pass within `BeginSynchronizedUpdate`/`EndSynchronizedUpdate`
-- **Smart redraw**: `render_frame()` tracks last-rendered state; timer-only ticks only update the status bar (no image re-emission)
-- **Image caching**: `image_cache` keyed by `(path, content_width, protocol, gif_frame_index)` — stale entries are naturally unreachable
-- **Hot reload**: Background `FileWatcher` polls every 500ms, triggers `try_reload()` which re-parses and preserves slide position
+- **Virtual buffer**: `render_frame()` builds `Vec<StyledLine>` in memory, then flushes atomically within `BeginSynchronizedUpdate`/`EndSynchronizedUpdate`
+- **Smart redraw**: Tracks `last_rendered_buffer`/`last_rendered_slide`/`last_rendered_scroll`; timer-only ticks only update the status bar
+- **Image cache**: `ImageCacheKey` struct keyed by `{path, render_width, protocol, gif_frame_index, color_override}`. Uses Entry API for O(1) lookups
+- **GIF frames**: Stored as `Arc<Vec<GifFrame>>` — prerender thread gets O(1) clone, not deep copy
+- **Animation targeting**: `LineContentType` system enables selective animation (e.g., `sparkle(figlet)` only affects FIGlet lines)
+- **Regex extraction**: All ~20 directive regexes centralized in `regex_patterns.rs`, compiled once via `LazyLock`
+- **Hot reload**: Background `FileWatcher` polls every 500ms, triggers `try_reload()` preserving slide position
+- **Immutable rendering**: Animation functions take `&lines` not `&mut lines`; new buffer built each frame
+
+## Developer Pitfalls
+
+- **`mod.rs` is 1,470 lines** — exceeds the 800-line soft cap. Be aware when navigating
+- **Horizontal centering must preserve `line.content_type`** — breaking this silently breaks sparkle/spin targeting
+- **Protocol images must check `line_offset >= visible_start`** — forgetting causes images outside scroll viewport
+- **Kitty images need clear on scroll offset change** — not just on slide change
+- **`prerender_images` must apply per-image `image_scale`** — cache keys must match `render_frame`'s lookups
+- **`font_size` range is -3 to 7** (not 1-7). Negative = smaller than base font
+- **`truncate_str` uses char-based slicing** — safe for non-ASCII titles; don't change to byte slicing
+
+## Where to Look
+
+| Task | Start here |
+|------|-----------|
+| New directive | `regex_patterns.rs` → `parser.rs` → `slide.rs` |
+| New animation | `render/animation/` (add to appropriate submodule) |
+| New export format | `export/` (follow html.rs pattern) |
+| Status bar changes | `ui.rs` → `build_status_bar()` |
+| New theme | `themes/*.yaml` + run WCAG contrast tests |
+| Key binding | `input.rs` → `handle_key()` |
+| New image protocol | `terminal/protocols.rs` + `image_util/render.rs` |
+| Font control | `font.rs` |
+| New diagram style | `diagram/` (add render_*.rs + register in mod.rs) |
+
+## Key Dependencies
+
+- **crossterm** (0.29): TUI framework, terminal I/O
+- **syntect** (5): Code syntax highlighting
+- **image** (0.25): Image processing, GIF decoding
+- **tokio** + **tokio-tungstenite**: Async WebSocket server
+- **resvg** (0.47): SVG rendering (Mermaid diagrams)
+- **clap** (4): CLI argument parsing
+- **serde_yml**: Theme YAML parsing
+- **figlet-rs**: ASCII art title generation
+- **libc**: Process group management for sandbox
 
 ## Terminal Requirements
 
-- **Recommended**: Kitty terminal — full feature support (native image protocol, per-slide font sizing via DCS, OSC 66 per-element text scaling, best rendering quality)
-- **iTerm2**: Supports images via inline image protocol; no font sizing support
-- **tmux**: Works with DCS passthrough for images; stale `KITTY_WINDOW_ID` may cause issues — unset it or start a fresh session
-- **Other terminals**: Sixel or ASCII fallback for images; font sizing gracefully degrades
-- Synchronized updates prevent flicker in most terminals
+- **Recommended**: Kitty — native image protocol, per-slide font sizing (Kitty RC), OSC 66 text scaling
+- **iTerm2**: Images via inline protocol; no font sizing
+- **tmux**: DCS passthrough for images; unset stale `KITTY_WINDOW_ID`
+- **Other**: Sixel or ASCII fallback for images; font sizing gracefully degrades
 
 ## Theme System
 
-- 29 built-in themes in `themes/*.yaml`
-- All themes must pass contrast ratio tests (WCAG 2.0):
-  - text:bg >= 4.5:1
-  - accent:bg >= 3.0:1
-  - code_bg:bg >= 1.2:1
-- Runtime theme switching via `:theme <slug>` command
+- 29 built-in themes in `themes/*.yaml` (embedded at compile time via `build.rs`)
+- WCAG 2.0 contrast validation: text:bg >= 4.5:1, accent:bg >= 3.0:1
+- Runtime switching: `:theme <slug>` or `D` for dark/light toggle
 
 ## Test Presentation
 
-`presentations/examples/test_presentation.md` has 89 slides testing every feature. Each slide's speaker notes contain:
-```
-FEATURE: [name]
-EXPECTED: [expected visual]
-VERIFY: [what to check]
-```
+`presentations/examples/test_presentation.md` — 89 slides covering every feature.
+Speaker notes contain `FEATURE:`, `EXPECTED:`, `VERIFY:` for systematic testing.
 
-Use `AGENTS.md` feedback format: `Slide N - [Feature]: PASS/FAIL - [description]`
+## Security
+
+- Code execution sandboxed with process groups (`setsid`), 30s timeout, 64KB input / 1MB output limits
+- `--no-exec` disables all execution; `--remote-exec` gates WebSocket execute_code
+- WebSocket auth via `--remote-token` with constant-time comparison
+- Connection rate limiting (max 8 concurrent WebSocket connections)
+- See `SECURITY.md` for full details
 
 ## Known Limitations
 
-- Inline formatting markers spanning a wrap boundary will break (blockquotes and bullets)
+- Inline formatting markers spanning a wrap boundary will break (blockquotes/bullets)
 - FIGlet ASCII titles overflow on narrow terminals with long text
 - Font sizing via Kitty remote control protocol — Kitty terminal only
 - Protocol images in tmux may have latency on first display
-- Animated GIFs are downscaled to 800px max dimension for memory efficiency
-
-## Feature Batches (v0.2.0)
-
-### Batch 1: Quick Wins (author footer, alignment, accent override)
-- [x] Create PresentationMeta struct + change parser return type
-- [x] Feature 9: author/date in status bar + per-slide footer directive
-- [x] Feature 6: per-slide vertical centering via <!-- align: center -->
-- [x] Feature 11a: front matter accent color override
-- [x] Tests + verification
-
-### Batch 2: Theme System (gradients, title decorations, light/dark)
-- [x] Feature 11b: gradient backgrounds (ThemeGradient, per-row interpolation)
-- [x] Feature 11c: decorated title bars (underline/box/banner)
-- [x] Feature 11d: light/dark theme variants + D keybinding
-- [x] Create 3 light variant theme files
-- [x] Tests + verification
-
-### Batch 3: Animation System (transitions + entrance/looping)
-- [x] Create src/render/animation.rs module
-- [x] Feature 2: slide transitions (fade, slide-left, dissolve)
-- [x] Feature 1a: entrance animations (typewriter, fade_in, slide_down)
-- [x] Feature 1b: looping animations (matrix, bounce, pulse)
-- [x] Tests + verification
-
-### Batch 4: Code Execution (C/C++/Go/Ruby + preambles)
-- [x] Feature 5a: C/C++/Go/Ruby language support + compiler detection
-- [x] Feature 5b: code preamble directives
-- [x] Tests + verification
-
-### Batch 5: External Integrations (Mermaid + export)
-- [x] Feature 7: Mermaid rendering via mmdc CLI
-- [x] Feature 8a: HTML export (self-contained, themed)
-- [x] Feature 8b: PDF export via headless Chrome/wkhtmltopdf
-- [x] Tests + verification
-
-## v0.2.1 Fixes & Enhancements
-
-- [x] Dissolve transition: per-character jumbling with random symbols
-- [x] Matrix animation: top-to-bottom rain with ASCII chars, full-width
-- [x] Bounce animation: ball overlays all content, full-width
-- [x] New loop animations: sparkle (twinkling stars), spin (ASCII ramp cycling)
-- [x] Multi-block code execution: Ctrl+E cycles through executable blocks per slide
-- [x] Column code blocks show +exec badge
-- [x] Per-slide footer bar at bottom of screen (not in top status bar)
-- [x] Footer alignment: `<!-- footer_align: left|center|right -->`
-- [x] Image scroll fix: proper viewport bounds check for protocol images
-- [x] Kitty image clear on scroll offset change
-- [x] PDF export fix: flex-direction column in @media print CSS
-- [x] Image scale caching: removed unnecessary cache clear on > < keys
-- [x] FIGlet + sparkle/spin/matrix/bounce/pulse animation combinations
-- [x] ASCII art image + sparkle/spin animation combinations
-- [x] Image color override: `<!-- image_color: #hex -->`
-- [x] Alignment variants: vcenter, hcenter (in addition to center/top)
-- [x] Auto-wrap code execution for Rust/Go/C (no main function needed)
-- [x] 99-slide test presentation covering every feature
-
-## v0.3.0 Enhancements
-
-- [x] Animated GIF support (background frame decoding, downscaled to 800px max)
-- [x] Font size directive expanded: accepts -3 to 7 (negative = smaller than base)
-- [x] `font_transition: none` directive for instant font changes
-- [x] Loop animation targeting: `sparkle(figlet)`, `sparkle(image)`, `spin(figlet)`, etc.
-- [x] LineContentType system for selective animation
-- [x] Matrix rain character-level granularity (fills FIGlet whitespace)
-- [x] `image_color` override now functional for ASCII art
-- [x] Theme persistence across restarts
-- [x] Help menu renders at base font size
-- [x] GIF frame advancement within synchronized update blocks
-- [x] Security: `--no-exec`, `--remote-exec`, `--remote-token` CLI flags
-- [x] Security: WebSocket `execute_code` gated behind `--remote-exec`
-- [x] Security: Token-based WebSocket authentication
-
-## Development Workflow
-
-This project follows the development workflow defined in the global rules.
-Key practices: research first, plan, TDD, code review, then commit.
-
-## NLSpec References
-
-For AI pipeline and agent loop implementation:
-- **Attractor Pipeline**: See https://github.com/strongdm/attractor
-
-## Loaded Skills
-
-The following skills are available in this project (auto-discovered from `.claude/skills/`):
-- `coding-standards` — Universal coding standards (ECC plugin)
-- `tdd-workflow` — Test-driven development enforcement (ECC plugin)
-- `security-review` — Security vulnerability detection (ECC plugin)
-- `backend-patterns` — Backend architecture patterns (ECC plugin)
+- GIFs downscaled to 800px max dimension for memory efficiency
 
 ## Code Quality
 
 - Immutable data patterns (never mutate existing objects)
-- Files under 800 lines, functions under 50 lines
-- 80%+ test coverage via TDD
+- Files under 800 lines, functions under 50 lines (3 files over cap — flagged above)
+- 0 clippy warnings required
 - Validate all inputs at system boundaries
 - No hardcoded secrets

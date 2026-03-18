@@ -21,10 +21,37 @@ pub mod render;
 pub mod mermaid;
 
 use anyhow::Result;
+use fast_image_resize as fir;
 use image::RgbaImage;
 use std::path::Path;
 
 use crate::render::layout::WindowSize;
+
+/// Resize an RGBA image using SIMD-accelerated fast_image_resize.
+/// ~20x faster than `image::imageops::resize` on Apple Silicon.
+fn fast_resize(src: &RgbaImage, dst_width: u32, dst_height: u32, filter: fir::FilterType) -> RgbaImage {
+    if dst_width == 0 || dst_height == 0 {
+        return RgbaImage::new(dst_width.max(1), dst_height.max(1));
+    }
+    let (sw, sh) = src.dimensions();
+    if sw == dst_width && sh == dst_height {
+        return src.clone();
+    }
+    let src_image = fir::images::Image::from_vec_u8(
+        sw,
+        sh,
+        src.as_raw().clone(),
+        fir::PixelType::U8x4,
+    ).unwrap();
+    let mut dst_image = fir::images::Image::new(dst_width, dst_height, fir::PixelType::U8x4);
+    let mut resizer = fir::Resizer::new();
+    resizer.resize(
+        &src_image,
+        &mut dst_image,
+        &fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(filter)),
+    ).unwrap();
+    RgbaImage::from_raw(dst_width, dst_height, dst_image.into_vec()).unwrap()
+}
 
 /// A single decoded frame from an animated GIF.
 ///
@@ -95,7 +122,7 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
             let scale = MAX_DIM as f64 / w.max(h) as f64;
             let nw = (w as f64 * scale).max(1.0) as u32;
             let nh = (h as f64 * scale).max(1.0) as u32;
-            image::imageops::resize(&raw, nw, nh, image::imageops::FilterType::Triangle)
+            fast_resize(&raw, nw, nh, fir::FilterType::Bilinear)
         } else {
             raw
         };
@@ -201,6 +228,6 @@ pub fn scale_image_pixels(
     let cols = (width_px as f64 / ppc).ceil() as usize;
     let rows = (height_px as f64 / ppr).ceil() as usize;
 
-    let scaled = image::imageops::resize(img, width_px, height_px, image::imageops::FilterType::Lanczos3);
+    let scaled = fast_resize(img, width_px, height_px, fir::FilterType::Lanczos3);
     (scaled, cols, rows)
 }
