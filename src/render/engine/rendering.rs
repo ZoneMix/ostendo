@@ -992,31 +992,14 @@ impl Presenter {
                     screen_buf.push(line.clone());
                 }
 
-                // Calculate Kitty font stepping parameters
-                let current_font = self.last_applied_font_size.unwrap_or(target);
-                let font_delta = target - current_font;
-                let num_font_steps = if font_delta.abs() > 0.3 {
-                    (font_delta.abs() / 0.2).round() as usize
-                } else {
-                    0
-                };
-                let font_dir = if font_delta >= 0.0 { 1.0_f64 } else { -1.0_f64 };
-
-                // Scale dissolve to cover font stepping
-                let font_step_time_ms = num_font_steps as u32 * 8;
-                let target_duration_ms = font_step_time_ms.max(400);
-                let dissolve_frames = (target_duration_ms / 30).clamp(12, 20);
-                let mut font_steps_sent = 0usize;
+                // Fade-out only — font jumps to target after fade completes.
+                // No interleaved stepping (eliminates visible growing/shrinking).
+                let target_duration_ms = 300u32; // 300ms fade-out
+                let dissolve_frames = (target_duration_ms / 30).clamp(8, 12);
 
                 for frame in 1..=dissolve_frames {
                     let progress = frame as f64 / dissolve_frames as f64;
 
-                    // Re-query terminal dimensions (font steps resize the terminal)
-                    if frame > 1 && num_font_steps > 0 {
-                        self.window_size = WindowSize::query();
-                        self.width = self.window_size.columns;
-                        self.height = self.window_size.rows;
-                    }
                     let tw = self.width as usize;
 
                     // Render one dissolve frame
@@ -1079,35 +1062,9 @@ impl Presenter {
                         fw.flush()?;
                     }
 
-                    // Interleave Kitty font step batch + pace the frame
+                    // Pace the frame (30ms per frame target)
                     let frame_target_ms = target_duration_ms / dissolve_frames;
-                    let frame_start = std::time::Instant::now();
-
-                    if num_font_steps > 0 && matches!(self.font_capability, FontSizeCapability::KittyRemote) {
-                        let target_steps = ((num_font_steps as f64 * progress).round() as usize)
-                            .min(num_font_steps);
-                        let batch = target_steps - font_steps_sent;
-                        if batch > 0 {
-                            let stdout = io::stdout();
-                            let mut pre = stdout.lock();
-                            for s in 0..batch {
-                                let step_idx = font_steps_sent + s + 1;
-                                let intermediate = current_font + font_dir * 0.2 * step_idx as f64;
-                                pre.write_all(kitty_font_escape(intermediate).as_bytes())?;
-                                pre.flush()?;
-                                std::thread::sleep(std::time::Duration::from_millis(8));
-                            }
-                            font_steps_sent = target_steps;
-                        }
-                    }
-
-                    // Pad remaining time so the dissolve isn't too fast
-                    let elapsed = frame_start.elapsed().as_millis() as u32;
-                    if elapsed < frame_target_ms {
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            (frame_target_ms - elapsed) as u64,
-                        ));
-                    }
+                    std::thread::sleep(std::time::Duration::from_millis(frame_target_ms as u64));
                 }
 
                 // Final font step — land exactly on target
@@ -1128,8 +1085,10 @@ impl Presenter {
 
         // ── Plain font stepping (interactive ] / [ or slide with font_transition: none) ──
         if !font_applied {
-            let skip_stepping = self.skip_next_font_stepping
-                || self.slides[self.current].font_transition.as_deref() == Some("none");
+            // Always skip stepping — jump directly to the target font size.
+            // The old incremental stepping (0.2pt with 8ms sleeps) created a
+            // visible "growing/shrinking" effect that felt slow and jarring.
+            let skip_stepping = true;
             self.skip_next_font_stepping = false;
             match self.font_capability {
                 FontSizeCapability::KittyRemote => {
