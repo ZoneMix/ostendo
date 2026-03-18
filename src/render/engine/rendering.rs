@@ -1128,7 +1128,9 @@ impl Presenter {
 
         // ── Plain font stepping (interactive ] / [ or slide with font_transition: none) ──
         if !font_applied {
-            let skip_stepping = self.slides[self.current].font_transition.as_deref() == Some("none");
+            let skip_stepping = self.skip_next_font_stepping
+                || self.slides[self.current].font_transition.as_deref() == Some("none");
+            self.skip_next_font_stepping = false;
             match self.font_capability {
                 FontSizeCapability::KittyRemote => {
                     let stdout = io::stdout();

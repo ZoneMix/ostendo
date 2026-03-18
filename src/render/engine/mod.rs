@@ -422,6 +422,9 @@ pub struct Presenter {
     /// Deferred font size target. Font changes happen at the start of `render_frame()`
     /// before the synchronized update block, so this queues the change.
     pending_font_size: Option<f64>,
+    /// When true, the next font change skips all stepping/animation — jumps instantly.
+    /// Set when exiting help/overview mode to avoid visible font growing.
+    skip_next_font_stepping: bool,
     /// The last font size that was actually applied to the terminal (for delta calculations).
     last_applied_font_size: Option<f64>,
     /// True when font change was triggered by slide navigation (fade out old content).
@@ -683,6 +686,7 @@ impl Presenter {
             mermaid_renderer: None,
             user_fullscreen_override: None,
             pending_font_size: None,
+            skip_next_font_stepping: false,
             last_applied_font_size: None,
             font_change_is_slide_transition: FontTransitionMode::None,
             text_scale_cap: protocols::detect_text_scale_capability(),
