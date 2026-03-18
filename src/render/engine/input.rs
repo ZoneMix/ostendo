@@ -350,6 +350,10 @@ impl Presenter {
             Mode::Goto => return self.handle_goto_key(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
+                // Restore slide font instantly — no transition animation.
+                // The help menu renders at base font, so returning to the slide
+                // font should be seamless, not trigger a fade/dissolve effect.
+                self.font_change_is_slide_transition = FontTransitionMode::None;
                 self.apply_slide_font();
                 self.needs_full_redraw = true;
                 return Ok(false);
@@ -358,10 +362,14 @@ impl Presenter {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => {
                         self.mode = Mode::Normal;
+                        self.font_change_is_slide_transition = FontTransitionMode::None;
+                        self.apply_slide_font();
                         self.needs_full_redraw = true;
                     }
                     KeyCode::Enter => {
                         self.mode = Mode::Normal;
+                        self.font_change_is_slide_transition = FontTransitionMode::None;
+                        self.apply_slide_font();
                         self.needs_full_redraw = true;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
