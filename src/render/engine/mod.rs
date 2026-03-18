@@ -1001,11 +1001,11 @@ impl Presenter {
         // Set terminal default background to theme bg so cells created by
         // font-change resizes inherit the correct color (no black flicker).
         Self::set_terminal_bg(self.bg_color);
-        // Pre-render images AFTER entering alternate screen — Kitty clears
-        // images on screen buffer switch, so transmitting before would be lost.
-        self.prerender_images();
-        // Upload Kitty GIF animations (if GIF frames already decoded)
-        self.upload_kitty_gif_animation();
+        // Images are rendered and transmitted LAZILY on first use per slide
+        // (in render_frame's or_insert_with closure). This keeps startup instant
+        // instead of blocking 5-10s encoding all images upfront.
+        // GIF animation frames upload happens when gif_loading completes in the
+        // event loop — NOT here (frames may not be decoded yet).
 
         let result = self.event_loop();
 
