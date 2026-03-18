@@ -79,12 +79,15 @@ impl Presenter {
     /// Each line is tagged with the appropriate `LineContentType` for
     /// targeted animations.
     pub(crate) fn render_ascii_title(&self, title: &str, pad: &str, lines: &mut Vec<StyledLine>) {
-        // OSC 66 path: use native text scaling instead of FIGlet
-        if self.text_scale_cap == crate::terminal::protocols::TextScaleCapability::Osc66 {
+        // OSC 66 path: only used as fallback when FIGlet font is NOT loaded.
+        // FIGlet is the preferred path because it supports sparkle/spin animations.
+        // OSC 66 is the fallback for terminals where FIGlet can't render.
+        if self.figfont.is_none()
+            && self.text_scale_cap == crate::terminal::protocols::TextScaleCapability::Osc66
+        {
             let content_width = self.width as usize - pad.len();
             let title_width = unicode_width::UnicodeWidthStr::width(title);
 
-            // Choose scale: 3x if it fits, 2x if narrower, 1x (plain bold) if too wide
             let scale = if title_width * 3 <= content_width { 3u8 }
                         else if title_width * 2 <= content_width { 2u8 }
                         else { 0u8 };
@@ -97,15 +100,13 @@ impl Presenter {
                     .bold();
                 span.text_scale = scale;
                 line.push(span);
-                line.content_type = LineContentType::FigletTitle; // Same type for animation targeting
+                line.content_type = LineContentType::FigletTitle;
                 lines.push(line);
-                // OSC 66 titles occupy `scale` terminal rows
                 for _ in 1..scale {
                     lines.push(StyledLine::empty());
                 }
                 return;
             }
-            // Fall through to FIGlet/plain bold if title too wide for 2x
         }
 
         let fig = match self.figfont.as_ref() {

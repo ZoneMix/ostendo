@@ -950,8 +950,11 @@ impl Presenter {
                         RenderedImage::Protocol { escape_data, placeholder_height } => {
                             CachedImage::Protocol { escape_data, placeholder_height }
                         }
-                        RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape: _ } => {
-                            // GIF frames: transmit handled separately in Phase 2
+                        RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
+                            // Transmit to Kitty from the background thread
+                            let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
                             CachedImage::KittyRef { image_id, cols, rows }
                         }
                     };
@@ -980,7 +983,6 @@ impl Presenter {
     /// Returns `Err` if terminal setup/teardown fails or if an unrecoverable
     /// I/O error occurs during rendering.
     pub fn run(&mut self) -> Result<()> {
-        self.prerender_images();
         // Apply initial slide's font offset (if restored from saved state)
         self.apply_slide_font();
         // Apply per-slide theme override for the starting slide
@@ -999,6 +1001,11 @@ impl Presenter {
         // Set terminal default background to theme bg so cells created by
         // font-change resizes inherit the correct color (no black flicker).
         Self::set_terminal_bg(self.bg_color);
+        // Pre-render images AFTER entering alternate screen — Kitty clears
+        // images on screen buffer switch, so transmitting before would be lost.
+        self.prerender_images();
+        // Upload Kitty GIF animations (if GIF frames already decoded)
+        self.upload_kitty_gif_animation();
 
         let result = self.event_loop();
 

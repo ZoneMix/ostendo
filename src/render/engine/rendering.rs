@@ -538,8 +538,14 @@ impl Presenter {
                     RenderedImage::Protocol { escape_data, placeholder_height } => {
                         CachedImage::Protocol { escape_data, placeholder_height }
                     }
-                    RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape: _ } => {
-                        // TODO(v0.5.0 step 1.5): transmit_escape written at prerender time
+                    RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
+                        // Transmit image data to Kitty NOW if not already sent
+                        if !self.kitty_transmitted.contains(&image_id) {
+                            let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                            self.kitty_transmitted.insert(image_id);
+                        }
                         CachedImage::KittyRef { image_id, cols, rows }
                     }
                 }
