@@ -414,8 +414,8 @@ pub struct Presenter {
     /// True when font change was triggered by slide navigation (fade out old content).
     /// False when triggered by `]`/`[` interactive adjustment (no fade).
     font_change_is_slide_transition: bool,
-    /// OSC 66 text scaling capability (disabled pending rendering fix, but kept for detection).
-    #[allow(dead_code)]
+    /// OSC 66 text scaling capability. When Osc66, titles render at 2x-3x
+    /// natively instead of using FIGlet ASCII art.
     text_scale_cap: TextScaleCapability,
     /// When true, the next render will dissolve-in the new content after flush.
     /// This is set after a font-change dissolve-out completes.
@@ -1575,5 +1575,38 @@ mod tests {
         // Sparkle modifies some characters, so texts should differ
         assert_ne!(original_text, sparkled_text,
             "Sparkle should modify at least some characters at frame 42");
+    }
+
+    #[test]
+    fn test_write_span_text_osc66_scale3() {
+        let mut buf = Vec::new();
+        write_span_text(&mut buf, 3, "Hello").unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b]66;s=3;Hello\x07"), "Expected OSC 66 escape, got: {:?}", output);
+    }
+
+    #[test]
+    fn test_write_span_text_no_scale() {
+        let mut buf = Vec::new();
+        write_span_text(&mut buf, 0, "Hello").unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, "Hello");
+        assert!(!output.contains("\x1b]66"));
+    }
+
+    #[test]
+    fn test_write_span_text_scale1_no_osc66() {
+        let mut buf = Vec::new();
+        write_span_text(&mut buf, 1, "Hello").unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, "Hello");
+    }
+
+    #[test]
+    fn test_write_span_text_osc66_scale2() {
+        let mut buf = Vec::new();
+        write_span_text(&mut buf, 2, "Title").unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b]66;s=2;Title\x07"));
     }
 }
