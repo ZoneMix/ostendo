@@ -121,6 +121,35 @@ pub fn detect_text_scale_capability() -> TextScaleCapability {
     TextScaleCapability::None
 }
 
+/// Whether Kitty supports native animation frames (a=f).
+///
+/// Ghostty uses the Kitty graphics protocol for static images but does NOT
+/// support the animation extension. When animation is not available, Ostendo
+/// falls back to app-driven frame advance (Phase 1 placement commands).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum KittyAnimationCapability {
+    /// Real Kitty terminal — supports a=f, a=a for native animation.
+    Supported,
+    /// Ghostty, tmux, or non-Kitty — no animation frame support.
+    None,
+}
+
+/// Detect whether the terminal supports Kitty native animation.
+///
+/// Only real Kitty (not Ghostty, not tmux) supports animation frames.
+pub fn detect_kitty_animation() -> KittyAnimationCapability {
+    // Ghostty uses Kitty graphics but does NOT support animation frames
+    let term_program = env::var("TERM_PROGRAM").unwrap_or_default().to_lowercase();
+    if term_program == "ghostty" {
+        return KittyAnimationCapability::None;
+    }
+    // Only enable for real Kitty outside tmux
+    if env::var("KITTY_WINDOW_ID").is_ok() && env::var("TMUX").is_err() {
+        return KittyAnimationCapability::Supported;
+    }
+    KittyAnimationCapability::None
+}
+
 /// Detect which image display protocol the current terminal supports.
 ///
 /// Checks environment variables in priority order and returns the best

@@ -302,6 +302,10 @@ pub struct Presenter {
 
     /// Detected (or CLI-overridden) terminal image protocol (Kitty, iTerm2, Sixel, ASCII).
     image_protocol: ImageProtocol,
+    /// Whether Kitty supports native animation frames (a=f).
+    kitty_animation_cap: crate::terminal::protocols::KittyAnimationCapability,
+    /// Kitty image IDs for GIF animations (path → image_id). Terminal drives playback.
+    kitty_gif_ids: HashMap<PathBuf, u32>,
     /// Cache of rendered image data keyed by (path, width, protocol, frame).
     /// Avoids re-rendering images on every frame.
     image_cache: HashMap<ImageCacheKey, CachedImage>,
@@ -621,6 +625,8 @@ impl Presenter {
             exec_block_index: 0,
             state,
             image_protocol,
+            kitty_animation_cap: crate::terminal::protocols::detect_kitty_animation(),
+            kitty_gif_ids: HashMap::new(),
             image_cache: HashMap::new(),
             kitty_transmitted: std::collections::HashSet::new(),
             preloaded_images,
@@ -790,6 +796,84 @@ impl Presenter {
                 }
             };
             self.image_cache.insert(job.cache_key, cached);
+        }
+    }
+
+    /// Upload GIF as Kitty native animation (a=t for frame 0, a=f for 1-N).
+    /// Terminal drives playback — zero app overhead during animation.
+    fn upload_kitty_gif_animation(&mut self) {
+        use crate::image_util::kitty;
+        use crate::terminal::protocols::KittyAnimationCapability;
+
+        if self.kitty_animation_cap != KittyAnimationCapability::Supported {
+            return;
+        }
+
+        let tw = self.width as usize;
+        let th = self.height as usize;
+        let content_width = scaled_content_width(tw, self.current_scale());
+
+        for slide in &self.slides.clone() {
+            let img = match &slide.image {
+                Some(img) => img,
+                None => continue,
+            };
+            let frames = match self.gif_frames.get(&img.path) {
+                Some(f) if f.len() > 1 => f.clone(),
+                _ => continue,
+            };
+            // Skip if already uploaded
+            if self.kitty_gif_ids.contains_key(&img.path) {
+                continue;
+            }
+
+            let effective_scale = (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
+            let img_width = (content_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
+            let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / 2.0).max(1.0) as usize;
+
+            // Scale and composite frame 0 as base image
+            let base_composited = crate::image_util::render::composite_on_bg_pub(&frames[0].image, self.bg_color);
+            let (base_scaled, cols, rows) = crate::image_util::scale_image_pixels(
+                &base_composited, &self.window_size, img_width, img_max_height,
+            );
+
+            let image_id = kitty::next_image_id();
+
+            // Transmit base frame (a=t)
+            if let Some(transmit) = kitty::transmit_escape(image_id, &base_scaled) {
+                let wrapped = kitty::tmux_wrap(&transmit);
+                let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+            }
+
+            // Add animation frames (a=f)
+            for frame in &frames[1..] {
+                let composited = crate::image_util::render::composite_on_bg_pub(&frame.image, self.bg_color);
+                let (scaled, _, _) = crate::image_util::scale_image_pixels(
+                    &composited, &self.window_size, img_width, img_max_height,
+                );
+                // Kitty z= is in milliseconds (research confirmed this)
+                if let Some(frame_esc) = kitty::animation_frame_escape(image_id, &scaled, frame.delay_ms) {
+                    let wrapped = kitty::tmux_wrap(&frame_esc);
+                    let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                }
+            }
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+
+            // Store reference
+            self.kitty_gif_ids.insert(img.path.clone(), image_id);
+
+            // Cache as KittyRef for the render pipeline (frame 0 only — terminal handles the rest)
+            let effective_protocol = resolve_image_protocol(img.render_mode, self.image_protocol);
+            let proto_key = protocol_cache_key(effective_protocol);
+            let cache_key = ImageCacheKey {
+                path: img.path.clone(),
+                render_width: img_width,
+                protocol: proto_key,
+                gif_frame_index: 0,
+                color_override: img.color_override.clone(),
+            };
+            self.image_cache.insert(cache_key, CachedImage::KittyRef { image_id, cols, rows });
+            self.kitty_transmitted.insert(image_id);
         }
     }
 

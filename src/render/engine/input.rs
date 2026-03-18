@@ -40,6 +40,9 @@ impl Presenter {
                 if handle.is_finished() {
                     if let Ok(loaded) = handle.join() {
                         self.gif_frames.extend(loaded.into_iter().map(|(k, v)| (k, std::sync::Arc::new(v))));
+                        // Kitty native animation: upload all frames to terminal
+                        self.upload_kitty_gif_animation();
+                        // Non-Kitty fallback: pre-render frames in background thread
                         self.spawn_gif_prerender();
                         self.needs_full_redraw = true;
                     }
@@ -55,9 +58,16 @@ impl Presenter {
                 }
             }
 
-            // Dynamic poll timeout: 33ms when animation/GIF active (~30fps), 100ms otherwise
+            // Dynamic poll timeout: 33ms when animation/GIF active (~30fps), 100ms otherwise.
+            // Kitty native animation: terminal drives GIF, so no app-side polling needed.
             let has_active_gif = self.current_slide_has_gif();
-            let poll_ms = if self.active_animation.is_some() || !self.active_loop.is_empty() || has_active_gif { 33 } else { 100 };
+            let kitty_drives_gif = has_active_gif
+                && self.kitty_animation_cap == crate::terminal::protocols::KittyAnimationCapability::Supported
+                && self.slides[self.current].image.as_ref()
+                    .map(|img| self.kitty_gif_ids.contains_key(&img.path))
+                    .unwrap_or(false);
+            let needs_gif_polling = has_active_gif && !kitty_drives_gif;
+            let poll_ms = if self.active_animation.is_some() || !self.active_loop.is_empty() || needs_gif_polling { 33 } else { 100 };
             let mut had_input = false;
             if event::poll(std::time::Duration::from_millis(poll_ms))? {
                 // Drain ALL pending events before rendering (prevents mouse event flooding)
@@ -137,8 +147,9 @@ impl Presenter {
                 }
             }
 
-            // Advance animated GIF frame if delay has elapsed
-            if has_active_gif && self.advance_gif_frame() {
+            // Advance animated GIF frame if delay has elapsed.
+            // Skip when Kitty native animation is active — terminal drives playback.
+            if needs_gif_polling && self.advance_gif_frame() {
                 self.needs_full_redraw = true;
                 if self.active_animation.is_none() {
                     self.render_frame()?;
