@@ -34,28 +34,16 @@ impl Presenter {
         self.exec_rx = None;
         self.exec_block_index = 0;
 
-        // Kitty native animation: stop any playing GIF from the previous slide
-        if self.kitty_animation_cap == crate::terminal::protocols::KittyAnimationCapability::Supported {
-            for (_path, id) in &self.kitty_gif_ids {
-                let stop = crate::image_util::kitty::animation_stop_escape(*id);
-                let _ = std::io::Write::write_all(&mut std::io::stdout(), stop.as_bytes());
-            }
+        // Clear old Kitty image placements on slide change so images from
+        // the previous slide don't persist on screen
+        if self.image_protocol == ImageProtocol::Kitty {
+            let clear = "\x1b_Ga=d,d=a,q=2;AAAA\x1b\\";
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), clear.as_bytes());
         }
 
         // Reset GIF animation to first frame on slide change
         self.gif_current_frame = 0;
         self.gif_last_advance = std::time::Instant::now();
-
-        // Kitty native animation: start GIF on the new slide (if it has one)
-        if self.kitty_animation_cap == crate::terminal::protocols::KittyAnimationCapability::Supported {
-            if let Some(ref img) = self.slides[self.current].image {
-                if let Some(id) = self.kitty_gif_ids.get(&img.path) {
-                    let start = crate::image_util::kitty::animation_start_escape(*id);
-                    let _ = std::io::Write::write_all(&mut std::io::stdout(), start.as_bytes());
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                }
-            }
-        }
         // Font transition animation: default to dissolve, but allow per-slide override
         let use_dissolve = self.slides[self.current].font_transition.as_deref() != Some("none");
         self.font_change_is_slide_transition = use_dissolve;

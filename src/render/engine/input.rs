@@ -35,36 +35,18 @@ impl Presenter {
         self.render_frame()?;
         self.broadcast_state();
         loop {
-            // Check if background GIF loading has completed
+            // Check if background GIF loading has completed.
+            // Only stores the decoded frames — NO synchronous encoding or
+            // transmission here. GIF frames are rendered lazily in render_frame()
+            // on first visit to the GIF slide (same as static images).
             if let Some(handle) = self.gif_loading.take() {
                 if handle.is_finished() {
                     if let Ok(loaded) = handle.join() {
                         self.gif_frames.extend(loaded.into_iter().map(|(k, v)| (k, std::sync::Arc::new(v))));
-                        // Kitty native animation: upload all frames to terminal
-                        self.upload_kitty_gif_animation();
-                        // Start animation if currently on a GIF slide
-                        if self.kitty_animation_cap == crate::terminal::protocols::KittyAnimationCapability::Supported {
-                            if let Some(ref img) = self.slides[self.current].image {
-                                if let Some(id) = self.kitty_gif_ids.get(&img.path) {
-                                    let start = crate::image_util::kitty::animation_start_escape(*id);
-                                    let _ = std::io::Write::write_all(&mut std::io::stdout(), start.as_bytes());
-                                    let _ = std::io::Write::flush(&mut std::io::stdout());
-                                }
-                            }
-                        }
-                        // Non-Kitty fallback: pre-render frames in background thread
-                        self.spawn_gif_prerender();
                         self.needs_full_redraw = true;
                     }
                 } else {
                     self.gif_loading = Some(handle);
-                }
-            }
-
-            // Drain pre-rendered GIF frames from background thread
-            if let Some(ref rx) = self.gif_render_rx {
-                while let Ok((key, cached)) = rx.try_recv() {
-                    self.image_cache.insert(key, cached);
                 }
             }
 
