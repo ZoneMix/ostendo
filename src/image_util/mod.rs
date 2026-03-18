@@ -19,6 +19,7 @@
 
 pub mod render;
 pub mod mermaid;
+pub mod kitty;
 
 use anyhow::Result;
 use fast_image_resize as fir;

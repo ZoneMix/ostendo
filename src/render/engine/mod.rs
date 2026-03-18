@@ -208,9 +208,16 @@ struct ImageCacheKey {
 enum CachedImage {
     /// ASCII or half-block art rendered as styled terminal text lines.
     Lines(Vec<StyledLine>),
-    /// Raw protocol escape data (Kitty/iTerm2/Sixel) plus the number of
+    /// Raw protocol escape data (iTerm2/Sixel) plus the number of
     /// terminal rows the image occupies (used for placeholder spacing).
     Protocol { escape_data: String, placeholder_height: usize },
+    /// Kitty v2: lightweight reference to a pre-transmitted image.
+    /// Data was sent once via `a=t`; render_frame emits only `a=p` (~50 bytes).
+    KittyRef {
+        image_id: u32,
+        cols: usize,
+        rows: usize,
+    },
 }
 
 /// The main presentation engine.
@@ -298,6 +305,9 @@ pub struct Presenter {
     /// Cache of rendered image data keyed by (path, width, protocol, frame).
     /// Avoids re-rendering images on every frame.
     image_cache: HashMap<ImageCacheKey, CachedImage>,
+    /// Set of Kitty image IDs that have been transmitted to the terminal.
+    /// Prevents re-uploading when the cache is rebuilt (resize, theme change).
+    kitty_transmitted: std::collections::HashSet<u32>,
     /// Pre-loaded RGBA image data for all slide images (loaded at startup).
     preloaded_images: HashMap<PathBuf, image::RgbaImage>,
     /// Decoded GIF frames for animated images. The `Arc` allows sharing with
@@ -612,6 +622,7 @@ impl Presenter {
             state,
             image_protocol,
             image_cache: HashMap::new(),
+            kitty_transmitted: std::collections::HashSet::new(),
             preloaded_images,
             gif_frames,
             gif_loading,
@@ -767,6 +778,16 @@ impl Presenter {
                 RenderedImage::Protocol { escape_data, placeholder_height } => {
                     CachedImage::Protocol { escape_data, placeholder_height }
                 }
+                RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
+                    // Kitty v2: transmit image data to terminal now (prerender phase)
+                    if !self.kitty_transmitted.contains(&image_id) {
+                        let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
+                        let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                        self.kitty_transmitted.insert(image_id);
+                    }
+                    CachedImage::KittyRef { image_id, cols, rows }
+                }
             };
             self.image_cache.insert(job.cache_key, cached);
         }
@@ -844,6 +865,10 @@ impl Presenter {
                         RenderedImage::Lines(l) => CachedImage::Lines(l),
                         RenderedImage::Protocol { escape_data, placeholder_height } => {
                             CachedImage::Protocol { escape_data, placeholder_height }
+                        }
+                        RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape: _ } => {
+                            // GIF frames: transmit handled separately in Phase 2
+                            CachedImage::KittyRef { image_id, cols, rows }
                         }
                     };
                     if tx.send((cache_key, cached)).is_err() { return; }

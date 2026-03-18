@@ -416,6 +416,14 @@ impl Presenter {
                                 }
                                 pending_protocol_images.push((escape_data, image_line_offset));
                             }
+                            RenderedImage::KittyPlacement { cols, rows, transmit_escape: _, image_id: _ } => {
+                                // TODO(v0.5.0 step 1.6): use placement command instead
+                                let image_line_offset = lines.len();
+                                for _ in 0..rows {
+                                    lines.push(StyledLine::empty());
+                                }
+                                let _ = cols; // will be used for placement
+                            }
                         }
                     }
                     Err(_) => {
@@ -529,11 +537,24 @@ impl Presenter {
                     RenderedImage::Protocol { escape_data, placeholder_height } => {
                         CachedImage::Protocol { escape_data, placeholder_height }
                     }
+                    RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape: _ } => {
+                        // TODO(v0.5.0 step 1.5): transmit_escape written at prerender time
+                        CachedImage::KittyRef { image_id, cols, rows }
+                    }
                 }
             });
             match cached {
                 CachedImage::Lines(cached_lines) => {
                     lines.extend(cached_lines.clone());
+                }
+                CachedImage::KittyRef { image_id, cols, rows } => {
+                    // Kitty v2: reserve placeholder rows, emit placement at frame end
+                    let image_line_offset = lines.len();
+                    for _ in 0..*rows {
+                        lines.push(StyledLine::empty());
+                    }
+                    let placement = crate::image_util::kitty::placement_escape(*image_id, *cols, *rows);
+                    pending_protocol_images.push((placement, image_line_offset));
                 }
                 CachedImage::Protocol { escape_data, placeholder_height } => {
                     // Record line offset where image should be drawn

@@ -99,6 +99,20 @@ pub enum RenderedImage {
         escape_data: String,
         placeholder_height: usize,
     },
+    /// Kitty v2: image data transmitted separately via `a=t,i=<id>`.
+    /// At render time, only a ~50-byte `a=p` placement command is needed.
+    /// The `transmit_escape` must be written to stdout once (at prerender time)
+    /// before any placement commands reference this ID.
+    KittyPlacement {
+        /// The Kitty image ID assigned during transmission.
+        image_id: u32,
+        /// Display width in terminal columns.
+        cols: usize,
+        /// Display height in terminal rows.
+        rows: usize,
+        /// The full `a=t` transmit escape sequence (written once at prerender).
+        transmit_escape: String,
+    },
 }
 
 /// Render a slide image using the specified protocol.
