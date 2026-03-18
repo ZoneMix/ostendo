@@ -736,8 +736,10 @@ impl Presenter {
     ///
     /// Iterates over every slide that has an image, computes the cache key
     /// based on current dimensions and scale, and renders any images not
-    /// already in the cache. This is called once during `run()` before the
-    /// event loop starts.
+    /// already in the cache. Currently unused — images are rendered lazily
+    /// in render_frame()'s or_insert_with closure for instant startup.
+    // TODO(v0.6): Consider background pre-encoding for smoother first-visit
+    #[allow(dead_code)]
     fn prerender_images(&mut self) {
         let tw = self.width as usize;
         let th = self.height as usize;
@@ -811,6 +813,9 @@ impl Presenter {
 
     /// Upload GIF as Kitty native animation (a=t for frame 0, a=f for 1-N).
     /// Terminal drives playback — zero app overhead during animation.
+    // TODO(v0.6): Wire into background thread to avoid blocking event loop.
+    // Currently unused — GIF frames use lazy app-driven advance instead.
+    #[allow(dead_code)]
     fn upload_kitty_gif_animation(&mut self) {
         use crate::image_util::kitty;
         use crate::terminal::protocols::KittyAnimationCapability;
@@ -890,7 +895,9 @@ impl Presenter {
     }
 
     /// Spawn a background thread to pre-render all GIF frames into cache entries.
-    /// Results stream back via `gif_render_rx` and are merged in the event loop.
+    /// Currently unused — GIF frames are rendered lazily in render_frame().
+    // TODO(v0.6): Re-enable for background pre-encoding without stdout writes.
+    #[allow(dead_code)]
     fn spawn_gif_prerender(&mut self) {
         let tw = self.width as usize;
         let th = self.height as usize;

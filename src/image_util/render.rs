@@ -63,6 +63,7 @@ fn tmux_wrap(escape: &str) -> String {
 /// terminal background.  By pre-compositing, images seamlessly match the
 /// current theme's background color.
 /// Public wrapper for alpha compositing (used by Kitty GIF animation upload).
+#[allow(dead_code)]
 pub fn composite_on_bg_pub(img: &image::RgbaImage, bg_color: Color) -> image::RgbaImage {
     composite_on_bg(img, bg_color)
 }

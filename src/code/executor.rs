@@ -187,9 +187,15 @@ fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Pa
     }
     // Create a new process group so we can kill all descendants on timeout.
     // SAFETY: pre_exec runs between fork() and exec(); setsid() is async-signal-safe.
+    // If setsid() fails, we fall back to killing just the child process.
     unsafe {
         command.pre_exec(|| {
-            libc::setsid();
+            let result = libc::setsid();
+            if result == -1 {
+                // setsid failed — child stays in parent's process group.
+                // Not fatal: timeout will still kill the direct child.
+                return Ok(());
+            }
             Ok(())
         });
     }
@@ -216,8 +222,13 @@ fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Pa
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
-                    // Kill entire process group (negative PID = process group)
-                    unsafe { libc::kill(-(child_pid as i32), libc::SIGKILL); }
+                    // SAFETY: Kill the entire process group (negative PID).
+                    // setsid() in pre_exec created a new PGID = child PID, so
+                    // -pgid targets only the child's group, not our process.
+                    // Safe i32 cast with fallback to child.kill() on overflow.
+                    if let Ok(pgid) = i32::try_from(child_pid) {
+                        unsafe { libc::kill(-pgid, libc::SIGKILL); }
+                    }
                     let _ = child.kill();
                     let _ = child.wait();
                     return Ok(ExecutionResult {

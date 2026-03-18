@@ -273,23 +273,11 @@ async fn handle_websocket(
     sink_task.abort();
 }
 
-/// Constant-time string comparison to prevent timing attacks on token auth.
+/// Constant-time string comparison using the `subtle` crate.
+/// Resistant to both timing attacks and compiler dead-store elimination.
 fn constant_time_eq(a: &str, b: &str) -> bool {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    if a_bytes.len() != b_bytes.len() {
-        // Still do a dummy comparison to avoid leaking length info via timing
-        let mut _acc = 0u8;
-        for &byte in a_bytes {
-            _acc |= byte;
-        }
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 /// Check for `Authorization: Bearer <token>` header in the HTTP request.

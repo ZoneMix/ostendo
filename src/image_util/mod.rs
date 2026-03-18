@@ -38,20 +38,23 @@ fn fast_resize(src: &RgbaImage, dst_width: u32, dst_height: u32, filter: fir::Fi
     if sw == dst_width && sh == dst_height {
         return src.clone();
     }
-    let src_image = fir::images::Image::from_vec_u8(
-        sw,
-        sh,
-        src.as_raw().clone(),
-        fir::PixelType::U8x4,
-    ).unwrap();
+    // Graceful fallback: if fast_image_resize fails, return the original image
+    let src_image = match fir::images::Image::from_vec_u8(
+        sw, sh, src.as_raw().clone(), fir::PixelType::U8x4,
+    ) {
+        Ok(img) => img,
+        Err(_) => return src.clone(),
+    };
     let mut dst_image = fir::images::Image::new(dst_width, dst_height, fir::PixelType::U8x4);
     let mut resizer = fir::Resizer::new();
-    resizer.resize(
-        &src_image,
-        &mut dst_image,
+    if resizer.resize(
+        &src_image, &mut dst_image,
         &fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(filter)),
-    ).unwrap();
-    RgbaImage::from_raw(dst_width, dst_height, dst_image.into_vec()).unwrap()
+    ).is_err() {
+        return src.clone();
+    }
+    RgbaImage::from_raw(dst_width, dst_height, dst_image.into_vec())
+        .unwrap_or_else(|| src.clone())
 }
 
 /// A single decoded frame from an animated GIF.

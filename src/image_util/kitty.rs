@@ -20,7 +20,7 @@
 //! - `m=0/1` controls chunked transmission (4096-byte chunks)
 
 use base64::Engine;
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Global image ID counter. Each transmitted image gets a unique ID.
@@ -33,6 +33,7 @@ pub fn next_image_id() -> u32 {
 }
 
 /// Reset the ID counter (call on session restart or alternate screen switch).
+#[allow(dead_code)]
 pub fn reset_image_ids() {
     NEXT_IMAGE_ID.store(1, Ordering::Relaxed);
 }
@@ -118,6 +119,7 @@ pub fn placement_escape(id: u32, cols: usize, rows: usize) -> String {
 /// - `gap_ms`: delay in milliseconds before the next frame displays
 ///
 /// Returns the chunked escape sequence for the frame data.
+#[allow(dead_code)]
 pub fn animation_frame_escape(
     id: u32,
     frame_img: &image::RgbaImage,
@@ -164,18 +166,21 @@ pub fn animation_frame_escape(
 }
 
 /// Start animation loop playback for a transmitted image with frames.
+#[allow(dead_code)]
 pub fn animation_start_escape(id: u32) -> String {
     // s=3: loop animation, v=1: loop infinitely
     format!("\x1b_Ga=a,i={},s=3,v=1,q=2;AAAA\x1b\\", id)
 }
 
 /// Stop animation playback.
+#[allow(dead_code)]
 pub fn animation_stop_escape(id: u32) -> String {
     // s=1: stop animation
     format!("\x1b_Ga=a,i={},s=1,q=2;AAAA\x1b\\", id)
 }
 
 /// Delete all placements and free data for a specific image ID.
+#[allow(dead_code)]
 pub fn delete_image_escape(id: u32) -> String {
     // d=I: delete placements AND free image data
     format!("\x1b_Ga=d,d=I,i={},q=2;AAAA\x1b\\", id)
@@ -183,7 +188,7 @@ pub fn delete_image_escape(id: u32) -> String {
 
 /// Delete ALL images (placements + data). Use on slide change or exit.
 pub fn delete_all_escape() -> String {
-    format!("\x1b_Ga=d,d=A,q=2;AAAA\x1b\\")
+    "\x1b_Ga=d,d=A,q=2;AAAA\x1b\\".to_string()
 }
 
 /// Wrap a Kitty escape sequence for tmux passthrough if running inside tmux.
@@ -199,6 +204,7 @@ pub fn tmux_wrap(escape: &str) -> String {
 /// A transmitted image handle. Tracks the Kitty image ID, dimensions in
 /// terminal cells, and whether animation frames have been uploaded.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TransmittedImage {
     /// Unique Kitty image ID
     pub id: u32,
@@ -212,6 +218,7 @@ pub struct TransmittedImage {
     pub animating: bool,
 }
 
+#[allow(dead_code)]
 impl TransmittedImage {
     /// Generate the placement escape for this image.
     pub fn place(&self) -> String {

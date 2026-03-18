@@ -114,6 +114,13 @@ impl Presenter {
         self.help_badge_bg = ensure_badge_contrast(self.code_bg_color, self.bg_color);
         Self::set_terminal_bg(self.bg_color);
         self.theme = new_theme;
+        // Clear Kitty images from terminal memory (bg color changed, compositing differs)
+        if self.image_protocol == ImageProtocol::Kitty {
+            let delete = crate::image_util::kitty::delete_all_escape();
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), delete.as_bytes());
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            self.kitty_transmitted.clear();
+        }
         self.image_cache.clear();
         self.needs_full_redraw = true;
     }
