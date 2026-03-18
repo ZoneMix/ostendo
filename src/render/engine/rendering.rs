@@ -417,13 +417,20 @@ impl Presenter {
                                 }
                                 pending_protocol_images.push((escape_data, image_line_offset, 0));
                             }
-                            RenderedImage::KittyPlacement { cols, rows, transmit_escape: _, image_id: _ } => {
-                                // TODO(v0.5.0 step 1.6): use placement command instead
+                            RenderedImage::KittyPlacement { cols, rows, transmit_escape, image_id } => {
+                                // Transmit mermaid image to Kitty if not already sent
+                                if !self.kitty_transmitted.contains(&image_id) {
+                                    let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
+                                    let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                                    self.kitty_transmitted.insert(image_id);
+                                }
                                 let image_line_offset = lines.len();
                                 for _ in 0..rows {
                                     lines.push(StyledLine::empty());
                                 }
-                                let _ = cols; // will be used for placement
+                                let placement = crate::image_util::kitty::placement_escape(image_id, cols, rows);
+                                pending_protocol_images.push((placement, image_line_offset, cols));
                             }
                         }
                     }
@@ -1283,11 +1290,17 @@ impl Presenter {
 
             // Emit protocol images on the final frame
             if is_last {
-                for (escape_data, line_offset, _img_cols) in pending_protocol_images {
+                let dis_tw = self.width as usize;
+                for (escape_data, line_offset, img_cols) in pending_protocol_images {
                     if *line_offset >= visible_start && *line_offset < visible_end {
                         let display_row = line_offset - visible_start;
                         let screen_row = (status_bar_rows + display_row) as u16;
-                        queue!(dw, cursor::MoveTo(0, screen_row))?;
+                        if *img_cols > 0 {
+                            let center_col = (dis_tw.saturating_sub(*img_cols) / 2) as u16;
+                            queue!(dw, cursor::MoveTo(center_col, screen_row))?;
+                        } else {
+                            queue!(dw, cursor::MoveTo(0, screen_row))?;
+                        }
                         write!(dw, "{}", escape_data)?;
                     }
                 }

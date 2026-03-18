@@ -42,6 +42,16 @@ impl Presenter {
                         self.gif_frames.extend(loaded.into_iter().map(|(k, v)| (k, std::sync::Arc::new(v))));
                         // Kitty native animation: upload all frames to terminal
                         self.upload_kitty_gif_animation();
+                        // Start animation if currently on a GIF slide
+                        if self.kitty_animation_cap == crate::terminal::protocols::KittyAnimationCapability::Supported {
+                            if let Some(ref img) = self.slides[self.current].image {
+                                if let Some(id) = self.kitty_gif_ids.get(&img.path) {
+                                    let start = crate::image_util::kitty::animation_start_escape(*id);
+                                    let _ = std::io::Write::write_all(&mut std::io::stdout(), start.as_bytes());
+                                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                                }
+                            }
+                        }
                         // Non-Kitty fallback: pre-render frames in background thread
                         self.spawn_gif_prerender();
                         self.needs_full_redraw = true;
