@@ -553,7 +553,7 @@ impl Presenter {
                             let _ = std::io::Write::flush(&mut std::io::stdout());
                             self.kitty_transmitted.insert(image_id);
                         }
-                        CachedImage::KittyRef { image_id, cols, rows }
+                        CachedImage::KittyRef { image_id, cols, rows, transmit_escape: None }
                     }
                 }
             });
@@ -561,8 +561,17 @@ impl Presenter {
                 CachedImage::Lines(cached_lines) => {
                     lines.extend(cached_lines.clone());
                 }
-                CachedImage::KittyRef { image_id, cols, rows } => {
-                    // Kitty v2: reserve placeholder rows, emit placement at frame end
+                CachedImage::KittyRef { image_id, cols, rows, ref mut transmit_escape } => {
+                    // Lazy transmit: send image data to Kitty on first render of this slide
+                    if let Some(esc) = transmit_escape.take() {
+                        if !self.kitty_transmitted.contains(image_id) {
+                            let wrapped = crate::image_util::kitty::tmux_wrap(&esc);
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                            self.kitty_transmitted.insert(*image_id);
+                        }
+                    }
+                    // Reserve placeholder rows, emit placement at frame end
                     let image_line_offset = lines.len();
                     for _ in 0..*rows {
                         lines.push(StyledLine::empty());

@@ -211,12 +211,14 @@ enum CachedImage {
     /// Raw protocol escape data (iTerm2/Sixel) plus the number of
     /// terminal rows the image occupies (used for placeholder spacing).
     Protocol { escape_data: String, placeholder_height: usize },
-    /// Kitty v2: lightweight reference to a pre-transmitted image.
-    /// Data was sent once via `a=t`; render_frame emits only `a=p` (~50 bytes).
+    /// Kitty v2: reference to a Kitty image. Contains the transmit escape
+    /// for lazy transmission on first use, then only `a=p` placement (~50 bytes).
     KittyRef {
         image_id: u32,
         cols: usize,
         rows: usize,
+        /// The full `a=t` transmit escape. Sent once on first render, then cleared.
+        transmit_escape: Option<String>,
     },
 }
 
@@ -785,14 +787,10 @@ impl Presenter {
                     CachedImage::Protocol { escape_data, placeholder_height }
                 }
                 RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
-                    // Kitty v2: transmit image data to terminal now (prerender phase)
-                    if !self.kitty_transmitted.contains(&image_id) {
-                        let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
-                        let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
-                        self.kitty_transmitted.insert(image_id);
-                    }
-                    CachedImage::KittyRef { image_id, cols, rows }
+                    // Kitty v2: cache with transmit escape for lazy transmission.
+                    // NOT sent here — deferred to render_frame() on first use to
+                    // avoid blocking startup for 5-10s when many images are present.
+                    CachedImage::KittyRef { image_id, cols, rows, transmit_escape: Some(transmit_escape) }
                 }
             };
             self.image_cache.insert(job.cache_key, cached);
@@ -872,7 +870,9 @@ impl Presenter {
                 gif_frame_index: 0,
                 color_override: img.color_override.clone(),
             };
-            self.image_cache.insert(cache_key, CachedImage::KittyRef { image_id, cols, rows });
+            self.image_cache.insert(cache_key, CachedImage::KittyRef {
+                image_id, cols, rows, transmit_escape: None, // already transmitted above
+            });
             self.kitty_transmitted.insert(image_id);
         }
     }
@@ -955,7 +955,7 @@ impl Presenter {
                             let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
                             let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
                             let _ = std::io::Write::flush(&mut std::io::stdout());
-                            CachedImage::KittyRef { image_id, cols, rows }
+                            CachedImage::KittyRef { image_id, cols, rows, transmit_escape: None }
                         }
                     };
                     if tx.send((cache_key, cached)).is_err() { return; }

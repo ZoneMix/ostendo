@@ -4,13 +4,29 @@ impl Presenter {
     pub(crate) fn toggle_fullscreen(&mut self) {
         self.show_fullscreen = !self.show_fullscreen;
         self.user_fullscreen_override = Some(self.show_fullscreen);
+        // Delete old Kitty placements — viewport size changes, image positions shift
+        self.clear_kitty_placements();
         self.needs_full_redraw = true;
     }
 
     pub(crate) fn toggle_notes(&mut self) {
         self.show_notes = !self.show_notes;
         self.notes_scroll = 0;
+        // Delete old Kitty placements — viewport size changes when notes panel shows/hides
+        self.clear_kitty_placements();
         self.needs_full_redraw = true;
+    }
+
+    /// Delete all Kitty image placements (but keep data in terminal memory).
+    /// Called when viewport layout changes (notes toggle, fullscreen toggle)
+    /// so images are re-placed at correct positions on next render_frame().
+    fn clear_kitty_placements(&self) {
+        if self.image_protocol == ImageProtocol::Kitty {
+            // d=a: delete all visible placements, keep image data for re-placement
+            let clear = "\x1b_Ga=d,d=a,q=2;AAAA\x1b\\";
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), clear.as_bytes());
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
     }
 
     pub(crate) fn toggle_theme_name(&mut self) {
