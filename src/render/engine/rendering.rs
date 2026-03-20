@@ -720,22 +720,6 @@ impl Presenter {
         };
 
         if !scroll_only && !self.show_fullscreen {
-            // Render status bar at base font size so it stays consistent
-            // regardless of per-slide font_size directives. The font switch
-            // is instant (single Kitty RC escape, no visible stepping).
-            let base_font = self.original_font_size.as_ref()
-                .and_then(|s| s.parse::<f64>().ok());
-            let current_font = self.last_applied_font_size;
-            let needs_font_swap = self.font_capability == FontSizeCapability::KittyRemote
-                && base_font.is_some()
-                && current_font != base_font;
-            if needs_font_swap {
-                if let Some(base) = base_font {
-                    self.kitty_font_size_absolute(base, false); // no flush — piggybacks on sync block
-                }
-            }
-
-            // Render the status bar at base font
             let bar = self.build_status_bar(tw);
             queue!(w, cursor::MoveTo(0, 0))?;
             self.queue_styled_line(&mut w, &bar, tw)?;
@@ -746,13 +730,6 @@ impl Presenter {
             };
             queue!(w, cursor::MoveTo(0, 1), SetBackgroundColor(sep_bg))?;
             write!(w, "{:width$}", "", width = tw)?;
-
-            // Restore slide font for content rendering
-            if needs_font_swap {
-                if let Some(target) = current_font {
-                    self.kitty_font_size_absolute(target, false);
-                }
-            }
         }
 
         // Offset for gradient: content rows start after the separator row (unless fullscreen).
