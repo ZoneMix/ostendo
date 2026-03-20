@@ -1033,6 +1033,57 @@ Mouse clicks advance slides, scroll wheel scrolls content, right-click goes back
 
 ---
 
+# Presenter Notes
+<!-- section: Advanced -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
+
+Press `s` to toggle speaker notes during your presentation:
+
+- Notes are defined with `<!-- notes: ... -->` in markdown
+- Visible only to the presenter, not the audience
+- Notes panel scrolls independently from slide content
+- Remote control UI also shows notes
+
+> Try pressing `s` now to see the notes for this slide
+
+<!-- notes:
+These are the speaker notes for this slide. They are visible when you
+press 's' or in the WebSocket remote control UI. Notes support the same
+inline formatting as slide content: **bold**, *italic*, `code`.
+
+Key talking points:
+1. Notes are invisible to the audience on the projector
+2. The notes panel can be repositioned with keyboard shortcuts
+3. Notes scroll independently from slide content
+4. Notes are included in the HTML export for printing
+-->
+
+---
+
+# Vertical Centering
+<!-- section: Advanced -->
+<!-- font_size: 4 -->
+<!-- font_transition: none -->
+<!-- align: vcenter -->
+
+This slide uses `<!-- align: vcenter -->` to vertically center all content.
+
+- Content is pushed to the vertical middle of the screen
+- Combines with `hcenter` for full centering: `<!-- align: center -->`
+- Great for title cards, quotes, and section dividers
+
+<!-- notes:
+Alignment variants:
+- align: top (default) — content starts at the top
+- align: center — both vertical and horizontal centering
+- align: vcenter — vertical centering only
+- align: hcenter — horizontal centering only
+These can be set per-slide or globally in front matter.
+-->
+
+---
+
 # Thank You
 <!-- section: Closing -->
 <!-- ascii_title -->
