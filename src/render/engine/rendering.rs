@@ -54,7 +54,31 @@ impl Presenter {
             None
         };
 
-        // Font change BEFORE the sync block — the terminal resize triggered
+        // If font is about to change, render the status bar FIRST at the current
+        // (pre-change) font size in its own sync block. This keeps the status bar
+        // at a consistent visual size regardless of per-slide font_size directives.
+        // The main content sync block then skips the status bar (already rendered).
+        let status_bar_pre_rendered = if font_changing.is_some()
+            && !self.show_fullscreen
+            && self.font_capability == FontSizeCapability::KittyRemote
+        {
+            let tw = self.width as usize;
+            let bar = self.build_status_bar(tw);
+            let stdout = io::stdout();
+            let mut pre_w = BufWriter::with_capacity(8 * 1024, stdout.lock());
+            queue!(pre_w, BeginSynchronizedUpdate)?;
+            queue!(pre_w, cursor::MoveTo(0, 0))?;
+            self.queue_styled_line(&mut pre_w, &bar, tw)?;
+            queue!(pre_w, cursor::MoveTo(0, 1), SetBackgroundColor(self.bg_color))?;
+            write!(pre_w, "{:width$}", "", width = tw)?;
+            queue!(pre_w, EndSynchronizedUpdate, ResetColor)?;
+            pre_w.flush()?;
+            true
+        } else {
+            false
+        };
+
+        // Font change BEFORE the main sync block — the terminal resize triggered
         // by font changes must settle before we query dimensions and render.
         if let Some(target) = font_changing {
             self.apply_font_change(target)?;
@@ -719,7 +743,7 @@ impl Presenter {
             content_area + if has_slide_footer { 1 } else { 0 }
         };
 
-        if !scroll_only && !self.show_fullscreen {
+        if !scroll_only && !self.show_fullscreen && !status_bar_pre_rendered {
             let bar = self.build_status_bar(tw);
             queue!(w, cursor::MoveTo(0, 0))?;
             self.queue_styled_line(&mut w, &bar, tw)?;
