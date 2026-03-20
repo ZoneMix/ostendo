@@ -12,3 +12,4 @@ presentations/dakotacon-2026/
 .agents/
 .claude/
 CLAUDE.md.bak
+tests/integration/results/

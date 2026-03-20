@@ -67,18 +67,31 @@ get_text() {
 capture_screenshot() {
     local name="$1"
     if [ "$CAPTURE_SCREENSHOTS" = "1" ]; then
+        sleep 0.3  # Let render settle before capture
+        # Use osascript to get the Kitty window ID and screencapture it
         local wid
-        wid=$(get_window_id)
-        if [ -n "$wid" ]; then
-            # Use screencapture with window ID
-            local kitty_pid
-            kitty_pid=$(pgrep -f "kitty.*--listen-on" | head -1)
-            if [ -n "$kitty_pid" ]; then
-                screencapture -l "$(osascript -e "tell application \"System Events\" to get id of first window of (processes whose unix id is $kitty_pid)")" "$SCREENSHOTS_DIR/${name}.png" 2>/dev/null && return
+        wid=$(osascript -e '
+            tell application "System Events"
+                set kittyProcs to every process whose name is "kitty"
+                if (count of kittyProcs) > 0 then
+                    set kittyProc to first item of kittyProcs
+                    set kittyWindows to every window of kittyProc
+                    if (count of kittyWindows) > 0 then
+                        return id of first window of kittyProc
+                    end if
+                end if
+            end tell
+            return ""
+        ' 2>/dev/null)
+        if [ -n "$wid" ] && [ "$wid" != "" ]; then
+            screencapture -x -l "$wid" "$SCREENSHOTS_DIR/${name}.png" 2>/dev/null
+            if [ -f "$SCREENSHOTS_DIR/${name}.png" ]; then
+                log "  Screenshot: ${name}.png"
             fi
+        else
+            # Fallback: capture entire main display
+            screencapture -x "$SCREENSHOTS_DIR/${name}.png" 2>/dev/null
         fi
-        # Fallback: capture by window title
-        screencapture -l "$(osascript -e 'tell application "System Events" to get id of first window of process "kitty"' 2>/dev/null)" "$SCREENSHOTS_DIR/${name}.png" 2>/dev/null || true
     fi
 }
 
@@ -132,13 +145,16 @@ pass "Slide count: $SLIDE_COUNT"
 section "Launch Kitty"
 # ============================================================
 
-# Start Kitty with remote control enabled, fixed size
+# Start Kitty with remote control enabled, fixed size, fullscreen
+# IMPORTANT: unset TMUX to prevent DCS wrapping of Kitty APC escapes
+unset TMUX
 $KITTY --single-instance --instance-group ostendo-test \
     --listen-on unix:/tmp/ostendo-test-kitty \
     -o allow_remote_control=yes \
     -o initial_window_width=160c \
     -o initial_window_height=45c \
     -o font_size=14 \
+    --start-as maximized \
     --title "Ostendo Visual Test" \
     "$BINARY" --no-exec "$PRESENTATION" &
 KITTY_PID=$!
