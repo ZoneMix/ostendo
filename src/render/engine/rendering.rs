@@ -420,8 +420,7 @@ impl Presenter {
                             RenderedImage::KittyPlacement { cols, rows, transmit_escape, image_id } => {
                                 // Transmit mermaid image to Kitty if not already sent
                                 if !self.kitty_transmitted.contains(&image_id) {
-                                    let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
-                                    let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                                    let _ = std::io::Write::write_all(&mut std::io::stdout(), transmit_escape.as_bytes());
                                     let _ = std::io::Write::flush(&mut std::io::stdout());
                                     self.kitty_transmitted.insert(image_id);
                                 }
@@ -548,8 +547,7 @@ impl Presenter {
                     RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
                         // Transmit image data to Kitty NOW if not already sent
                         if !self.kitty_transmitted.contains(&image_id) {
-                            let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
-                            let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), transmit_escape.as_bytes());
                             let _ = std::io::Write::flush(&mut std::io::stdout());
                             self.kitty_transmitted.insert(image_id);
                         }
@@ -565,8 +563,7 @@ impl Presenter {
                     // Lazy transmit: send image data to Kitty on first render of this slide
                     if let Some(esc) = transmit_escape.take() {
                         if !self.kitty_transmitted.contains(image_id) {
-                            let wrapped = crate::image_util::kitty::tmux_wrap(&esc);
-                            let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), esc.as_bytes());
                             let _ = std::io::Write::flush(&mut std::io::stdout());
                             self.kitty_transmitted.insert(*image_id);
                         }

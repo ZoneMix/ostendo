@@ -858,10 +858,9 @@ impl Presenter {
 
             let image_id = kitty::next_image_id();
 
-            // Transmit base frame (a=t)
+            // Transmit base frame (a=t) — Kitty APC is handled natively, no DCS wrap
             if let Some(transmit) = kitty::transmit_escape(image_id, &base_scaled) {
-                let wrapped = kitty::tmux_wrap(&transmit);
-                let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                let _ = std::io::Write::write_all(&mut std::io::stdout(), transmit.as_bytes());
             }
 
             // Add animation frames (a=f)
@@ -870,10 +869,8 @@ impl Presenter {
                 let (scaled, _, _) = crate::image_util::scale_image_pixels(
                     &composited, &self.window_size, img_width, img_max_height,
                 );
-                // Kitty z= is in milliseconds (research confirmed this)
                 if let Some(frame_esc) = kitty::animation_frame_escape(image_id, &scaled, frame.delay_ms) {
-                    let wrapped = kitty::tmux_wrap(&frame_esc);
-                    let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                    let _ = std::io::Write::write_all(&mut std::io::stdout(), frame_esc.as_bytes());
                 }
             }
             let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -974,9 +971,8 @@ impl Presenter {
                             CachedImage::Protocol { escape_data, placeholder_height }
                         }
                         RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
-                            // Transmit to Kitty from the background thread
-                            let wrapped = crate::image_util::kitty::tmux_wrap(&transmit_escape);
-                            let _ = std::io::Write::write_all(&mut std::io::stdout(), wrapped.as_bytes());
+                            // Transmit to Kitty — APC natively handled, no DCS wrap
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), transmit_escape.as_bytes());
                             let _ = std::io::Write::flush(&mut std::io::stdout());
                             CachedImage::KittyRef { image_id, cols, rows, transmit_escape: None }
                         }
