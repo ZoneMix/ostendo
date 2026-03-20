@@ -377,7 +377,7 @@ provides context. The ratio [2, 1] gives 2/3 width to the left column.
 # Images: Protocol Auto-Detection
 <!-- section: Images -->
 <!-- title_decoration: underline -->
-<!-- image_scale: 50 -->
+<!-- image_scale: 55 -->
 <!-- font_size: 4 -->
 <!-- animation: fade_in -->
 
@@ -403,17 +403,14 @@ sets the initial size as a percentage of terminal width.
 <!-- section: Images -->
 <!-- image_render: ascii -->
 <!-- image_color: #00FF88 -->
-<!-- image_scale: 45 -->
-<!-- font_size: 4 -->
+<!-- image_scale: 70 -->
+<!-- font_size: -2 -->
 <!-- font_transition: none -->
-
-Force ASCII rendering with custom color override:
+<!-- fullscreen: true -->
 
 ![Opus - green ASCII art](../../images/opus.png)
 
-- Set via `<!-- image_render: ascii -->`
-- Color override via `<!-- image_color: #00FF88 -->`
-- Works in every terminal, even over serial connections
+- Force ASCII with `<!-- image_render: ascii -->` and color with `<!-- image_color: #hex -->`
 
 <!-- notes:
 ASCII art mode maps pixel brightness to a character ramp. The image_color
@@ -427,7 +424,7 @@ text terminals and serial consoles.
 # Animated GIFs
 <!-- section: Images -->
 <!-- align: center -->
-<!-- image_scale: 60 -->
+<!-- image_scale: 70 -->
 <!-- font_size: 4 -->
 <!-- font_transition: none -->
 
