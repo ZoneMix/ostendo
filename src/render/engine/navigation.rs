@@ -34,12 +34,9 @@ impl Presenter {
         self.exec_rx = None;
         self.exec_block_index = 0;
 
-        // Clear old Kitty image placements on slide change so images from
-        // the previous slide don't persist on screen
-        if self.image_protocol == ImageProtocol::Kitty {
-            let clear = "\x1b_Ga=d,d=a,q=2;AAAA\x1b\\";
-            let _ = std::io::Write::write_all(&mut std::io::stdout(), clear.as_bytes());
-        }
+        // Kitty image cleanup is handled in render_frame() before emitting
+        // new placements — NOT here, because the font fade-out animation needs
+        // the old image to remain visible until the fade completes.
 
         // Reset GIF animation to first frame on slide change
         self.gif_current_frame = 0;
