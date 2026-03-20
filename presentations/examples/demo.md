@@ -227,16 +227,16 @@ fmt.Println()
 <!-- column: 1 -->
 
 ```ruby +exec {label: "stats.rb"}
-data = [23, 45, 12, 67, 34, 89, 56]
-sorted = data.sort
-mean = data.sum.to_f / data.size
-median = sorted[sorted.size / 2]
+d = [23, 45, 12, 67, 34, 89]
+s = d.sort
+avg = d.sum.to_f / d.size
+med = s[s.size / 2]
 
-puts "Data:   #{data.inspect}"
-puts "Sorted: #{sorted.inspect}"
-puts "Mean:   #{mean.round(1)}"
-puts "Median: #{median}"
-puts "Range:  #{sorted.last - sorted.first}"
+puts "Data:  #{d}"
+puts "Sort:  #{s}"
+puts "Mean:  #{avg.round(1)}"
+puts "Med:   #{med}"
+puts "Range: #{s.last - s.first}"
 ```
 
 <!-- reset_layout -->
@@ -344,16 +344,16 @@ Asymmetric layouts with `column_layout: [2, 1]`:
 
 ```python {label: "sql_injection.py"}
 # NEVER do this
-query = f"SELECT * FROM users WHERE id = {user_id}"
-cursor.execute(query)
+q = f"SELECT * FROM users WHERE id = {uid}"
+cursor.execute(q)
 ```
 
 **Secure Pattern**
 
 ```python {label: "parameterized.py"}
 # Always use parameterized queries
-query = "SELECT * FROM users WHERE id = %s"
-cursor.execute(query, (user_id,))
+q = "SELECT * FROM users WHERE id = %s"
+cursor.execute(q, (uid,))
 ```
 
 <!-- column: 1 -->

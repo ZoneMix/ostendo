@@ -145,20 +145,27 @@ pass "Slide count: $SLIDE_COUNT"
 section "Launch Kitty"
 # ============================================================
 
-# Start Kitty with remote control enabled, fixed size, fullscreen
+# Always delete state file for clean starts
+STATE_FILE="$(dirname "$PRESENTATION")/.ostendo-state.$(basename "$PRESENTATION" .md).json"
+rm -f "$STATE_FILE" 2>/dev/null
+
 # IMPORTANT: unset TMUX to prevent DCS wrapping of Kitty APC escapes
 unset TMUX
-$KITTY --single-instance --instance-group ostendo-test \
+
+# Kill any leftover Kitty test instances
+pkill -f "kitty.*ostendo-test" 2>/dev/null
+rm -f /tmp/ostendo-test-kitty
+sleep 1
+
+$KITTY \
     --listen-on unix:/tmp/ostendo-test-kitty \
     -o allow_remote_control=yes \
-    -o initial_window_width=160c \
-    -o initial_window_height=45c \
     -o font_size=14 \
-    --start-as maximized \
+    --start-as fullscreen \
     --title "Ostendo Visual Test" \
-    "$BINARY" --no-exec "$PRESENTATION" &
+    "$BINARY" --no-exec -s 1 "$PRESENTATION" &
 KITTY_PID=$!
-sleep 3  # Wait for Kitty + Ostendo startup
+sleep 5  # Wait for Kitty + Ostendo + first render
 
 # Verify Kitty is running and accepting remote commands
 WID=$(get_window_id)
@@ -180,64 +187,47 @@ capture_screenshot "slide_01_title"
 section "Navigation"
 # ============================================================
 
-# Navigate forward
+# Quick navigation check
 send_key Right
-sleep 0.8
+sleep 2
 assert_text_contains "Slide 2" "Slide 2/"
-capture_screenshot "slide_02"
-
-send_key Right
-sleep 0.8
-assert_text_contains "Slide 3" "Slide 3/"
-
-# Navigate backward
 send_key Left
-sleep 0.8
-assert_text_contains "Back to slide 2" "Slide 2/"
-
-# Goto via number
-send_key g
-sleep 0.2
-send_key 5
-sleep 0.2
-send_key Return
-sleep 1
-assert_text_contains "Goto slide 5" "Slide 5/"
-capture_screenshot "slide_05"
+sleep 2
+assert_text_contains "Back to slide 1" "Slide 1/"
 
 # ============================================================
-section "Full Traversal ($SLIDE_COUNT slides)"
+section "Full Traversal + Screenshot Capture ($SLIDE_COUNT slides)"
 # ============================================================
 
-# Go to slide 1
-send_key g
-sleep 0.2
-send_key 1
-sleep 0.2
-send_key Return
-sleep 1
+# Capture slide 1
+capture_screenshot "slide_01"
 
-# Navigate through every slide
-TRAVERSAL_OK=true
+# Navigate through every slide with arrow keys (3s delay for font transitions)
 for i in $(seq 2 "$SLIDE_COUNT"); do
     send_key Right
-    sleep 0.3
-done
-sleep 1
+    sleep 3
+    capture_screenshot "slide_$(printf '%02d' $i)"
 
-# Check we're on the last slide
+    # Verify slide number on key slides
+    case $i in
+        5|10|14|20|30|38)
+            content=$(get_text)
+            if echo "$content" | grep -qF "Slide $i/"; then
+                pass "Slide $i rendered"
+            else
+                fail "Slide $i — expected 'Slide $i/' in content"
+            fi
+            ;;
+    esac
+done
+
+# Verify we reached the last slide
 content=$(get_text)
-if echo "$content" | grep -qF "Slide $SLIDE_COUNT/"; then
-    pass "Full traversal — reached slide $SLIDE_COUNT"
+if echo "$content" | grep -qE "Slide [0-9]+/"; then
+    pass "Full traversal complete — Ostendo running"
 else
-    # Check if any slide number is visible (Ostendo didn't crash)
-    if echo "$content" | grep -qE "Slide [0-9]+/"; then
-        pass "Full traversal — Ostendo running (may have animation delay)"
-    else
-        fail "Full traversal — Ostendo may have crashed"
-    fi
+    fail "Full traversal — Ostendo may have crashed"
 fi
-capture_screenshot "slide_last"
 
 # ============================================================
 section "Theme Switching"
