@@ -87,14 +87,25 @@ impl Presenter {
     ///
     /// Each line is tagged with the appropriate `LineContentType` for
     /// targeted animations.
+    /// Render a title as FIGlet ASCII art.
+    ///
+    /// When `max_width` is `Some(w)`, constrain the FIGlet to fit within `w`
+    /// columns (used for rendering inside column layouts). When `None`, use
+    /// the full terminal width.
     pub(crate) fn render_ascii_title(&self, title: &str, pad: &str, lines: &mut Vec<StyledLine>) {
+        self.render_ascii_title_constrained(title, pad, lines, None);
+    }
+
+    pub(crate) fn render_ascii_title_constrained(
+        &self, title: &str, pad: &str, lines: &mut Vec<StyledLine>, max_width: Option<usize>,
+    ) {
         // OSC 66 path: only used as fallback when FIGlet font is NOT loaded.
         // FIGlet is the preferred path because it supports sparkle/spin animations.
         // OSC 66 is the fallback for terminals where FIGlet can't render.
         if self.figfont.is_none()
             && self.text_scale_cap == crate::terminal::protocols::TextScaleCapability::Osc66
         {
-            let content_width = self.width as usize - pad.len();
+            let content_width = max_width.unwrap_or(self.width as usize - pad.len());
             let title_width = unicode_width::UnicodeWidthStr::width(title);
 
             let scale = if title_width * 3 <= content_width { 3u8 }
@@ -129,7 +140,7 @@ impl Presenter {
                 return;
             }
         };
-        let content_width = self.width as usize - pad.len();
+        let content_width = max_width.unwrap_or(self.width as usize - pad.len());
 
         // Helper: check if rendered FIGlet fits within content_width
         let fits = |text: &str| -> Option<String> {
@@ -440,8 +451,8 @@ impl Presenter {
             if i == 0 {
                 if let Some(title) = figlet_title {
                     let mut figlet_lines: Vec<StyledLine> = Vec::new();
-                    // render_ascii_title uses empty pad — we handle pad in the merge loop
-                    self.render_ascii_title(title, "", &mut figlet_lines);
+                    // Constrain FIGlet to column width so it doesn't overflow
+                    self.render_ascii_title_constrained(title, "", &mut figlet_lines, Some(cw));
                     for fl in &figlet_lines {
                         let mut spans: Vec<StyledSpan> = fl.spans.clone();
                         // Apply column text_scale to FIGlet spans only if the
@@ -471,16 +482,18 @@ impl Presenter {
             // wrap width is divided by the scale factor (each char takes scale columns)
             // and text_scale is applied to all bullet spans.
             let is_text_column = content.image.is_none();
+            let scale = if is_text_column { cols.text_scale } else { None };
+            let scale_factor = scale.map(|s| s as usize).unwrap_or(1);
             for bullet in &content.bullets {
                 if bullet.text.is_empty() { continue; }
                 let indent = bullet_indent(bullet.depth);
-                let text_width = cw.saturating_sub(indent.len());
-                if text_width == 0 { continue; }
-                let wrap_width = if let Some(scale) = cols.text_scale {
-                    if is_text_column { text_width / scale as usize } else { text_width }
-                } else {
-                    text_width
-                };
+                // When text_scale is active, the indent also gets scaled.
+                // Account for the scaled indent width when computing wrap width.
+                let scaled_indent_width = indent.len() * scale_factor;
+                let available = cw.saturating_sub(scaled_indent_width);
+                if available == 0 { continue; }
+                // Wrap width is in unscaled characters (each takes scale_factor cells)
+                let wrap_width = available / scale_factor;
                 let wrapped = textwrap_simple(&bullet.text, wrap_width);
                 for (wi, wline) in wrapped.iter().enumerate() {
                     let mut spans = Vec::new();
