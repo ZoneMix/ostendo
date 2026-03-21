@@ -418,16 +418,22 @@ fn render_spin(
     let mut result = Vec::with_capacity(buffer.len());
 
     for (row, line) in buffer.iter().enumerate() {
-        let should_animate = match target {
+        let line_level_animate = match target {
             None => true,
             Some("figlet") => line.content_type == LineContentType::FigletTitle,
-            Some("image") => line.content_type == LineContentType::AsciiImage,
+            Some("image") => true, // handle per-span below
             _ => true,
         };
-        if !should_animate {
+
+        // For "image" targeting, check if ANY span is animatable
+        let has_animatable_spans = target == Some("image")
+            && line.spans.iter().any(|s| s.animatable);
+
+        if !line_level_animate && !has_animatable_spans {
             result.push(line.clone());
             continue;
         }
+
         let chars: Vec<char> = line.spans.iter().flat_map(|s| s.text.chars()).collect();
         if chars.is_empty() || chars.iter().all(|c| c.is_whitespace()) {
             result.push(line.clone());
@@ -447,6 +453,19 @@ fn render_spin(
         new_line.content_type = line.content_type;
         let mut char_pos: usize = 0;
         for span in &line.spans {
+            // For "image" targeting, only spin animatable spans
+            let span_should_spin = match target {
+                Some("image") => span.animatable,
+                _ => true,
+            };
+
+            if !span_should_spin {
+                // Clone span unchanged
+                new_line.push(span.clone());
+                char_pos += span.text.chars().count();
+                continue;
+            }
+
             let span_chars: Vec<char> = span.text.chars().collect();
             let mut new_text = String::with_capacity(span_chars.len());
             for (i, &ch) in span_chars.iter().enumerate() {

@@ -30,9 +30,9 @@ use regex::Regex;
 use std::path::Path;
 
 use crate::presentation::{
-    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnLayout, DiagramBlock, DiagramStyle,
-    ExecMode, FooterAlign, ImagePosition, ImageRenderMode, MermaidBlock, PresentationMeta,
-    Slide, SlideAlignment, SlideImage, Table,
+    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnLayout, DiagramBlock,
+    DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode, MermaidBlock,
+    PresentationMeta, Slide, SlideAlignment, SlideImage, Table,
 };
 
 use super::regex_patterns::*;
@@ -160,6 +160,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut column_ratios: Option<Vec<u8>> = None;
     let mut column_contents: Vec<ColumnContent> = Vec::new();
     let mut current_column: Option<usize> = None;
+    let mut column_separator: bool = true;
     let mut tables: Vec<Table> = Vec::new();
     let mut block_quotes: Vec<BlockQuote> = Vec::new();
     let mut table_state: Option<TableParseState> = None;
@@ -422,6 +423,15 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Image render mode directive
         if let Some(caps) = IMAGE_RENDER_RE.captures(line) {
+            // When inside a column with an image, apply to the column image
+            if let Some(col_idx) = current_column {
+                if col_idx < column_contents.len() {
+                    if let Some(ref mut img) = column_contents[col_idx].image {
+                        img.render_mode = Some(caps[1].to_string());
+                        continue;
+                    }
+                }
+            }
             image_render = match &caps[1] {
                 "ascii" => ImageRenderMode::Ascii,
                 "kitty" => ImageRenderMode::Kitty,
@@ -434,6 +444,17 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Image scale directive
         if let Some(caps) = IMAGE_SCALE_RE.captures(line) {
+            // When inside a column with an image, apply to the column image
+            if let Some(col_idx) = current_column {
+                if col_idx < column_contents.len() {
+                    if let Some(ref mut img) = column_contents[col_idx].image {
+                        if let Ok(s) = caps[1].parse::<u8>() {
+                            img.scale = Some(s.clamp(1, 100));
+                        }
+                        continue;
+                    }
+                }
+            }
             if let Ok(s) = caps[1].parse::<u8>() {
                 image_scale = s.clamp(1, 100);
             }
@@ -442,6 +463,15 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Image color directive
         if let Some(caps) = IMAGE_COLOR_RE.captures(line) {
+            // When inside a column with an image, apply to the column image
+            if let Some(col_idx) = current_column {
+                if col_idx < column_contents.len() {
+                    if let Some(ref mut img) = column_contents[col_idx].image {
+                        img.color = Some(caps[1].to_string());
+                        continue;
+                    }
+                }
+            }
             image_color = caps[1].to_string();
             continue;
         }
@@ -473,8 +503,17 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
                 column_contents = ratios.iter().map(|_| ColumnContent {
                     bullets: Vec::new(),
                     code_blocks: Vec::new(),
+                    image: None,
                 }).collect();
                 column_ratios = Some(ratios);
+            }
+            continue;
+        }
+
+        // Column separator visibility directive
+        if let Some(caps) = COLUMN_SEPARATOR_RE.captures(line) {
+            if caps[1].eq_ignore_ascii_case("none") {
+                column_separator = false;
             }
             continue;
         }
@@ -558,6 +597,20 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Image
         if let Some(caps) = IMAGE_RE.captures(line) {
+            // When inside a column, store the image in the column content
+            // instead of at slide level so it renders inline within the column.
+            if let Some(col_idx) = current_column {
+                if col_idx < column_contents.len() {
+                    column_contents[col_idx].image = Some(ColumnImage {
+                        path: caps[2].to_string(),
+                        alt: caps[1].to_string(),
+                        render_mode: None,
+                        scale: None,
+                        color: None,
+                    });
+                    continue;
+                }
+            }
             image_alt = caps[1].to_string();
             image_path = caps[2].to_string();
             continue;
@@ -647,9 +700,26 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         None
     };
 
+    // Resolve column image paths (same logic as slide-level image path resolution)
+    for content in &mut column_contents {
+        if let Some(ref mut col_img) = content.image {
+            if !col_img.path.is_empty() {
+                let resolved = if std::path::Path::new(&col_img.path).is_absolute() {
+                    col_img.path.clone()
+                } else if let Some(base) = base_dir {
+                    base.join(&col_img.path).to_string_lossy().to_string()
+                } else {
+                    col_img.path.clone()
+                };
+                col_img.path = resolved;
+            }
+        }
+    }
+
     let columns = column_ratios.map(|ratios| ColumnLayout {
         ratios,
         contents: column_contents,
+        separator: column_separator,
     });
 
     let slide = Slide {

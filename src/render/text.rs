@@ -59,6 +59,10 @@ pub struct StyledSpan {
     /// the terminal supports TextScaleCapability::Osc66.
     /// Kitty terminal only -- other terminals ignore this field.
     pub text_scale: u8,
+    /// Whether this span should participate in per-span animations (e.g., spin).
+    /// When `true`, animation functions can selectively animate this span while
+    /// leaving non-animatable spans on the same line unchanged.
+    pub animatable: bool,
 }
 
 #[allow(dead_code)]
@@ -75,6 +79,7 @@ impl StyledSpan {
             strikethrough: false,
             underline: false,
             text_scale: 0,
+            animatable: false,
         }
     }
 

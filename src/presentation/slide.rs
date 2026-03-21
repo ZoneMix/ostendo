@@ -190,17 +190,46 @@ pub struct ColumnLayout {
     /// Content for each column, in left-to-right order. The length of this
     /// `Vec` (Rust's growable array type) matches the length of `ratios`.
     pub contents: Vec<ColumnContent>,
+    /// Whether to show the visible `│` separator between columns.
+    /// Defaults to `true`. Set to `false` via `<!-- column_separator: none -->`.
+    pub separator: bool,
+}
+
+/// An image reference within a column of a multi-column layout.
+///
+/// Column images are always rendered as ASCII art because the column merge
+/// logic operates on `StyledLine` virtual buffers, which protocol-based
+/// rendering (Kitty, iTerm2, Sixel) cannot participate in.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct ColumnImage {
+    /// Filesystem path to the image file (resolved to absolute during parsing).
+    pub path: String,
+    /// Alt text from the Markdown image syntax.
+    pub alt: String,
+    /// Rendering mode override (e.g., `"ascii"`, `"kitty"`). Column images
+    /// are always rendered as ASCII regardless of this value, but it is
+    /// preserved for potential future use.
+    pub render_mode: Option<String>,
+    /// Image scale as a percentage (1-100). Controls how much of the column
+    /// width the image occupies.
+    pub scale: Option<u8>,
+    /// Hex color override for ASCII art rendering (e.g., `"#FF0000"`).
+    pub color: Option<String>,
 }
 
 /// Content within a single column of a multi-column layout.
 ///
-/// Each column can independently contain bullet points and code blocks.
+/// Each column can independently contain bullet points, code blocks,
+/// and an optional image rendered as ASCII art.
 #[derive(Debug, Clone)]
 pub struct ColumnContent {
     /// Bullet points appearing in this column.
     pub bullets: Vec<Bullet>,
     /// Code blocks appearing in this column.
     pub code_blocks: Vec<CodeBlock>,
+    /// Optional image to render as ASCII art within this column.
+    pub image: Option<ColumnImage>,
 }
 
 /// A single bullet point item from a Markdown list.

@@ -185,7 +185,10 @@ impl Presenter {
         }
 
         // Title (with optional decoration)
-        if !slide.title.is_empty() {
+        // When ascii_title + column_layout are BOTH active, defer FIGlet
+        // rendering into column 0 instead of placing it full-width above.
+        let ascii_title_in_columns = slide.ascii_title && slide.columns.is_some();
+        if !slide.title.is_empty() && !ascii_title_in_columns {
             let decoration = slide.title_decoration.as_deref()
                 .or(self.theme.title_decoration.as_deref());
             if slide.ascii_title {
@@ -207,7 +210,9 @@ impl Presenter {
         }
 
         // Subtitle (wrapped to content width)
-        if !slide.subtitle.is_empty() {
+        // When ascii_title + column_layout are both active, skip subtitle
+        // rendering here — it will be part of the column content instead.
+        if !slide.subtitle.is_empty() && !ascii_title_in_columns {
             let sub_width = content_width.saturating_sub(2);
             let wrapped_sub = textwrap_simple(&slide.subtitle, sub_width);
             // OSC 66 subtitle scaling disabled (same reason as title — see above).
@@ -226,7 +231,9 @@ impl Presenter {
         }
 
         // Bullets
-        for bullet in &slide.bullets {
+        // When ascii_title + column_layout are both active, skip top-level
+        // bullet rendering — bullets are inside columns instead.
+        for bullet in if ascii_title_in_columns { &[][..] } else { &slide.bullets[..] } {
             let indent = bullet_indent(bullet.depth);
             let wrapped = textwrap_simple(&bullet.text, content_width.saturating_sub(indent.len() + 2));
             for (i, wline) in wrapped.iter().enumerate() {
@@ -252,7 +259,12 @@ impl Presenter {
 
         // Column layouts
         if let Some(ref cols) = slide.columns {
-            self.render_columns(cols, content_width, &pad, &mut lines);
+            let col_figlet_title = if ascii_title_in_columns {
+                Some(slide.title.as_str())
+            } else {
+                None
+            };
+            self.render_columns(cols, content_width, &pad, &mut lines, col_figlet_title);
             // Show exec output if columns have executable code blocks
             // Column exec blocks come after slide-level exec blocks in index order
             let slide_exec_count = slide.code_blocks.iter()

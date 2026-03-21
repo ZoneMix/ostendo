@@ -94,6 +94,12 @@ pub(crate) static COLUMN_LAYOUT_RE: LazyLock<Regex> =
 pub(crate) static COLUMN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*column:\s*(\d+)\s*-->").unwrap());
 
+/// Matches `<!-- column_separator: none -->`. Hides the visible `│` separator between columns.
+/// Capture group (1) is the value (currently only `"none"` is meaningful).
+/// Example: `"<!-- column_separator: none -->"`
+pub(crate) static COLUMN_SEPARATOR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*<!--\s*column_separator:\s*(\w+)\s*-->").unwrap());
+
 /// Matches `<!-- reset_layout -->`. Ends the current column layout and returns to normal flow.
 /// Example: `"<!-- reset_layout -->"`
 pub(crate) static RESET_LAYOUT_RE: LazyLock<Regex> =
