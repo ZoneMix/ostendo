@@ -127,6 +127,13 @@ pub(crate) static TEXT_SCALE_RE: LazyLock<Regex> =
 pub(crate) static TITLE_SCALE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*title_scale:\s*(\d+)\s*-->").unwrap());
 
+/// Matches `<!-- column_text_scale: <n> -->`. Applies OSC 66 text scaling to bullet
+/// and FIGlet text in non-image columns (2-7). Used with column layouts to scale up
+/// text while keeping images at base font for detail.
+/// Example: `"<!-- column_text_scale: 2 -->"`
+pub(crate) static COLUMN_TEXT_SCALE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<!--\s*column_text_scale:\s*(\d+)\s*-->").unwrap());
+
 /// Matches a Markdown level-1 heading (`# Title text`). Capture group (1) is the title.
 /// Example: `"# Welcome to My Presentation"`
 pub(crate) static TITLE_RE: LazyLock<Regex> =

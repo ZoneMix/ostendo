@@ -443,7 +443,20 @@ impl Presenter {
                     // render_ascii_title uses empty pad — we handle pad in the merge loop
                     self.render_ascii_title(title, "", &mut figlet_lines);
                     for fl in &figlet_lines {
-                        let spans: Vec<StyledSpan> = fl.spans.clone();
+                        let mut spans: Vec<StyledSpan> = fl.spans.clone();
+                        // Apply column text_scale to FIGlet spans only if the
+                        // scaled width still fits within the column. FIGlet is
+                        // already large ASCII art, so scaling often overflows.
+                        if let Some(scale) = cols.text_scale {
+                            let figlet_width: usize = spans.iter()
+                                .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
+                                .sum();
+                            if figlet_width * scale as usize <= cw {
+                                for span in &mut spans {
+                                    span.text_scale = scale;
+                                }
+                            }
+                        }
                         col_rows.push((spans, false, true, false));
                     }
                     // Add a blank line after the FIGlet title
@@ -453,13 +466,22 @@ impl Presenter {
                 }
             }
 
-            // Bullets with inline formatting, themed markers, and word wrapping
+            // Bullets with inline formatting, themed markers, and word wrapping.
+            // When column text_scale is set and this is not an image column,
+            // wrap width is divided by the scale factor (each char takes scale columns)
+            // and text_scale is applied to all bullet spans.
+            let is_text_column = content.image.is_none();
             for bullet in &content.bullets {
                 if bullet.text.is_empty() { continue; }
                 let indent = bullet_indent(bullet.depth);
                 let text_width = cw.saturating_sub(indent.len());
                 if text_width == 0 { continue; }
-                let wrapped = textwrap_simple(&bullet.text, text_width);
+                let wrap_width = if let Some(scale) = cols.text_scale {
+                    if is_text_column { text_width / scale as usize } else { text_width }
+                } else {
+                    text_width
+                };
+                let wrapped = textwrap_simple(&bullet.text, wrap_width);
                 for (wi, wline) in wrapped.iter().enumerate() {
                     let mut spans = Vec::new();
                     if wi == 0 {
@@ -472,6 +494,14 @@ impl Presenter {
                     );
                     for span in inline_spans {
                         spans.push(span);
+                    }
+                    // Apply column text_scale to bullet text in non-image columns
+                    if let Some(scale) = cols.text_scale {
+                        if is_text_column {
+                            for span in &mut spans {
+                                span.text_scale = scale;
+                            }
+                        }
                     }
                     col_rows.push((spans, false, false, false));
                 }
@@ -615,9 +645,11 @@ impl Presenter {
                 if let Some((spans, is_code, is_figlet, is_ascii_image)) = col.get(row) {
                     if *is_figlet { row_has_figlet = true; }
                     if *is_ascii_image { row_has_ascii_image = true; }
-                    // Calculate display width of spans
+                    // Calculate display width of spans — use .width() which
+                    // accounts for OSC 66 text_scale (scaled chars occupy
+                    // scale * base_width columns).
                     let span_width: usize = spans.iter()
-                        .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
+                        .map(|s| s.width())
                         .sum();
                     // Push styled spans
                     for span in spans {

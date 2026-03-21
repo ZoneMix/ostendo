@@ -193,6 +193,10 @@ pub struct ColumnLayout {
     /// Whether to show the visible `│` separator between columns.
     /// Defaults to `true`. Set to `false` via `<!-- column_separator: none -->`.
     pub separator: bool,
+    /// OSC 66 text scale factor for non-image columns (2-7). When set, bullet
+    /// and FIGlet text in text columns is scaled up while image columns remain
+    /// at the base font size for detail. Set via `<!-- column_text_scale: N -->`.
+    pub text_scale: Option<u8>,
 }
 
 /// An image reference within a column of a multi-column layout.

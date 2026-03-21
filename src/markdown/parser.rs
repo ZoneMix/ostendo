@@ -161,6 +161,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut column_contents: Vec<ColumnContent> = Vec::new();
     let mut current_column: Option<usize> = None;
     let mut column_separator: bool = true;
+    let mut column_text_scale: Option<u8> = None;
     let mut tables: Vec<Table> = Vec::new();
     let mut block_quotes: Vec<BlockQuote> = Vec::new();
     let mut table_state: Option<TableParseState> = None;
@@ -518,6 +519,16 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             continue;
         }
 
+        // Column text scale directive (OSC 66 scaling for non-image columns)
+        if let Some(caps) = COLUMN_TEXT_SCALE_RE.captures(line) {
+            if let Ok(scale) = caps[1].parse::<u8>() {
+                if (2..=7).contains(&scale) {
+                    column_text_scale = Some(scale);
+                }
+            }
+            continue;
+        }
+
         // Column switch directive
         if let Some(caps) = COLUMN_RE.captures(line) {
             if let Ok(idx) = caps[1].parse::<usize>() {
@@ -720,6 +731,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         ratios,
         contents: column_contents,
         separator: column_separator,
+        text_scale: column_text_scale,
     });
 
     let slide = Slide {
