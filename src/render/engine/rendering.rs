@@ -26,6 +26,7 @@
 //!     scatter-reveal animation to smoothly bring in the new content.
 
 use super::*;
+use crate::presentation::ImagePosition;
 
 impl Presenter {
     /// Render a complete frame to the terminal.
@@ -198,11 +199,13 @@ impl Presenter {
             } else {
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(&pad));
-                // OSC 66 title scaling is disabled for now — multicell blocks get
-                // destroyed during full redraws (e.g. fullscreen toggle). The data
-                // model and parser support remain; re-enable by applying
-                // slide.title_scale here when the rendering path is fixed.
-                let title_span = StyledSpan::new(&slide.title).with_fg(self.accent_color).bold();
+                let mut title_span = StyledSpan::new(&slide.title).with_fg(self.accent_color).bold();
+                // Apply per-slide text_scale (OSC 66) if set
+                if let Some(scale) = slide.text_scale {
+                    if scale >= 2 {
+                        title_span.text_scale = scale;
+                    }
+                }
                 line.push(title_span);
                 lines.push(line);
             }
@@ -411,9 +414,9 @@ impl Presenter {
         // --- Images and Diagrams ---
         // Protocol images (Kitty/iTerm2/Sixel) can't be mixed into the styled line
         // buffer — they need their raw escape data written after the text content.
-        // Tuple: (escape_data, line_offset, image_cols_for_centering)
+        // Tuple: (escape_data, line_offset, image_cols, image_position)
         // image_cols is 0 for legacy Protocol images (they embed their own padding).
-        let mut pending_protocol_images: Vec<(String, usize, usize)> = Vec::new();
+        let mut pending_protocol_images: Vec<(String, usize, usize, ImagePosition)> = Vec::new();
 
         // Mermaid diagrams
         for mermaid_block in &slide.mermaid_blocks {
@@ -451,7 +454,7 @@ impl Presenter {
                                 for _ in 0..placeholder_height {
                                     lines.push(StyledLine::empty());
                                 }
-                                pending_protocol_images.push((escape_data, image_line_offset, 0));
+                                pending_protocol_images.push((escape_data, image_line_offset, 0, ImagePosition::Below));
                             }
                             RenderedImage::KittyPlacement { cols, rows, transmit_escape, image_id } => {
                                 // Transmit mermaid image to Kitty if not already sent
@@ -465,7 +468,7 @@ impl Presenter {
                                     lines.push(StyledLine::empty());
                                 }
                                 let placement = crate::image_util::kitty::placement_escape(image_id, cols, rows);
-                                pending_protocol_images.push((placement, image_line_offset, cols));
+                                pending_protocol_images.push((placement, image_line_offset, cols, ImagePosition::Below));
                             }
                         }
                     }
@@ -544,7 +547,9 @@ impl Presenter {
             // Apply image_scale directive + runtime offset
             let effective_scale = (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
             let img_width = (content_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
-            let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / 2.0).max(1.0) as usize;
+            // Right-positioned images can use the full content height (they overlay text)
+            let height_divisor = if img.position == ImagePosition::Right { 1.0 } else { 2.0 };
+            let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / height_divisor).max(1.0) as usize;
             // For animated GIFs, include the current frame index in the cache key
             let is_animated_gif = self.gif_frames.contains_key(&img.path);
             let frame_idx = if is_animated_gif { self.gif_current_frame } else { 0 };
@@ -591,12 +596,12 @@ impl Presenter {
                     }
                 }
             });
+            let img_pos = img.position;
             match cached {
                 CachedImage::Lines(cached_lines) => {
                     lines.extend(cached_lines.clone());
                 }
                 CachedImage::KittyRef { image_id, cols, rows, ref mut transmit_escape } => {
-                    // Lazy transmit: send image data to Kitty on first render of this slide
                     if let Some(esc) = transmit_escape.take() {
                         if !self.kitty_transmitted.contains(image_id) {
                             let _ = std::io::Write::write_all(&mut std::io::stdout(), esc.as_bytes());
@@ -604,24 +609,34 @@ impl Presenter {
                             self.kitty_transmitted.insert(*image_id);
                         }
                     }
-                    // Reserve placeholder rows, emit placement at frame end
-                    let image_line_offset = lines.len();
-                    for _ in 0..*rows {
-                        lines.push(StyledLine::empty());
-                    }
                     let placement = crate::image_util::kitty::placement_escape(*image_id, *cols, *rows);
-                    pending_protocol_images.push((placement, image_line_offset, *cols));
+                    if img_pos == ImagePosition::Right {
+                        // Right: overlay on existing content from the top
+                        pending_protocol_images.push((placement, 0, *cols, ImagePosition::Right));
+                    } else {
+                        // Below: reserve placeholder rows
+                        let image_line_offset = lines.len();
+                        for _ in 0..*rows {
+                            lines.push(StyledLine::empty());
+                        }
+                        pending_protocol_images.push((placement, image_line_offset, *cols, ImagePosition::Below));
+                    }
                 }
                 CachedImage::Protocol { escape_data, placeholder_height } => {
-                    // Record line offset where image should be drawn
-                    let image_line_offset = lines.len();
-                    for _ in 0..*placeholder_height {
-                        lines.push(StyledLine::empty());
+                    if img_pos == ImagePosition::Right {
+                        pending_protocol_images.push((escape_data.clone(), 0, 0, ImagePosition::Right));
+                    } else {
+                        let image_line_offset = lines.len();
+                        for _ in 0..*placeholder_height {
+                            lines.push(StyledLine::empty());
+                        }
+                        pending_protocol_images.push((escape_data.clone(), image_line_offset, 0, ImagePosition::Below));
                     }
-                    pending_protocol_images.push((escape_data.clone(), image_line_offset, 0));
                 }
             }
-            lines.push(StyledLine::empty());
+            if img_pos != ImagePosition::Right {
+                lines.push(StyledLine::empty());
+            }
         }
 
         // --- Viewport Calculation and Alignment ---
@@ -650,7 +665,7 @@ impl Presenter {
                 padded.append(&mut lines);
                 lines = padded;
                 // Shift protocol image offsets to account for centering padding
-                for (_, offset, _) in &mut pending_protocol_images {
+                for (_, offset, _, _) in &mut pending_protocol_images {
                     *offset += padding_rows;
                 }
             }
@@ -921,12 +936,16 @@ impl Presenter {
             Some(ref a) if matches!(a.kind, AnimationKind::Transition(_) | AnimationKind::Entrance(_))
         );
         if !self.pending_dissolve_in && !animation_active {
-            for (escape_data, line_offset, img_cols) in &pending_protocol_images {
+            for (escape_data, line_offset, img_cols, img_pos) in &pending_protocol_images {
                 if *line_offset >= visible_start && *line_offset < visible_end {
                     let display_row = line_offset - visible_start;
                     let screen_row = (status_bar_rows + display_row) as u16;
-                    if *img_cols > 0 {
-                        // Kitty v2: center image within terminal width
+                    if *img_pos == ImagePosition::Right && *img_cols > 0 {
+                        // Right-aligned: position image flush to right edge
+                        let right_col = tw.saturating_sub(*img_cols) as u16;
+                        queue!(w, cursor::MoveTo(right_col, screen_row))?;
+                    } else if *img_cols > 0 {
+                        // Center image within terminal width
                         let center_col = (tw.saturating_sub(*img_cols) / 2) as u16;
                         queue!(w, cursor::MoveTo(center_col, screen_row))?;
                     } else {
@@ -1196,7 +1215,7 @@ impl Presenter {
     /// they appear atomically with the fully-revealed content.
     fn render_dissolve_in(
         &mut self,
-        pending_protocol_images: &[(String, usize, usize)],
+        pending_protocol_images: &[(String, usize, usize, ImagePosition)],
         visible_start: usize,
         visible_end: usize,
         status_bar_rows: usize,
@@ -1303,11 +1322,14 @@ impl Presenter {
             // Emit protocol images on the final frame
             if is_last {
                 let dis_tw = self.width as usize;
-                for (escape_data, line_offset, img_cols) in pending_protocol_images {
+                for (escape_data, line_offset, img_cols, img_pos) in pending_protocol_images {
                     if *line_offset >= visible_start && *line_offset < visible_end {
                         let display_row = line_offset - visible_start;
                         let screen_row = (status_bar_rows + display_row) as u16;
-                        if *img_cols > 0 {
+                        if *img_pos == ImagePosition::Right && *img_cols > 0 {
+                            let right_col = dis_tw.saturating_sub(*img_cols) as u16;
+                            queue!(dw, cursor::MoveTo(right_col, screen_row))?;
+                        } else if *img_cols > 0 {
                             let center_col = (dis_tw.saturating_sub(*img_cols) / 2) as u16;
                             queue!(dw, cursor::MoveTo(center_col, screen_row))?;
                         } else {
