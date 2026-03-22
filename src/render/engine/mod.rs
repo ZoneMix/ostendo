@@ -113,7 +113,6 @@ fn strip_control_chars(s: &str) -> String {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\x1B' {
-            // Skip ANSI escape sequence: ESC followed by [ ... final byte
             if chars.peek() == Some(&'[') {
                 chars.next();
                 while let Some(&next) = chars.peek() {
@@ -122,15 +121,11 @@ fn strip_control_chars(s: &str) -> String {
                         break;
                     }
                 }
-            }
-            // Also skip ESC ] (OSC) sequences terminated by BEL or ST
-            else if chars.peek() == Some(&']') {
+            } else if chars.peek() == Some(&']') {
                 chars.next();
                 while let Some(&next) = chars.peek() {
                     chars.next();
-                    if next == '\x07' {
-                        break;
-                    }
+                    if next == '\x07' { break; }
                     if next == '\x1B' && chars.peek() == Some(&'\\') {
                         chars.next();
                         break;
@@ -144,6 +139,93 @@ fn strip_control_chars(s: &str) -> String {
         }
     }
     out
+}
+
+/// Parse a line containing ANSI color escape sequences into styled spans.
+/// Converts SGR codes (e.g., \x1B[31m for red) into StyledSpan foreground colors.
+/// Falls back to `default_fg` for unrecognized codes or when reset (\x1B[0m) is used.
+fn parse_ansi_styled_spans(s: &str, default_fg: crossterm::style::Color) -> Vec<StyledSpan> {
+    use crossterm::style::Color;
+
+    let mut spans: Vec<StyledSpan> = Vec::new();
+    let mut current_fg = default_fg;
+    let mut is_bold = false;
+    let mut text = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\x1B' {
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                // Flush accumulated text
+                if !text.is_empty() {
+                    let mut span = StyledSpan::new(&text).with_fg(current_fg);
+                    if is_bold { span = span.bold(); }
+                    spans.push(span);
+                    text.clear();
+                }
+                // Parse SGR parameters
+                let mut params = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_alphabetic() || next == '~' {
+                        chars.next();
+                        if next == 'm' {
+                            // Process SGR codes
+                            for code in params.split(';') {
+                                match code.trim() {
+                                    "0" | "" => { current_fg = default_fg; is_bold = false; }
+                                    "1" => { is_bold = true; }
+                                    "22" => { is_bold = false; }
+                                    "30" => current_fg = Color::Black,
+                                    "31" => current_fg = Color::Red,
+                                    "32" => current_fg = Color::Green,
+                                    "33" => current_fg = Color::Yellow,
+                                    "34" => current_fg = Color::Blue,
+                                    "35" => current_fg = Color::Magenta,
+                                    "36" => current_fg = Color::Cyan,
+                                    "37" => current_fg = Color::White,
+                                    "90" => current_fg = Color::DarkGrey,
+                                    "91" => current_fg = Color::DarkRed,
+                                    "92" => current_fg = Color::DarkGreen,
+                                    "93" => current_fg = Color::DarkYellow,
+                                    "94" => current_fg = Color::DarkBlue,
+                                    "95" => current_fg = Color::DarkMagenta,
+                                    "96" => current_fg = Color::DarkCyan,
+                                    "97" => current_fg = Color::Grey,
+                                    _ => {} // ignore unknown codes
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    chars.next();
+                    params.push(next);
+                }
+            } else if chars.peek() == Some(&']') {
+                // Skip OSC sequences
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next == '\x07' { break; }
+                    if next == '\x1B' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if c == '\t' || (c >= ' ' && c != '\x7F') {
+            text.push(c);
+        }
+    }
+    // Flush remaining text
+    if !text.is_empty() {
+        let mut span = StyledSpan::new(&text).with_fg(current_fg);
+        if is_bold { span = span.bold(); }
+        spans.push(span);
+    }
+    spans
 }
 
 /// Get comment prefix for a programming language (used in code block labels).

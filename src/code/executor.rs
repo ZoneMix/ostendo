@@ -137,7 +137,13 @@ pub fn execute_code(language: &str, code: &str, working_dir: Option<&std::path::
 }
 
 /// Spawn code execution in a background thread, returning a receiver for streaming output lines.
-/// Sends each line as it becomes available. Sends `None` when complete.
+/// Sends each line as it becomes available in real-time. Sends `None` when complete.
+///
+/// Unlike `execute_code()` which blocks until the process finishes and returns
+/// all output at once, this function reads stdout line-by-line from the child
+/// process pipe, sending each line through the channel as soon as it's written.
+/// This enables live streaming of output in the presentation (e.g., demo scripts
+/// that use `sleep` delays between commands will show output incrementally).
 pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<mpsc::Receiver<Option<String>>> {
     if code.len() > MAX_CODE_LENGTH {
         bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
@@ -145,28 +151,80 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
 
     let (tx, rx) = mpsc::channel();
     let language = language.to_string();
-    // Auto-wrap bare snippets before handing off to the background thread
     let lang = normalize_language(&language);
     let code = wrap_for_execution(&lang, code);
     let wd = working_dir.map(|p| p.to_path_buf());
 
     std::thread::spawn(move || {
-        let result = execute_code(&language, &code, wd.as_deref());
-        match result {
-            Ok(er) => {
-                for line in er.stdout.lines() {
-                    let _ = tx.send(Some(line.to_string()));
+        use std::io::BufRead;
+        use std::os::unix::process::CommandExt;
+
+        // Determine the interpreter and arguments based on language
+        let (cmd, args): (&str, Vec<String>) = match lang.as_str() {
+            "python" => ("python3", vec!["-u".into(), "-c".into(), code.clone()]),
+            "bash" | "sh" => ("bash", vec!["-c".into(), code.clone()]),
+            "javascript" => ("node", vec!["-e".into(), code.clone()]),
+            "ruby" => ("ruby", vec!["-e".into(), code.clone()]),
+            _ => ("sh", vec!["-c".into(), code.clone()]),
+        };
+
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let mut command = Command::new(cmd);
+        command.args(&arg_refs)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("PYTHONUNBUFFERED", "1");
+        if let Some(ref wd) = wd {
+            command.current_dir(wd);
+        }
+        // New process group for timeout safety (same as run_with_timeout)
+        unsafe {
+            command.pre_exec(|| {
+                let _ = libc::setsid();
+                Ok(())
+            });
+        }
+
+        let mut child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(Some(format!("[error] {}", e)));
+                let _ = tx.send(None);
+                return;
+            }
+        };
+
+        // Read stdout line-by-line in real-time (not buffered until exit)
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        if let Some(stdout) = stdout {
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(l) => {
+                        if tx.send(Some(l)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
                 }
-                if !er.stderr.is_empty() {
-                    for line in er.stderr.lines() {
-                        let _ = tx.send(Some(format!("[stderr] {}", line)));
+            }
+        }
+
+        // Collect any remaining stderr after stdout closes
+        if let Some(stderr) = stderr {
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(l) = line {
+                    if !l.is_empty() {
+                        let _ = tx.send(Some(format!("[stderr] {}", l)));
                     }
                 }
             }
-            Err(e) => {
-                let _ = tx.send(Some(format!("[error] {}", e)));
-            }
         }
+
+        let _ = child.wait();
         let _ = tx.send(None);
     });
 

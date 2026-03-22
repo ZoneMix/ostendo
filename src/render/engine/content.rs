@@ -45,32 +45,65 @@ impl Presenter {
             oh.push(StyledSpan::new("  Output:").with_fg(self.accent_color).bold());
             lines.push(oh);
             for ol in output.lines() {
-                let sanitized = strip_control_chars(ol);
-                if wrap_width > 0 && unicode_width::UnicodeWidthStr::width(sanitized.as_str()) > wrap_width {
-                    // Wrap long lines by character width
-                    let chars: Vec<char> = sanitized.chars().collect();
+                // Parse ANSI color codes into styled spans (preserves colors from scripts)
+                let styled_spans = parse_ansi_styled_spans(ol, self.text_color);
+                // Calculate total display width of the styled spans
+                let total_width: usize = styled_spans.iter()
+                    .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
+                    .sum();
+
+                if wrap_width > 0 && total_width > wrap_width {
+                    // Wrap: flatten spans into (char, color, bold) tuples, then re-chunk
+                    let mut flat: Vec<(char, crossterm::style::Color, bool)> = Vec::new();
+                    for span in &styled_spans {
+                        let fg = span.fg.unwrap_or(self.text_color);
+                        let bold = span.bold;
+                        for c in span.text.chars() {
+                            flat.push((c, fg, bold));
+                        }
+                    }
                     let mut pos = 0;
-                    while pos < chars.len() {
+                    while pos < flat.len() {
                         let mut line = StyledLine::empty();
                         line.push(StyledSpan::new(pad));
                         line.push(StyledSpan::new("  "));
-                        let mut chunk = String::new();
                         let mut w = 0;
-                        while pos < chars.len() {
-                            let cw = unicode_width::UnicodeWidthChar::width(chars[pos]).unwrap_or(0);
+                        let mut current_text = String::new();
+                        let mut current_fg = flat[pos].1;
+                        let mut current_bold = flat[pos].2;
+                        while pos < flat.len() {
+                            let (ch, fg, bold) = flat[pos];
+                            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
                             if w + cw > wrap_width { break; }
-                            chunk.push(chars[pos]);
+                            // Flush if color/bold changes
+                            if fg != current_fg || bold != current_bold {
+                                if !current_text.is_empty() {
+                                    let mut span = StyledSpan::new(&current_text).with_fg(current_fg);
+                                    if current_bold { span = span.bold(); }
+                                    line.push(span);
+                                    current_text.clear();
+                                }
+                                current_fg = fg;
+                                current_bold = bold;
+                            }
+                            current_text.push(ch);
                             w += cw;
                             pos += 1;
                         }
-                        line.push(StyledSpan::new(&chunk).with_fg(self.text_color));
+                        if !current_text.is_empty() {
+                            let mut span = StyledSpan::new(&current_text).with_fg(current_fg);
+                            if current_bold { span = span.bold(); }
+                            line.push(span);
+                        }
                         lines.push(line);
                     }
                 } else {
                     let mut line = StyledLine::empty();
                     line.push(StyledSpan::new(pad));
                     line.push(StyledSpan::new("  "));
-                    line.push(StyledSpan::new(&sanitized).with_fg(self.text_color));
+                    for span in styled_spans {
+                        line.push(span);
+                    }
                     lines.push(line);
                 }
             }
