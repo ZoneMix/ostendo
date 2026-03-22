@@ -456,8 +456,7 @@ impl Presenter {
                     for fl in &figlet_lines {
                         let mut spans: Vec<StyledSpan> = fl.spans.clone();
                         // Apply column text_scale to FIGlet spans only if the
-                        // scaled width still fits within the column. FIGlet is
-                        // already large ASCII art, so scaling often overflows.
+                        // scaled width fits within the column.
                         if let Some(scale) = cols.text_scale {
                             let figlet_width: usize = spans.iter()
                                 .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
