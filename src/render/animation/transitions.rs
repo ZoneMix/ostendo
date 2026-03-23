@@ -75,8 +75,10 @@ fn render_fade(
             for span in &source.spans {
                 let fg = span.fg.unwrap_or(Color::White);
                 let new_fg = interpolate_color(fg, bg, progress);
+                let new_bg = span.bg.map(|sbg| interpolate_color(sbg, bg, progress));
                 faded.push(StyledSpan {
                     fg: Some(new_fg),
+                    bg: new_bg,
                     ..span.clone()
                 });
             }
@@ -89,8 +91,11 @@ fn render_fade(
             for span in &source.spans {
                 let fg = span.fg.unwrap_or(Color::White);
                 let new_fg = interpolate_color(fg, bg, t);
+                // Also fade span background toward slide bg
+                let new_bg = span.bg.map(|sbg| interpolate_color(sbg, bg, t));
                 faded.push(StyledSpan {
                     fg: Some(new_fg),
+                    bg: new_bg,
                     ..span.clone()
                 });
             }
@@ -103,8 +108,11 @@ fn render_fade(
             for span in &source.spans {
                 let fg = span.fg.unwrap_or(Color::White);
                 let new_fg = interpolate_color(bg, fg, t);
+                // Also fade span background from slide bg toward target
+                let new_bg = span.bg.map(|sbg| interpolate_color(bg, sbg, t));
                 faded.push(StyledSpan {
                     fg: Some(new_fg),
+                    bg: new_bg,
                     ..span.clone()
                 });
             }

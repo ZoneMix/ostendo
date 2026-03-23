@@ -108,6 +108,7 @@ fn protocol_cache_key(proto: ImageProtocol) -> u8 {
 /// Strip terminal control characters from a string to prevent escape sequence injection.
 /// Preserves printable characters, spaces, and tabs. Removes ANSI escape sequences,
 /// and control characters (0x00-0x1F except \t, 0x7F).
+#[allow(dead_code)]
 fn strip_control_chars(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();

@@ -291,7 +291,8 @@ impl Presenter {
         for cb in slide.code_blocks.iter() {
             let label = if cb.label.is_empty() { cb.language.clone() } else { cb.label.clone() };
             let inner_pad = 4; // 2 left + 2 right padding inside block
-            let block_width = content_width;
+            // Leave a right margin so code blocks don't extend to the terminal edge
+            let block_width = content_width.saturating_sub(margin);
 
             // Vertical padding top (empty line with code_bg)
             let mut vpad_top = StyledLine::empty();

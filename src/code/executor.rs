@@ -47,14 +47,15 @@ static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
 const MAX_CODE_LENGTH: usize = 64 * 1024;
 
 /// Maximum output size captured from a child process (1 MB).
-/// Output beyond this limit is silently truncated with a notice appended.
+#[allow(dead_code)]
 const MAX_OUTPUT_SIZE: usize = 1024 * 1024;
 
 /// Hard timeout for any single code execution (30 seconds).
-/// The child process is forcefully killed (`SIGKILL`) when this expires.
+#[allow(dead_code)]
 const EXEC_TIMEOUT_SECS: u64 = 30;
 
 /// The captured output from running a code block.
+#[allow(dead_code)]
 pub struct ExecutionResult {
     /// Standard output from the child process.
     pub stdout: String,
@@ -75,6 +76,7 @@ pub struct ExecutionResult {
 ///
 /// Returns an error if the code exceeds the size limit or the child process
 /// fails to spawn.  Compilation errors are returned inside `ExecutionResult.stderr`.
+#[allow(dead_code)]
 pub fn execute_code(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
     if code.len() > MAX_CODE_LENGTH {
         bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
@@ -233,6 +235,7 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
 
 /// Run a command with a timeout. Kills the entire process group if it exceeds
 /// EXEC_TIMEOUT_SECS, preventing fork bombs and orphaned child processes.
+#[allow(dead_code)]
 fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
     use std::os::unix::process::CommandExt;
 
@@ -624,6 +627,7 @@ fn wrap_go(code: &str) -> String {
 }
 
 /// Check if a command exists in PATH.
+#[allow(dead_code)]
 fn which_exists(cmd: &str) -> bool {
     Command::new("which")
         .arg(cmd)
@@ -635,6 +639,7 @@ fn which_exists(cmd: &str) -> bool {
 }
 
 /// Detect available C compiler (prefer cc, then gcc, then clang).
+#[allow(dead_code)]
 fn detect_c_compiler() -> &'static str {
     if which_exists("cc") { return "cc"; }
     if which_exists("gcc") { return "gcc"; }
@@ -643,6 +648,7 @@ fn detect_c_compiler() -> &'static str {
 }
 
 /// Detect available C++ compiler (prefer c++, then g++, then clang++).
+#[allow(dead_code)]
 fn detect_cpp_compiler() -> &'static str {
     if which_exists("c++") { return "c++"; }
     if which_exists("g++") { return "g++"; }
@@ -655,6 +661,7 @@ fn detect_cpp_compiler() -> &'static str {
 /// The code is piped to the compiler's stdin (using `-` as the input filename)
 /// which avoids writing a temporary source file.  The compiled binary is placed
 /// in a temporary directory and executed with the standard timeout.
+#[allow(dead_code)]
 fn compile_and_run(code: &str, compiler: &str, extra_args: &[&str], working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
     let dir = tempfile::tempdir()?;
     let bin = dir.path().join("a.out");
@@ -691,6 +698,7 @@ fn compile_and_run(code: &str, compiler: &str, extra_args: &[&str], working_dir:
 
 /// Read from a stream up to `limit` bytes, returning as a String.
 /// If the output exceeds the limit, it is truncated with a message.
+#[allow(dead_code)]
 fn read_limited(reader: &mut impl std::io::Read, limit: usize) -> String {
     let mut buf = vec![0u8; limit + 1];
     let mut total = 0;

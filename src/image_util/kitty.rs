@@ -192,6 +192,7 @@ pub fn delete_all_escape() -> String {
 }
 
 /// Wrap a Kitty escape sequence for tmux passthrough if running inside tmux.
+#[allow(dead_code)]
 pub fn tmux_wrap(escape: &str) -> String {
     if std::env::var("TMUX").is_ok() {
         // DCS passthrough for tmux
