@@ -46,7 +46,7 @@ impl Presenter {
             Some("none") => FontTransitionMode::None,
             Some("fade") => FontTransitionMode::Fade,
             Some("dissolve") => FontTransitionMode::Dissolve,
-            _ => FontTransitionMode::Fade, // Default: smooth fade (not scatter dissolve)
+            _ => FontTransitionMode::Fade, // Default: smooth fade
         };
         // Apply per-slide theme override (or restore base theme)
         self.apply_slide_theme();

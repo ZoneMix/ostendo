@@ -291,8 +291,7 @@ impl Presenter {
         for cb in slide.code_blocks.iter() {
             let label = if cb.label.is_empty() { cb.language.clone() } else { cb.label.clone() };
             let inner_pad = 4; // 2 left + 2 right padding inside block
-            // Leave a right margin so code blocks don't extend to the terminal edge
-            let block_width = content_width.saturating_sub(margin);
+            let block_width = content_width;
 
             // Vertical padding top (empty line with code_bg)
             let mut vpad_top = StyledLine::empty();
@@ -1015,8 +1014,9 @@ impl Presenter {
         let mut font_applied = false;
 
         // ── Slide transition: scatter-dissolve interleaved with font stepping ──
+        // Restored from v0.3.1: font changes gradually during the dissolve so
+        // the terminal resizes smoothly and the dissolve masks any artifacts.
         if self.font_change_is_slide_transition != FontTransitionMode::None {
-            let use_fade = self.font_change_is_slide_transition == FontTransitionMode::Fade;
             let old_buf = self.last_rendered_buffer.clone();
             if !old_buf.is_empty() {
                 // Clear Kitty images before the transition
@@ -1045,14 +1045,32 @@ impl Presenter {
                     screen_buf.push(line.clone());
                 }
 
-                // Fade-out only — font jumps to target after fade completes.
-                // No interleaved stepping (eliminates visible growing/shrinking).
-                let target_duration_ms = 300u32; // 300ms fade-out
-                let dissolve_frames = (target_duration_ms / 30).clamp(8, 12);
+                // Calculate Kitty font stepping parameters
+                let current_font = self.last_applied_font_size.unwrap_or(target);
+                let font_delta = target - current_font;
+                let num_font_steps = if font_delta.abs() > 0.3 {
+                    (font_delta.abs() / 0.2).round() as usize
+                } else {
+                    0
+                };
+                let font_dir = if font_delta >= 0.0 { 1.0_f64 } else { -1.0_f64 };
+
+                // Scale dissolve to cover font stepping, with a minimum
+                // duration so small font changes don't feel too abrupt.
+                let font_step_time_ms = num_font_steps as u32 * 8;
+                let target_duration_ms = font_step_time_ms.max(400);
+                let dissolve_frames = (target_duration_ms / 30).clamp(12, 20);
+                let mut font_steps_sent = 0usize;
 
                 for frame in 1..=dissolve_frames {
                     let progress = frame as f64 / dissolve_frames as f64;
 
+                    // Re-query terminal dimensions (font steps resize the terminal)
+                    if frame > 1 && num_font_steps > 0 {
+                        self.window_size = WindowSize::query();
+                        self.width = self.window_size.columns;
+                        self.height = self.window_size.rows;
+                    }
                     let tw = self.width as usize;
 
                     // Render one dissolve frame
@@ -1080,44 +1098,62 @@ impl Presenter {
                                     for ch in span.text.chars() {
                                         if col >= tw { break; }
                                         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-                                        if use_fade {
-                                            // Smooth fade: uniformly dim all content toward bg
+                                        let group = col / 2;
+                                        let hash = (row as u64).wrapping_mul(31)
+                                            .wrapping_add(group as u64)
+                                            .wrapping_mul(7919) % 1000;
+                                        let threshold = hash as f64 / 1000.0;
+                                        if threshold < progress {
+                                            queue!(fw, SetBackgroundColor(row_bg))?;
+                                            for _ in 0..cw { write!(fw, " ")?; }
+                                        } else {
                                             queue!(fw, SetBackgroundColor(dimmed_bg))?;
                                             queue!(fw, SetForegroundColor(dimmed_fg))?;
                                             write!(fw, "{}", ch)?;
-                                        } else {
-                                            // Scatter dissolve: randomly replace chars with spaces
-                                            let group = col / 2;
-                                            let hash = (row as u64).wrapping_mul(31)
-                                                .wrapping_add(group as u64)
-                                                .wrapping_mul(7919) % 1000;
-                                            let threshold = hash as f64 / 1000.0;
-                                            if threshold < progress {
-                                                queue!(fw, SetBackgroundColor(row_bg))?;
-                                                for _ in 0..cw { write!(fw, " ")?; }
-                                            } else {
-                                                queue!(fw, SetBackgroundColor(dimmed_bg))?;
-                                                queue!(fw, SetForegroundColor(dimmed_fg))?;
-                                                write!(fw, "{}", ch)?;
-                                            }
                                         }
                                         col += cw;
                                     }
                                 }
                                 if col < tw {
-                                    write!(fw, "{:width$}", "", width = tw - col)?;
+                                    for _ in 0..tw - col { write!(fw, " ")?; }
                                 }
                             } else {
-                                write!(fw, "{:width$}", "", width = tw)?;
+                                for _ in 0..tw { write!(fw, " ")?; }
                             }
                         }
                         queue!(fw, EndSynchronizedUpdate, ResetColor)?;
                         fw.flush()?;
                     }
 
-                    // Pace the frame (30ms per frame target)
+                    // Interleave Kitty font step batch + pace the frame
                     let frame_target_ms = target_duration_ms / dissolve_frames;
-                    std::thread::sleep(std::time::Duration::from_millis(frame_target_ms as u64));
+                    let frame_start = std::time::Instant::now();
+
+                    if num_font_steps > 0 && matches!(self.font_capability, FontSizeCapability::KittyRemote) {
+                        let target_steps = ((num_font_steps as f64 * progress).round() as usize)
+                            .min(num_font_steps);
+                        let batch = target_steps - font_steps_sent;
+                        if batch > 0 {
+                            let stdout = io::stdout();
+                            let mut pre = stdout.lock();
+                            for s in 0..batch {
+                                let step_idx = font_steps_sent + s + 1;
+                                let intermediate = current_font + font_dir * 0.2 * step_idx as f64;
+                                pre.write_all(kitty_font_escape(intermediate).as_bytes())?;
+                                pre.flush()?;
+                                std::thread::sleep(std::time::Duration::from_millis(8));
+                            }
+                            font_steps_sent = target_steps;
+                        }
+                    }
+
+                    // Pad remaining time so the dissolve isn't too fast
+                    let elapsed = frame_start.elapsed().as_millis() as u32;
+                    if elapsed < frame_target_ms {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            (frame_target_ms - elapsed) as u64,
+                        ));
+                    }
                 }
 
                 // Final font step — land exactly on target
