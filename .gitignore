@@ -2,8 +2,8 @@
 *.DS_Store
 .ostendo-state.*.json
 
-# Security audit (not distributed)
-SECURITY.md
+# Security audit (root level not distributed — .claude/docs/SECURITY.md IS tracked)
+/SECURITY.md
 
 # Custom presentations (not distributed)
 presentations/dakotacon-2026/
