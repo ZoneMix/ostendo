@@ -733,3 +733,114 @@ impl Presenter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::style::Color;
+
+    const DEFAULT_FG: Color = Color::White;
+
+    // --- parse_ansi_styled_spans ---
+
+    #[test]
+    fn no_ansi_codes_returns_single_span() {
+        let spans = parse_ansi_styled_spans("hello world", DEFAULT_FG);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, "hello world");
+        assert_eq!(spans[0].fg, Some(DEFAULT_FG));
+        assert!(!spans[0].bold);
+    }
+
+    #[test]
+    fn empty_string_returns_no_spans() {
+        let spans = parse_ansi_styled_spans("", DEFAULT_FG);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn red_color_code_produces_red_span() {
+        // \x1B[31m = red foreground
+        let input = "\x1B[31mred text\x1B[0m";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let red_span = spans.iter().find(|s| s.text == "red text").expect("red span not found");
+        assert_eq!(red_span.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn green_color_code_produces_green_span() {
+        let input = "\x1B[32mgreen\x1B[0m";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let span = spans.iter().find(|s| s.text == "green").expect("green span not found");
+        assert_eq!(span.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn blue_color_code_produces_blue_span() {
+        let input = "\x1B[34mblue\x1B[0m";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let span = spans.iter().find(|s| s.text == "blue").expect("blue span not found");
+        assert_eq!(span.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn reset_code_restores_default_fg() {
+        // text1 in red, reset, text2 in default
+        let input = "\x1B[31mred\x1B[0mdefault";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let default_span = spans.iter().find(|s| s.text == "default").expect("default span missing");
+        assert_eq!(default_span.fg, Some(DEFAULT_FG));
+    }
+
+    #[test]
+    fn bold_code_sets_bold_flag() {
+        let input = "\x1B[1mbold text\x1B[0m";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let bold_span = spans.iter().find(|s| s.text == "bold text").expect("bold span missing");
+        assert!(bold_span.bold);
+    }
+
+    #[test]
+    fn bold_then_reset_clears_bold() {
+        let input = "\x1B[1mbold\x1B[0mplain";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let plain_span = spans.iter().find(|s| s.text == "plain").expect("plain span missing");
+        assert!(!plain_span.bold);
+    }
+
+    #[test]
+    fn multiple_color_codes_on_one_line_produce_multiple_spans() {
+        // red text followed by blue text
+        let input = "\x1B[31mred\x1B[34mblue";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        assert!(spans.len() >= 2, "expected at least 2 spans for red+blue input");
+        let red = spans.iter().find(|s| s.text == "red").expect("red span missing");
+        let blue = spans.iter().find(|s| s.text == "blue").expect("blue span missing");
+        assert_eq!(red.fg, Some(Color::Red));
+        assert_eq!(blue.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn yellow_color_code_produces_yellow_span() {
+        let input = "\x1B[33myellow\x1B[0m";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let span = spans.iter().find(|s| s.text == "yellow").unwrap();
+        assert_eq!(span.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn cyan_color_code_produces_cyan_span() {
+        let input = "\x1B[36mcyan\x1B[0m";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let span = spans.iter().find(|s| s.text == "cyan").unwrap();
+        assert_eq!(span.fg, Some(Color::Cyan));
+    }
+
+    #[test]
+    fn text_before_first_escape_uses_default_fg() {
+        let input = "prefix\x1B[31mred";
+        let spans = parse_ansi_styled_spans(input, DEFAULT_FG);
+        let prefix = spans.iter().find(|s| s.text == "prefix").expect("prefix span missing");
+        assert_eq!(prefix.fg, Some(DEFAULT_FG));
+    }
+}

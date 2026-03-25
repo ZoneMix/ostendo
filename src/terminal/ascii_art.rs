@@ -201,3 +201,123 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
         ((b + m) * 255.0) as u8,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::style::Color;
+    use image::{RgbaImage, Rgba};
+
+    /// Build a tiny solid-color RGBA image for testing.
+    fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8) -> RgbaImage {
+        let mut img = RgbaImage::new(w, h);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([r, g, b, 255]);
+        }
+        img
+    }
+
+    /// Build an RGBA image that is fully transparent.
+    fn transparent_image(w: u32, h: u32) -> RgbaImage {
+        let mut img = RgbaImage::new(w, h);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgba([0, 0, 0, 0]);
+        }
+        img
+    }
+
+    // --- zero-dimension guards ---
+
+    #[test]
+    fn zero_width_returns_empty() {
+        let img = solid_image(10, 10, 200, 100, 50);
+        assert!(render_ascii_art(&img, 0, None, None).is_empty());
+    }
+
+    #[test]
+    fn zero_dimension_image_returns_empty() {
+        let img = RgbaImage::new(0, 0);
+        assert!(render_ascii_art(&img, 20, None, None).is_empty());
+    }
+
+    // --- output dimensions ---
+
+    #[test]
+    fn output_width_matches_requested_width() {
+        let img = solid_image(100, 100, 128, 128, 128);
+        let result = render_ascii_art(&img, 40, None, None);
+        assert!(!result.is_empty());
+        for row in &result {
+            assert_eq!(row.len(), 40, "every row must be exactly 40 cells wide");
+        }
+    }
+
+    #[test]
+    fn small_image_produces_non_empty_output() {
+        let img = solid_image(20, 20, 200, 50, 50);
+        let result = render_ascii_art(&img, 10, None, None);
+        assert!(!result.is_empty());
+        // Check that at least some cells have non-space characters
+        let has_content = result.iter().any(|row| row.iter().any(|c| c.ch != ' '));
+        assert!(has_content, "a bright solid image should produce non-space cells");
+    }
+
+    // --- transparent image ---
+
+    #[test]
+    fn fully_transparent_image_renders_spaces() {
+        let img = transparent_image(20, 20);
+        let result = render_ascii_art(&img, 10, None, None);
+        // All cells should be spaces (transparent -> None -> space)
+        for row in &result {
+            for cell in row {
+                assert_eq!(cell.ch, ' ', "transparent pixel should render as space");
+            }
+        }
+    }
+
+    // --- color override ---
+
+    #[test]
+    fn color_override_is_applied_to_all_opaque_cells() {
+        let img = solid_image(20, 20, 200, 100, 50);
+        let override_color = Color::Rgb { r: 255, g: 0, b: 0 };
+        let result = render_ascii_art(&img, 10, Some(override_color), None);
+        for row in &result {
+            for cell in row {
+                if cell.ch != ' ' {
+                    assert_eq!(
+                        cell.fg, override_color,
+                        "color_override must be applied to all opaque cells"
+                    );
+                }
+            }
+        }
+    }
+
+    // --- HSV round-trip (private helpers, tested indirectly) ---
+
+    #[test]
+    fn dark_image_uses_sparse_ascii_characters() {
+        // A very dark image (near black) maps to low ramp index (sparse/light chars).
+        // The ramp goes lightest-to-densest: idx = (lum/255) * (len-1).
+        let img = solid_image(20, 20, 10, 10, 10);
+        let result = render_ascii_art(&img, 10, None, None);
+        let found_sparse = result.iter().any(|row| {
+            row.iter().any(|c| matches!(c.ch, ' ' | '.' | '\'' | '`' | '^'))
+        });
+        assert!(found_sparse, "dark image should yield sparse ASCII characters (low ramp index)");
+    }
+
+    #[test]
+    fn bright_image_uses_dense_ascii_characters() {
+        // A very bright image (near white) maps to high ramp index (dense chars).
+        // The ramp goes lightest-to-densest: idx = (lum/255) * (len-1).
+        let img = solid_image(20, 20, 250, 250, 250);
+        let result = render_ascii_art(&img, 10, None, None);
+        let found_dense = result.iter().any(|row| {
+            row.iter().any(|c| matches!(c.ch, '@' | '$' | '#' | 'B' | 'M' | 'W' | '%' | '8' | '&'))
+        });
+        assert!(found_dense, "bright image should yield dense ASCII characters (high ramp index)");
+    }
+}

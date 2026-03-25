@@ -102,26 +102,6 @@ impl StateManager {
         }
     }
 
-    /// Returns the stored scale percentage for the given slide, or `None` if
-    /// no custom scale has been set.
-    ///
-    /// # Parameters
-    /// - `slide` — zero-based slide index.
-    #[allow(dead_code)]
-    pub fn get_scale(&self, slide: usize) -> Option<u8> {
-        self.state.slide_scales.get(&slide).copied()
-    }
-
-    /// Sets the scale percentage for a specific slide.
-    ///
-    /// # Parameters
-    /// - `slide` — zero-based slide index.
-    /// - `scale` — scale percentage (e.g., 80 = 80%, 120 = 120%).
-    #[allow(dead_code)]
-    pub fn set_scale(&mut self, slide: usize, scale: u8) {
-        self.state.slide_scales.insert(slide, scale);
-    }
-
     /// Returns the slide index the user was on when the state was last saved.
     pub fn get_current_slide(&self) -> usize {
         self.state.current_slide
@@ -198,6 +178,19 @@ impl StateManager {
         let content = serde_json::to_string_pretty(&self.state)?;
         std::fs::write(&self.path, content)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl StateManager {
+    /// Returns the stored scale percentage for the given slide (test-only).
+    pub fn get_scale(&self, slide: usize) -> Option<u8> {
+        self.state.slide_scales.get(&slide).copied()
+    }
+
+    /// Sets the scale percentage for a specific slide (test-only).
+    pub fn set_scale(&mut self, slide: usize, scale: u8) {
+        self.state.slide_scales.insert(slide, scale);
     }
 }
 

@@ -32,12 +32,6 @@ pub fn next_image_id() -> u32 {
     NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Reset the ID counter (call on session restart or alternate screen switch).
-#[allow(dead_code)]
-pub fn reset_image_ids() {
-    NEXT_IMAGE_ID.store(1, Ordering::Relaxed);
-}
-
 /// Transmit image data to Kitty without displaying it.
 ///
 /// Returns the escape sequence string that, when written to stdout,
@@ -112,141 +106,74 @@ pub fn placement_escape(id: u32, cols: usize, rows: usize) -> String {
     )
 }
 
-/// Generate an escape to add an animation frame to an existing image.
-///
-/// - `id`: the base image ID
-/// - `frame_img`: the frame's RGBA pixel data
-/// - `gap_ms`: delay in milliseconds before the next frame displays
-///
-/// Returns the chunked escape sequence for the frame data.
-#[allow(dead_code)]
-pub fn animation_frame_escape(
-    id: u32,
-    frame_img: &image::RgbaImage,
-    gap_ms: u32,
-) -> Option<String> {
-    let (sw, sh) = frame_img.dimensions();
-    if sw == 0 || sh == 0 {
-        return None;
-    }
-
-    // PNG encode
-    let mut png_bytes = Vec::new();
-    let encoder = image::codecs::png::PngEncoder::new(Cursor::new(&mut png_bytes));
-    image::ImageEncoder::write_image(
-        encoder,
-        frame_img.as_raw(),
-        sw,
-        sh,
-        image::ExtendedColorType::Rgba8,
-    )
-    .ok()?;
-
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
-
-    let chunk_size = 4096;
-    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(chunk_size).collect();
-    let mut escape = String::with_capacity(encoded.len() + chunks.len() * 40);
-
-    for (i, chunk) in chunks.iter().enumerate() {
-        let m = if i == chunks.len() - 1 { 0 } else { 1 };
-        let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
-        if i == 0 {
-            escape.push_str(&format!(
-                "\x1b_Ga=f,i={},z={},f=100,t=d,q=2,m={};{}\x1b\\",
-                id, gap_ms, m, chunk_str
-            ));
-        } else {
-            // Animation frame chunks must include a=f (unlike regular image chunks)
-            escape.push_str(&format!("\x1b_Ga=f,m={};{}\x1b\\", m, chunk_str));
-        }
-    }
-
-    Some(escape)
-}
-
-/// Start animation loop playback for a transmitted image with frames.
-#[allow(dead_code)]
-pub fn animation_start_escape(id: u32) -> String {
-    // s=3: loop animation, v=1: loop infinitely
-    format!("\x1b_Ga=a,i={},s=3,v=1,q=2;AAAA\x1b\\", id)
-}
-
-/// Stop animation playback.
-#[allow(dead_code)]
-pub fn animation_stop_escape(id: u32) -> String {
-    // s=1: stop animation
-    format!("\x1b_Ga=a,i={},s=1,q=2;AAAA\x1b\\", id)
-}
-
-/// Delete all placements and free data for a specific image ID.
-#[allow(dead_code)]
-pub fn delete_image_escape(id: u32) -> String {
-    // d=I: delete placements AND free image data
-    format!("\x1b_Ga=d,d=I,i={},q=2;AAAA\x1b\\", id)
-}
-
 /// Delete ALL images (placements + data). Use on slide change or exit.
 pub fn delete_all_escape() -> String {
     "\x1b_Ga=d,d=A,q=2;AAAA\x1b\\".to_string()
 }
 
-/// Wrap a Kitty escape sequence for tmux passthrough if running inside tmux.
-#[allow(dead_code)]
-pub fn tmux_wrap(escape: &str) -> String {
-    if std::env::var("TMUX").is_ok() {
-        // DCS passthrough for tmux
-        format!("\x1bPtmux;{}\x1b\\", escape.replace('\x1b', "\x1b\x1b"))
-    } else {
-        escape.to_string()
-    }
-}
-
-/// A transmitted image handle. Tracks the Kitty image ID, dimensions in
-/// terminal cells, and whether animation frames have been uploaded.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct TransmittedImage {
-    /// Unique Kitty image ID
-    pub id: u32,
-    /// Display width in terminal columns
-    pub cols: usize,
-    /// Display height in terminal rows
-    pub rows: usize,
-    /// Number of animation frames (0 = static image)
-    pub frame_count: usize,
-    /// Whether animation is currently playing
-    pub animating: bool,
-}
-
-#[allow(dead_code)]
-impl TransmittedImage {
-    /// Generate the placement escape for this image.
-    pub fn place(&self) -> String {
-        placement_escape(self.id, self.cols, self.rows)
-    }
-
-    /// Generate the delete escape for this image.
-    pub fn delete(&self) -> String {
-        delete_image_escape(self.id)
-    }
-
-    /// Generate animation start escape.
-    pub fn start_animation(&mut self) -> String {
-        self.animating = true;
-        animation_start_escape(self.id)
-    }
-
-    /// Generate animation stop escape.
-    pub fn stop_animation(&mut self) -> String {
-        self.animating = false;
-        animation_stop_escape(self.id)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use std::io::Cursor;
+
+    /// Generate an escape to add an animation frame to an existing image.
+    fn animation_frame_escape(
+        id: u32,
+        frame_img: &image::RgbaImage,
+        gap_ms: u32,
+    ) -> Option<String> {
+        let (sw, sh) = frame_img.dimensions();
+        if sw == 0 || sh == 0 {
+            return None;
+        }
+
+        let mut png_bytes = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(Cursor::new(&mut png_bytes));
+        image::ImageEncoder::write_image(
+            encoder,
+            frame_img.as_raw(),
+            sw,
+            sh,
+            image::ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+        let chunk_size = 4096;
+        let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(chunk_size).collect();
+        let mut escape = String::with_capacity(encoded.len() + chunks.len() * 40);
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let m = if i == chunks.len() - 1 { 0 } else { 1 };
+            let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
+            if i == 0 {
+                escape.push_str(&format!(
+                    "\x1b_Ga=f,i={},z={},f=100,t=d,q=2,m={};{}\x1b\\",
+                    id, gap_ms, m, chunk_str
+                ));
+            } else {
+                escape.push_str(&format!("\x1b_Ga=f,m={};{}\x1b\\", m, chunk_str));
+            }
+        }
+
+        Some(escape)
+    }
+
+    /// Start animation loop playback for a transmitted image with frames.
+    fn animation_start_escape(id: u32) -> String {
+        format!("\x1b_Ga=a,i={},s=3,v=1,q=2;AAAA\x1b\\", id)
+    }
+
+    /// Stop animation playback.
+    fn animation_stop_escape(id: u32) -> String {
+        format!("\x1b_Ga=a,i={},s=1,q=2;AAAA\x1b\\", id)
+    }
+
+    /// Delete all placements and free data for a specific image ID.
+    fn delete_image_escape(id: u32) -> String {
+        format!("\x1b_Ga=d,d=I,i={},q=2;AAAA\x1b\\", id)
+    }
 
     #[test]
     fn test_next_image_id_increments() {
@@ -332,26 +259,4 @@ mod tests {
         assert!(esc.contains("z=100"));
     }
 
-    #[test]
-    fn test_transmitted_image_place() {
-        let ti = TransmittedImage {
-            id: 7,
-            cols: 40,
-            rows: 10,
-            frame_count: 0,
-            animating: false,
-        };
-        let esc = ti.place();
-        assert!(esc.contains("i=7"));
-        assert!(esc.contains("c=40"));
-        assert!(esc.contains("r=10"));
-    }
-
-    #[test]
-    fn test_tmux_wrap_no_tmux() {
-        // When TMUX is not set, passthrough
-        std::env::remove_var("TMUX");
-        let input = "\x1b_Ga=p,i=1;AAAA\x1b\\";
-        assert_eq!(tmux_wrap(input), input);
-    }
 }

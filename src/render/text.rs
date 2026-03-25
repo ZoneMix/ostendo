@@ -117,14 +117,6 @@ impl StyledSpan {
         self
     }
 
-    /// Enable underline decoration.  Builder method -- returns `self` for chaining.
-    /// Part of the StyledSpan builder API for completeness.
-    #[allow(dead_code)]
-    pub fn underline(mut self) -> Self {
-        self.underline = true;
-        self
-    }
-
     /// Set the OSC 66 text scale factor (Kitty terminal only).
     /// Values 2-7 enlarge the text; 0 or 1 means normal size.
     /// Used in tests; production code sets the field directly.
@@ -180,10 +172,6 @@ pub enum LineContentType {
     CodeBlock,
     /// Mermaid or other diagram rendered as ASCII.
     Diagram,
-    /// Empty spacing line used for vertical alignment or scaled-text placeholders.
-    /// Used by scale_placeholder() for OSC 66 text scaling rows.
-    #[allow(dead_code)]
-    Padding,
 }
 
 /// A single row of terminal output, composed of one or more [`StyledSpan`]s.
@@ -215,24 +203,6 @@ impl StyledLine {
             is_scale_placeholder: false,
             content_type: LineContentType::default(),
         }
-    }
-
-    /// Create a line containing a single span with the given foreground color.
-    /// Part of the StyledLine builder API for completeness.
-    #[allow(dead_code)]
-    pub fn styled(text: &str, fg: Color) -> Self {
-        Self {
-            spans: vec![StyledSpan::new(text).with_fg(fg)],
-            is_scale_placeholder: false,
-            content_type: LineContentType::default(),
-        }
-    }
-
-    /// Create a placeholder line for scaled text (skipped during rendering).
-    /// Reserved for OSC 66 multicell text support.
-    #[allow(dead_code)]
-    pub fn scale_placeholder() -> Self {
-        Self { spans: Vec::new(), is_scale_placeholder: true, content_type: LineContentType::Padding }
     }
 
     /// Total display width of this line in terminal columns (sum of all span widths).

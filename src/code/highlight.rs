@@ -7,9 +7,7 @@
 //!
 //! # Theme selection
 //!
-//! A default theme (`base16-eighties.dark`) is used unless overridden via
-//! [`Highlighter::with_theme`].  The list of bundled theme names is in
-//! [`HIGHLIGHT_THEMES`].
+//! The default theme is `base16-eighties.dark`.
 //!
 //! # Color brightening
 //!
@@ -22,19 +20,6 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
-
-/// Names of the bundled syntect highlight themes that can be passed to
-/// [`Highlighter::with_theme`].
-#[allow(dead_code)]
-pub const HIGHLIGHT_THEMES: &[&str] = &[
-    "base16-ocean.dark",
-    "base16-eighties.dark",
-    "base16-mocha.dark",
-    "base16-ocean.light",
-    "InspiredGitHub",
-    "Solarized (dark)",
-    "Solarized (light)",
-];
 
 /// Stateful syntax highlighter that holds loaded grammar and theme sets.
 ///
@@ -69,16 +54,6 @@ impl Highlighter {
             theme_set: ThemeSet::load_defaults(),
             theme_name: "base16-eighties.dark".to_string(),
         }
-    }
-
-    /// Switch to a different bundled theme.  If `theme_name` is not found in the
-    /// theme set, the current theme is kept (no error).  Builder method.
-    #[allow(dead_code)]
-    pub fn with_theme(mut self, theme_name: &str) -> Self {
-        if self.theme_set.themes.contains_key(theme_name) {
-            self.theme_name = theme_name.to_string();
-        }
-        self
     }
 
     /// Highlight a block of source code, returning one `Vec<HighlightedSpan>` per line.

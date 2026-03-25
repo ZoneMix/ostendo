@@ -26,7 +26,6 @@ use std::process::Command;
 ///
 /// Create one instance with [`MermaidRenderer::new`] and reuse it across slides
 /// to benefit from the content-hash cache.
-#[allow(dead_code)]
 pub struct MermaidRenderer {
     /// Directory where cached `.mmd` source and `.png` output files are stored.
     cache_dir: PathBuf,
@@ -34,7 +33,6 @@ pub struct MermaidRenderer {
     cache: HashMap<u64, PathBuf>,
 }
 
-#[allow(dead_code)]
 impl MermaidRenderer {
     /// Create a new renderer, initializing the cache directory in the OS temp folder.
     pub fn new() -> Self {

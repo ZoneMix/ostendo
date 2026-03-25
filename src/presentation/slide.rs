@@ -211,10 +211,6 @@ pub struct ColumnLayout {
 pub struct ColumnImage {
     /// Filesystem path to the image file (resolved to absolute during parsing).
     pub path: String,
-    /// Alt text from the Markdown image syntax.
-    /// Parsed for future alt-text display on render failure.
-    #[allow(dead_code)]
-    pub alt: String,
     /// Rendering mode override (e.g., `"ascii"`, `"kitty"`). Column images
     /// are always rendered as ASCII regardless of this value, but it is
     /// preserved for potential future use.
@@ -459,5 +455,222 @@ impl Default for Slide {
             theme_override: None,
             font_transition: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Slide::default ---
+
+    #[test]
+    fn slide_default_number_is_zero() {
+        assert_eq!(Slide::default().number, 0);
+    }
+
+    #[test]
+    fn slide_default_strings_are_empty() {
+        let s = Slide::default();
+        assert!(s.title.is_empty());
+        assert!(s.section.is_empty());
+        assert!(s.subtitle.is_empty());
+        assert!(s.notes.is_empty());
+    }
+
+    #[test]
+    fn slide_default_vecs_are_empty() {
+        let s = Slide::default();
+        assert!(s.bullets.is_empty());
+        assert!(s.code_blocks.is_empty());
+        assert!(s.tables.is_empty());
+        assert!(s.block_quotes.is_empty());
+        assert!(s.loop_animations.is_empty());
+        assert!(s.mermaid_blocks.is_empty());
+        assert!(s.diagram_blocks.is_empty());
+        assert!(s.code_preambles.is_empty());
+    }
+
+    #[test]
+    fn slide_default_options_are_none() {
+        let s = Slide::default();
+        assert!(s.image.is_none());
+        assert!(s.columns.is_none());
+        assert!(s.font_size.is_none());
+        assert!(s.text_scale.is_none());
+        assert!(s.title_scale.is_none());
+        assert!(s.footer.is_none());
+        assert!(s.alignment.is_none());
+        assert!(s.title_decoration.is_none());
+        assert!(s.transition.is_none());
+        assert!(s.entrance_animation.is_none());
+        assert!(s.fullscreen.is_none());
+        assert!(s.show_section.is_none());
+        assert!(s.theme_override.is_none());
+        assert!(s.font_transition.is_none());
+    }
+
+    #[test]
+    fn slide_default_ascii_title_is_false() {
+        assert!(!Slide::default().ascii_title);
+    }
+
+    #[test]
+    fn slide_default_timing_is_zero() {
+        assert_eq!(Slide::default().timing_minutes, 0.0);
+    }
+
+    #[test]
+    fn slide_default_footer_align_is_left() {
+        assert_eq!(Slide::default().footer_align, FooterAlign::Left);
+    }
+
+    // --- FooterAlign ---
+
+    #[test]
+    fn footer_align_default_is_left() {
+        assert_eq!(FooterAlign::default(), FooterAlign::Left);
+    }
+
+    #[test]
+    fn footer_align_variants_are_distinct() {
+        assert_ne!(FooterAlign::Left, FooterAlign::Center);
+        assert_ne!(FooterAlign::Center, FooterAlign::Right);
+        assert_ne!(FooterAlign::Left, FooterAlign::Right);
+    }
+
+    // --- SlideAlignment ---
+
+    #[test]
+    fn slide_alignment_default_is_top() {
+        assert_eq!(SlideAlignment::default(), SlideAlignment::Top);
+    }
+
+    #[test]
+    fn slide_alignment_variants_are_distinct() {
+        assert_ne!(SlideAlignment::Top, SlideAlignment::Center);
+        assert_ne!(SlideAlignment::VCenter, SlideAlignment::HCenter);
+    }
+
+    // --- ImagePosition ---
+
+    #[test]
+    fn image_position_default_is_below() {
+        assert_eq!(ImagePosition::default(), ImagePosition::Below);
+    }
+
+    #[test]
+    fn image_position_variants_are_distinct() {
+        assert_ne!(ImagePosition::Below, ImagePosition::Left);
+        assert_ne!(ImagePosition::Left, ImagePosition::Right);
+    }
+
+    // --- ImageRenderMode ---
+
+    #[test]
+    fn image_render_mode_default_is_auto() {
+        assert_eq!(ImageRenderMode::default(), ImageRenderMode::Auto);
+    }
+
+    #[test]
+    fn image_render_mode_variants_are_distinct() {
+        assert_ne!(ImageRenderMode::Auto, ImageRenderMode::Kitty);
+        assert_ne!(ImageRenderMode::Iterm, ImageRenderMode::Sixel);
+        assert_ne!(ImageRenderMode::Sixel, ImageRenderMode::Ascii);
+    }
+
+    // --- ColumnContent ---
+
+    #[test]
+    fn column_content_with_image_field() {
+        let col = ColumnContent {
+            bullets: Vec::new(),
+            code_blocks: Vec::new(),
+            image: Some(ColumnImage {
+                path: "/some/path.png".to_string(),
+                render_mode: None,
+                scale: Some(80),
+                color: None,
+            }),
+        };
+        assert!(col.image.is_some());
+        let img = col.image.unwrap();
+        assert_eq!(img.path, "/some/path.png");
+        assert_eq!(img.scale, Some(80));
+    }
+
+    #[test]
+    fn column_content_no_image() {
+        let col = ColumnContent {
+            bullets: vec![Bullet { text: "item".to_string(), depth: 0 }],
+            code_blocks: Vec::new(),
+            image: None,
+        };
+        assert!(col.image.is_none());
+        assert_eq!(col.bullets.len(), 1);
+    }
+
+    // --- SlideImage position variants ---
+
+    #[test]
+    fn slide_image_with_left_position() {
+        let img = SlideImage {
+            path: std::path::PathBuf::from("/img.png"),
+            alt_text: "alt".to_string(),
+            position: ImagePosition::Left,
+            render_mode: ImageRenderMode::Auto,
+            scale: 100,
+            color_override: String::new(),
+        };
+        assert_eq!(img.position, ImagePosition::Left);
+    }
+
+    #[test]
+    fn slide_image_with_right_position() {
+        let img = SlideImage {
+            path: std::path::PathBuf::from("/img.png"),
+            alt_text: String::new(),
+            position: ImagePosition::Right,
+            render_mode: ImageRenderMode::Ascii,
+            scale: 50,
+            color_override: "#FF0000".to_string(),
+        };
+        assert_eq!(img.position, ImagePosition::Right);
+        assert_eq!(img.render_mode, ImageRenderMode::Ascii);
+        assert_eq!(img.scale, 50);
+    }
+
+    // --- DiagramStyle ---
+
+    #[test]
+    fn diagram_style_default_is_box() {
+        assert_eq!(DiagramStyle::default(), DiagramStyle::Box);
+    }
+
+    // --- ExecMode ---
+
+    #[test]
+    fn exec_mode_variants_are_distinct() {
+        assert_ne!(ExecMode::Exec, ExecMode::Pty);
+    }
+
+    // --- Bullet ---
+
+    #[test]
+    fn bullet_stores_text_and_depth() {
+        let b = Bullet { text: "hello".to_string(), depth: 2 };
+        assert_eq!(b.text, "hello");
+        assert_eq!(b.depth, 2);
+    }
+
+    // --- Slide clone ---
+
+    #[test]
+    fn slide_clone_is_independent() {
+        let original = Slide { title: "Original".to_string(), ..Default::default() };
+        let mut cloned = original.clone();
+        cloned.title = "Cloned".to_string();
+        assert_eq!(original.title, "Original");
+        assert_eq!(cloned.title, "Cloned");
     }
 }

@@ -156,3 +156,156 @@ pub fn parse_inline_formatting(
 
     spans
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::style::Color;
+
+    const FG: Color = Color::White;
+    const BG: Color = Color::DarkGrey;
+
+    // --- helpers ---
+
+    fn text_of(spans: &[StyledSpan]) -> String {
+        spans.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    fn find_span<'a>(spans: &'a [StyledSpan], fragment: &str) -> Option<&'a StyledSpan> {
+        spans.iter().find(|s| s.text.contains(fragment))
+    }
+
+    // --- plain text ---
+
+    #[test]
+    fn plain_text_returns_single_span() {
+        let spans = parse_inline_formatting("plain text", FG, BG);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, "plain text");
+        assert!(!spans[0].bold);
+        assert!(!spans[0].italic);
+        assert!(!spans[0].strikethrough);
+        assert!(spans[0].bg.is_none());
+    }
+
+    #[test]
+    fn empty_string_returns_single_empty_span() {
+        let spans = parse_inline_formatting("", FG, BG);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, "");
+    }
+
+    // --- bold ---
+
+    #[test]
+    fn bold_marker_produces_bold_span() {
+        let spans = parse_inline_formatting("**bold**", FG, BG);
+        let bold_span = find_span(&spans, "bold").expect("bold span not found");
+        assert!(bold_span.bold);
+        assert!(!bold_span.italic);
+    }
+
+    #[test]
+    fn bold_preserves_surrounding_text() {
+        let spans = parse_inline_formatting("pre **bold** post", FG, BG);
+        assert!(find_span(&spans, "pre ").is_some());
+        assert!(find_span(&spans, " post").is_some());
+        let bold = find_span(&spans, "bold").unwrap();
+        assert!(bold.bold);
+    }
+
+    // --- italic ---
+
+    #[test]
+    fn italic_star_produces_italic_span() {
+        let spans = parse_inline_formatting("*italic*", FG, BG);
+        let span = find_span(&spans, "italic").expect("italic span not found");
+        assert!(span.italic);
+        assert!(!span.bold);
+    }
+
+    #[test]
+    fn italic_underscore_produces_italic_span() {
+        let spans = parse_inline_formatting("_italic_", FG, BG);
+        let span = find_span(&spans, "italic").expect("italic span not found");
+        assert!(span.italic);
+    }
+
+    // --- code ---
+
+    #[test]
+    fn backtick_code_uses_code_bg_and_padding() {
+        let spans = parse_inline_formatting("`code`", FG, BG);
+        let code_span = spans.iter().find(|s| s.bg.is_some()).expect("code span with bg not found");
+        assert_eq!(code_span.bg, Some(BG));
+        // inline code is wrapped with a leading and trailing space
+        assert!(code_span.text.contains("code"));
+        assert!(code_span.text.starts_with(' '));
+        assert!(code_span.text.ends_with(' '));
+    }
+
+    #[test]
+    fn backtick_code_does_not_set_bold() {
+        let spans = parse_inline_formatting("`snippet`", FG, BG);
+        let code_span = spans.iter().find(|s| s.bg.is_some()).unwrap();
+        assert!(!code_span.bold);
+    }
+
+    // --- strikethrough ---
+
+    #[test]
+    fn strikethrough_marker_sets_flag() {
+        let spans = parse_inline_formatting("~~strike~~", FG, BG);
+        let span = find_span(&spans, "strike").expect("strikethrough span not found");
+        assert!(span.strikethrough);
+        assert!(!span.bold);
+        assert!(!span.italic);
+    }
+
+    // --- mixed ---
+
+    #[test]
+    fn mixed_bold_and_italic_produces_multiple_spans() {
+        let spans = parse_inline_formatting("**bold** and *italic*", FG, BG);
+        let bold = find_span(&spans, "bold").expect("bold span missing");
+        let italic = find_span(&spans, "italic").expect("italic span missing");
+        assert!(bold.bold);
+        assert!(italic.italic);
+        assert!(!italic.bold);
+    }
+
+    #[test]
+    fn full_text_is_preserved_across_spans() {
+        let input = "**bold** and *italic*";
+        let spans = parse_inline_formatting(input, FG, BG);
+        assert_eq!(text_of(&spans), input.replace("**", "").replace('*', ""));
+    }
+
+    // --- nested bold+italic ---
+
+    #[test]
+    fn italic_nested_inside_bold_sets_both_flags() {
+        let spans = parse_inline_formatting("**outer *inner* end**", FG, BG);
+        let nested = find_span(&spans, "inner").expect("nested italic not found");
+        assert!(nested.bold, "nested span should be bold");
+        assert!(nested.italic, "nested span should be italic");
+        let outer = find_span(&spans, "outer").or_else(|| find_span(&spans, "end"));
+        if let Some(o) = outer {
+            assert!(o.bold);
+            assert!(!o.italic);
+        }
+    }
+
+    // --- fg color propagation ---
+
+    #[test]
+    fn all_spans_use_base_fg() {
+        let spans = parse_inline_formatting("**a** b *c*", FG, BG);
+        for s in &spans {
+            if s.bg.is_none() {
+                // non-code spans use base_fg
+                assert_eq!(s.fg, Some(FG));
+            }
+        }
+    }
+}

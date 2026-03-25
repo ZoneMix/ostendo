@@ -496,3 +496,162 @@ fn render_spin(
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::style::Color;
+    use crate::render::text::{LineContentType, StyledLine, StyledSpan};
+
+    const ACCENT: Color = Color::Rgb { r: 100, g: 200, b: 255 };
+    const BG: Color = Color::Rgb { r: 20, g: 20, b: 30 };
+    const W: usize = 40;
+    const H: usize = 10;
+
+    /// Build a simple single-line buffer tagged with the given content type.
+    fn make_buffer_with_type(text: &str, ct: LineContentType) -> Vec<StyledLine> {
+        let mut line = StyledLine::empty();
+        line.content_type = ct;
+        line.push(StyledSpan::new(text).with_fg(ACCENT));
+        vec![line]
+    }
+
+    /// Return all characters that appear in the rendered output buffer.
+    fn all_chars(buf: &[StyledLine]) -> String {
+        buf.iter().flat_map(|l| l.spans.iter()).map(|s| s.text.as_str()).collect()
+    }
+
+    // --- render_loop_frame dispatcher ---
+
+    #[test]
+    fn matrix_produces_output_matching_height() {
+        let buf = vec![StyledLine::empty(); H];
+        let result = render_loop_frame(&buf, LoopAnimation::Matrix, 5, ACCENT, BG, W, H, None);
+        assert_eq!(result.len(), H, "matrix must produce exactly H rows");
+    }
+
+    #[test]
+    fn bounce_produces_output_matching_height() {
+        let buf = vec![StyledLine::empty(); H];
+        let result = render_loop_frame(&buf, LoopAnimation::Bounce, 5, ACCENT, BG, W, H, None);
+        assert_eq!(result.len(), H);
+    }
+
+    #[test]
+    fn pulse_output_length_equals_input_length() {
+        let buf = (0..H).map(|_| StyledLine::plain("hello")).collect::<Vec<_>>();
+        let result = render_loop_frame(&buf, LoopAnimation::Pulse, 10, ACCENT, BG, W, H, None);
+        assert_eq!(result.len(), buf.len());
+    }
+
+    #[test]
+    fn sparkle_output_length_equals_input_length() {
+        let buf = (0..5).map(|_| StyledLine::plain("sparkle")).collect::<Vec<_>>();
+        let result = render_loop_frame(&buf, LoopAnimation::Sparkle, 0, ACCENT, BG, W, 5, None);
+        assert_eq!(result.len(), 5);
+    }
+
+    #[test]
+    fn spin_output_length_equals_input_length() {
+        let buf = (0..5).map(|_| StyledLine::plain("abcde")).collect::<Vec<_>>();
+        let result = render_loop_frame(&buf, LoopAnimation::Spin, 0, ACCENT, BG, W, 5, None);
+        assert_eq!(result.len(), 5);
+    }
+
+    // --- targeting: spin with target "figlet" ---
+
+    #[test]
+    fn spin_with_figlet_target_only_animates_figlet_lines() {
+        let figlet_line = {
+            let mut l = StyledLine::empty();
+            l.content_type = LineContentType::FigletTitle;
+            // Use ASCII ramp chars so spin has something to shift
+            l.push(StyledSpan::new("ABCabc###").with_fg(ACCENT));
+            l
+        };
+        let text_line = StyledLine::plain("unchanged text");
+
+        let buf = vec![figlet_line, text_line.clone()];
+        let result = render_loop_frame(&buf, LoopAnimation::Spin, 20, ACCENT, BG, W, 2, Some("figlet"));
+
+        // The text line (index 1) must be passed through unchanged
+        assert_eq!(result[1].spans.iter().map(|s| s.text.as_str()).collect::<String>(),
+                   text_line.spans.iter().map(|s| s.text.as_str()).collect::<String>(),
+                   "non-figlet lines must not be modified by spin(figlet)");
+    }
+
+    // --- targeting: spin with target "image" ---
+
+    #[test]
+    fn spin_with_image_target_passes_non_animatable_lines_through() {
+        // An AsciiImage line but with no animatable spans → should be passed through
+        let img_line = make_buffer_with_type("@@@", LineContentType::AsciiImage);
+        let result = render_loop_frame(&img_line, LoopAnimation::Spin, 0, ACCENT, BG, W, 1, Some("image"));
+        // Output should have same length
+        assert_eq!(result.len(), 1);
+    }
+
+    // --- sparkle targeting ---
+
+    #[test]
+    fn sparkle_with_figlet_target_leaves_non_figlet_lines_unchanged() {
+        let normal_line = StyledLine::plain("normal content here");
+        let figlet_line = {
+            let mut l = StyledLine::empty();
+            l.content_type = LineContentType::FigletTitle;
+            l.push(StyledSpan::new("BIGTEXT").with_fg(ACCENT));
+            l
+        };
+        let buf = vec![normal_line.clone(), figlet_line];
+        let result = render_loop_frame(&buf, LoopAnimation::Sparkle, 0, ACCENT, BG, W, 2, Some("figlet"));
+        // Normal line must be identical (cloned through)
+        let orig_text: String = normal_line.spans.iter().map(|s| s.text.as_str()).collect();
+        let out_text: String = result[0].spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(orig_text, out_text, "non-figlet line must be unchanged by sparkle(figlet)");
+    }
+
+    // --- bounce inserts a ball character ---
+
+    #[test]
+    fn bounce_inserts_ball_character_into_output() {
+        let buf = vec![StyledLine::empty(); H];
+        let result = render_loop_frame(&buf, LoopAnimation::Bounce, 5, ACCENT, BG, W, H, None);
+        let chars = all_chars(&result);
+        // The ball is U+25CF (●)
+        assert!(chars.contains('\u{25CF}'), "bounce must place the ball character somewhere in the output");
+    }
+
+    // --- matrix fills empty buffer with rain ---
+
+    #[test]
+    fn matrix_fills_empty_buffer_with_non_empty_spans() {
+        let buf = vec![StyledLine::empty(); 3];
+        let result = render_loop_frame(&buf, LoopAnimation::Matrix, 1, ACCENT, BG, W, 3, None);
+        let total_spans: usize = result.iter().map(|l| l.spans.len()).sum();
+        assert!(total_spans > 0, "matrix must produce spans even for an empty input buffer");
+    }
+
+    // --- pulse preserves content_type ---
+
+    #[test]
+    fn pulse_preserves_content_type_on_lines() {
+        let mut line = StyledLine::plain("text");
+        line.content_type = LineContentType::FigletTitle;
+        let buf = vec![line];
+        let result = render_loop_frame(&buf, LoopAnimation::Pulse, 0, ACCENT, BG, W, 1, None);
+        assert_eq!(result[0].content_type, LineContentType::FigletTitle);
+    }
+
+    // --- frame counter advances results ---
+
+    #[test]
+    fn matrix_output_changes_across_frames() {
+        let buf = vec![StyledLine::empty(); 5];
+        let frame_a = render_loop_frame(&buf, LoopAnimation::Matrix, 0, ACCENT, BG, W, 5, None);
+        let frame_b = render_loop_frame(&buf, LoopAnimation::Matrix, 100, ACCENT, BG, W, 5, None);
+        let text_a: String = frame_a.iter().flat_map(|l| l.spans.iter()).map(|s| s.text.as_str()).collect();
+        let text_b: String = frame_b.iter().flat_map(|l| l.spans.iter()).map(|s| s.text.as_str()).collect();
+        // Different frames should produce different rain patterns
+        assert_ne!(text_a, text_b, "matrix output must differ across frames");
+    }
+}

@@ -614,7 +614,6 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
                 if col_idx < column_contents.len() {
                     column_contents[col_idx].image = Some(ColumnImage {
                         path: caps[2].to_string(),
-                        alt: caps[1].to_string(),
                         render_mode: None,
                         scale: None,
                         color: None,

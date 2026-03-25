@@ -203,3 +203,189 @@ pub fn detect_protocol() -> ImageProtocol {
     // (iTerm2, WezTerm, Ghostty, etc.) and degrades gracefully
     ImageProtocol::Iterm2
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to remove env vars and restore them using a simple RAII guard.
+    // We use serial tests (one-by-one) so env mutations are safe.
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, val: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, val);
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    // --- FontSizeCapability::is_available ---
+
+    #[test]
+    fn kitty_remote_is_available() {
+        assert!(FontSizeCapability::KittyRemote.is_available());
+    }
+
+    #[test]
+    fn ghostty_keystroke_is_available() {
+        assert!(FontSizeCapability::GhosttyKeystroke.is_available());
+    }
+
+    #[test]
+    fn none_font_capability_is_not_available() {
+        assert!(!FontSizeCapability::None.is_available());
+    }
+
+    // --- detect_font_capability ---
+
+    #[test]
+    fn font_capability_is_none_inside_tmux() {
+        let _tmux = EnvGuard::set("TMUX", "/tmp/tmux-test,1234,0");
+        let _kitty = EnvGuard::remove("KITTY_WINDOW_ID");
+        let _term = EnvGuard::remove("TERM_PROGRAM");
+        assert_eq!(detect_font_capability(), FontSizeCapability::None);
+    }
+
+    #[test]
+    fn font_capability_is_kitty_when_kitty_id_set_outside_tmux() {
+        let _tmux = EnvGuard::remove("TMUX");
+        let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
+        assert_eq!(detect_font_capability(), FontSizeCapability::KittyRemote);
+    }
+
+    #[test]
+    fn font_capability_is_none_without_kitty_or_ghostty() {
+        let _tmux = EnvGuard::remove("TMUX");
+        let _kitty = EnvGuard::remove("KITTY_WINDOW_ID");
+        let _term = EnvGuard::remove("TERM_PROGRAM");
+        assert_eq!(detect_font_capability(), FontSizeCapability::None);
+    }
+
+    // --- detect_text_scale_capability ---
+
+    #[test]
+    fn text_scale_is_none_inside_tmux() {
+        let _tmux = EnvGuard::set("TMUX", "/tmp/tmux-test,1234,0");
+        let _kitty = EnvGuard::remove("KITTY_WINDOW_ID");
+        assert_eq!(detect_text_scale_capability(), TextScaleCapability::None);
+    }
+
+    #[test]
+    fn text_scale_is_osc66_when_kitty_id_set_outside_tmux() {
+        let _tmux = EnvGuard::remove("TMUX");
+        let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "42");
+        assert_eq!(detect_text_scale_capability(), TextScaleCapability::Osc66);
+    }
+
+    #[test]
+    fn text_scale_is_none_without_kitty() {
+        let _tmux = EnvGuard::remove("TMUX");
+        let _kitty = EnvGuard::remove("KITTY_WINDOW_ID");
+        assert_eq!(detect_text_scale_capability(), TextScaleCapability::None);
+    }
+
+    // --- detect_kitty_animation ---
+
+    #[test]
+    fn kitty_animation_is_none_for_ghostty() {
+        let _term = EnvGuard::set("TERM_PROGRAM", "ghostty");
+        let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
+        let _tmux = EnvGuard::remove("TMUX");
+        assert_eq!(detect_kitty_animation(), KittyAnimationCapability::None);
+    }
+
+    #[test]
+    fn kitty_animation_is_supported_for_real_kitty_outside_tmux() {
+        let _term = EnvGuard::remove("TERM_PROGRAM");
+        let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
+        let _tmux = EnvGuard::remove("TMUX");
+        assert_eq!(detect_kitty_animation(), KittyAnimationCapability::Supported);
+    }
+
+    #[test]
+    fn kitty_animation_is_none_inside_tmux() {
+        let _term = EnvGuard::remove("TERM_PROGRAM");
+        let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
+        let _tmux = EnvGuard::set("TMUX", "/tmp/tmux-1,100,0");
+        assert_eq!(detect_kitty_animation(), KittyAnimationCapability::None);
+    }
+
+    // --- detect_protocol ---
+
+    #[test]
+    fn protocol_is_iterm2_for_iterm_app_term_program() {
+        let _tp = EnvGuard::set("TERM_PROGRAM", "iTerm.app");
+        let _lc = EnvGuard::remove("LC_TERMINAL");
+        let _is = EnvGuard::remove("ITERM_SESSION_ID");
+        let _tmux = EnvGuard::remove("TMUX");
+        assert_eq!(detect_protocol(), ImageProtocol::Iterm2);
+    }
+
+    #[test]
+    fn protocol_is_iterm2_for_lc_terminal_iterm2() {
+        let _tp = EnvGuard::remove("TERM_PROGRAM");
+        let _lc = EnvGuard::set("LC_TERMINAL", "iTerm2");
+        let _is = EnvGuard::remove("ITERM_SESSION_ID");
+        let _tmux = EnvGuard::remove("TMUX");
+        assert_eq!(detect_protocol(), ImageProtocol::Iterm2);
+    }
+
+    #[test]
+    fn protocol_is_iterm2_for_wezterm() {
+        let _tp = EnvGuard::set("TERM_PROGRAM", "WezTerm");
+        let _lc = EnvGuard::remove("LC_TERMINAL");
+        let _is = EnvGuard::remove("ITERM_SESSION_ID");
+        let _tmux = EnvGuard::remove("TMUX");
+        assert_eq!(detect_protocol(), ImageProtocol::Iterm2);
+    }
+
+    #[test]
+    fn protocol_is_kitty_for_ghostty() {
+        let _tp = EnvGuard::set("TERM_PROGRAM", "ghostty");
+        let _lc = EnvGuard::remove("LC_TERMINAL");
+        let _is = EnvGuard::remove("ITERM_SESSION_ID");
+        let _tmux = EnvGuard::remove("TMUX");
+        assert_eq!(detect_protocol(), ImageProtocol::Kitty);
+    }
+
+    #[test]
+    fn protocol_is_kitty_when_kitty_window_id_set_outside_tmux() {
+        let _tp = EnvGuard::remove("TERM_PROGRAM");
+        let _lc = EnvGuard::remove("LC_TERMINAL");
+        let _is = EnvGuard::remove("ITERM_SESSION_ID");
+        let _tmux = EnvGuard::remove("TMUX");
+        let _kw = EnvGuard::set("KITTY_WINDOW_ID", "5");
+        let _term = EnvGuard::remove("TERM");
+        assert_eq!(detect_protocol(), ImageProtocol::Kitty);
+    }
+
+    #[test]
+    fn protocol_defaults_to_iterm2_when_no_env_vars_set() {
+        let _tp = EnvGuard::remove("TERM_PROGRAM");
+        let _lc = EnvGuard::remove("LC_TERMINAL");
+        let _is = EnvGuard::remove("ITERM_SESSION_ID");
+        let _tmux = EnvGuard::remove("TMUX");
+        let _kw = EnvGuard::remove("KITTY_WINDOW_ID");
+        let _term = EnvGuard::remove("TERM");
+        assert_eq!(detect_protocol(), ImageProtocol::Iterm2);
+    }
+}
