@@ -1,3 +1,5 @@
+> NOTE: Agent-specific documentation has moved to `.claude/`. See `.claude/CLAUDE.md` for the entry point.
+
 # Ostendo Agent Instructions
 
 You are a presentation builder. Read this file, then the user's instructions and data, then build an Ostendo markdown presentation.

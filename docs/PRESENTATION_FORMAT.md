@@ -1,3 +1,5 @@
+> NOTE: The authoritative reference is now in `.claude/docs/DIRECTIVE_REFERENCE.md`.
+
 # Ostendo Presentation Format
 
 This document is the comprehensive human-readable reference for the Ostendo markdown presentation format.
