@@ -3,7 +3,7 @@ slug: "blood_moon"
 colors:
   background: "#1a0000"
   accent: "#cc0000"
-  text: "#e0c0c0"
+  text: "#FFFFFF"
   code_background: "#331C1C"
 fonts:
   heading: "Inter"

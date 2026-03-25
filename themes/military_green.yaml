@@ -3,7 +3,7 @@ slug: "military_green"
 colors:
   background: "#1C2418"
   accent: "#4A7C3F"
-  text: "#D0D0C0"
+  text: "#FFFFFF"
   code_background: "#2E352A"
 fonts:
   heading: "IBM Plex Mono"

@@ -3,7 +3,7 @@ slug: "midnight"
 colors:
   background: "#080C1A"
   accent: "#5B8DEF"
-  text: "#C8D4E8"
+  text: "#FFFFFF"
   code_background: "#1A2438"
 fonts:
   heading: "Fira Code"

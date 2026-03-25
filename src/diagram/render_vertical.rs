@@ -39,7 +39,7 @@ pub fn render(
         let mut line = StyledLine::empty();
         line.content_type = LineContentType::Diagram;
         line.push(StyledSpan::new(pad));
-        line.push(StyledSpan::new(title).with_fg(dim_color).dim());
+        line.push(StyledSpan::new(title).with_fg(dim_color));
         lines.push(line);
     }
 
@@ -69,7 +69,7 @@ pub fn render(
                         ann_line.push(StyledSpan::new(pad));
                         ann_line.push(StyledSpan::new(INDENT));
                         ann_line.push(StyledSpan::new("  ")); // extra indent under node
-                        ann_line.push(StyledSpan::new(text).with_fg(dim_color).dim());
+                        ann_line.push(StyledSpan::new(text).with_fg(dim_color));
                         lines.push(ann_line);
                     }
                 }

@@ -285,7 +285,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Font size directive
         if let Some(caps) = FONT_SIZE_RE.captures(line) {
-            font_size = caps[1].parse::<i8>().ok().map(|s| s.clamp(-3, 7));
+            font_size = caps[1].parse::<i8>().ok().map(|s| s.clamp(-20, 20));
             continue;
         }
 

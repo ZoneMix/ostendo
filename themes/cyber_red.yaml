@@ -3,7 +3,7 @@ slug: "cyber_red"
 colors:
   background: "#1A1018"
   accent: "#FF4444"
-  text: "#E0E0E0"
+  text: "#FFFFFF"
   code_background: "#32242C"
 fonts:
   heading: "Inter"

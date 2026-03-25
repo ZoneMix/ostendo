@@ -180,7 +180,7 @@ impl Presenter {
         if show_section && !slide.section.is_empty() {
             let mut line = StyledLine::empty();
             line.push(StyledSpan::new(&pad));
-            line.push(StyledSpan::new(&format!("Section: {}", slide.section)).with_fg(self.text_color).dim());
+            line.push(StyledSpan::new(&format!("Section: {}", slide.section)).with_fg(self.text_color));
             lines.push(line);
             lines.push(StyledLine::empty());
         }
@@ -836,7 +836,7 @@ impl Presenter {
         if has_slide_footer {
             if let Some(ref footer_text) = slide.footer {
                 use crate::presentation::FooterAlign;
-                let footer_row = (status_bar_rows + content_area) as u16;
+                let footer_row = (status_bar_rows + content_area).saturating_sub(2) as u16;
                 let footer_bg = if has_gradient {
                     self.row_bg_color(gradient_span.saturating_sub(1), gradient_span.max(1))
                 } else {

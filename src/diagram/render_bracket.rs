@@ -27,7 +27,7 @@ pub fn render(
         let mut line = StyledLine::empty();
         line.content_type = LineContentType::Diagram;
         line.push(StyledSpan::new(pad));
-        line.push(StyledSpan::new(title).with_fg(dim_color).dim());
+        line.push(StyledSpan::new(title).with_fg(dim_color));
         lines.push(line);
         lines.push(StyledLine::empty());
     }
@@ -86,7 +86,7 @@ pub fn render(
                 // Align to col_width (which includes bracket chars)
                 let right_pad = col_widths[i].saturating_sub(text_chars + 1); // +1 for leading space offset
 
-                ann_line.push(StyledSpan::new(text).with_fg(dim_color).dim());
+                ann_line.push(StyledSpan::new(text).with_fg(dim_color));
                 ann_line.push(StyledSpan::new(&" ".repeat(right_pad)));
 
                 if i + 1 < row.nodes.len() {

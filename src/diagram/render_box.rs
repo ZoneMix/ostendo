@@ -39,7 +39,7 @@ pub fn render(
         let mut line = StyledLine::empty();
         line.content_type = LineContentType::Diagram;
         line.push(StyledSpan::new(pad));
-        line.push(StyledSpan::new(title).with_fg(dim_color).dim());
+        line.push(StyledSpan::new(title).with_fg(dim_color));
         lines.push(line);
         lines.push(StyledLine::empty());
     }
@@ -164,7 +164,7 @@ fn render_row(
             let left = total_pad / 2;
             let right = total_pad - left;
             ann_line.push(StyledSpan::new(&" ".repeat(left)));
-            ann_line.push(StyledSpan::new(text).with_fg(dim_color).dim());
+            ann_line.push(StyledSpan::new(text).with_fg(dim_color));
             ann_line.push(StyledSpan::new(&" ".repeat(right)));
             if i + 1 < row.nodes.len() {
                 ann_line.push(StyledSpan::new(&" ".repeat(ARROW_WIDTH)));
