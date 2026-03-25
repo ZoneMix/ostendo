@@ -56,9 +56,11 @@ mod state;
 mod navigation;
 mod font;
 mod ui;
+mod columns;
 mod content;
 mod input;
 mod rendering;
+mod table_render;
 mod output;
 mod line_writer;
 
