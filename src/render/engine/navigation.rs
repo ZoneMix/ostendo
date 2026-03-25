@@ -1,6 +1,7 @@
 use super::*;
 
 impl Presenter {
+    /// Initialize transition, entrance, and loop animations for the current slide.
     pub(crate) fn start_slide_animations(&mut self) {
         let slide = &self.slides[self.current];
         let old_buffer = self.last_rendered_buffer.clone();
@@ -85,6 +86,7 @@ impl Presenter {
         }
     }
 
+    /// Advance to the next slide, starting the timer on first navigation.
     pub(crate) fn next_slide(&mut self) {
         if self.timer_start.is_none() {
             self.start_timer();
@@ -95,6 +97,7 @@ impl Presenter {
         }
     }
 
+    /// Move back to the previous slide.
     pub(crate) fn prev_slide(&mut self) {
         if self.current > 0 {
             self.current -= 1;
@@ -102,6 +105,7 @@ impl Presenter {
         }
     }
 
+    /// Jump directly to the slide at the given zero-based index.
     pub(crate) fn goto_slide(&mut self, idx: usize) {
         if idx < self.slides.len() {
             self.current = idx;
@@ -109,6 +113,7 @@ impl Presenter {
         }
     }
 
+    /// Jump forward to the first slide of the next section.
     pub(crate) fn next_section(&mut self) {
         let current_section = &self.slides[self.current].section;
         for i in (self.current + 1)..self.slides.len() {
@@ -120,6 +125,7 @@ impl Presenter {
         }
     }
 
+    /// Jump backward to the first slide of the previous section.
     pub(crate) fn prev_section(&mut self) {
         let current_section = &self.slides[self.current].section;
         let mut section_start = self.current;
@@ -136,10 +142,12 @@ impl Presenter {
         self.on_slide_changed();
     }
 
+    /// Scroll the current slide's content down by `n` lines.
     pub(crate) fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(n);
     }
 
+    /// Scroll the current slide's content up by `n` lines.
     pub(crate) fn scroll_up(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
     }

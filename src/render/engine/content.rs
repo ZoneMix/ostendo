@@ -1,5 +1,8 @@
-//! Content element renderers for tables, columns, ASCII art titles, code
-//! execution output, and decorated titles.
+//! Content element renderers for ASCII art titles, code execution output,
+//! and decorated titles.
+//!
+//! Table rendering lives in `table_render.rs` and column layout rendering
+//! lives in `columns.rs`.
 //!
 //! Each function in this module appends styled lines to a `Vec<StyledLine>`
 //! buffer. They are called by `render_frame()` in `rendering.rs` during the
@@ -120,6 +123,7 @@ impl Presenter {
         self.render_ascii_title_constrained(title, pad, lines, None);
     }
 
+    /// Render a FIGlet ASCII art title with an optional maximum width constraint.
     pub(crate) fn render_ascii_title_constrained(
         &self, title: &str, pad: &str, lines: &mut Vec<StyledLine>, max_width: Option<usize>,
     ) {

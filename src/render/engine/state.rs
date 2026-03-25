@@ -1,6 +1,7 @@
 use super::*;
 
 impl Presenter {
+    /// Toggle fullscreen mode (hides the status bar).
     pub(crate) fn toggle_fullscreen(&mut self) {
         self.show_fullscreen = !self.show_fullscreen;
         self.user_fullscreen_override = Some(self.show_fullscreen);
@@ -9,6 +10,7 @@ impl Presenter {
         self.needs_full_redraw = true;
     }
 
+    /// Toggle the speaker notes panel at the bottom of the screen.
     pub(crate) fn toggle_notes(&mut self) {
         self.show_notes = !self.show_notes;
         self.notes_scroll = 0;
@@ -29,16 +31,19 @@ impl Presenter {
         }
     }
 
+    /// Toggle the theme name badge in the status bar.
     pub(crate) fn toggle_theme_name(&mut self) {
         self.show_theme_name = !self.show_theme_name;
         self.needs_full_redraw = true;
     }
 
+    /// Toggle the visibility of section labels above slide titles.
     pub(crate) fn toggle_sections(&mut self) {
         self.show_sections = !self.show_sections;
         self.needs_full_redraw = true;
     }
 
+    /// Switch between the dark and light variants of the current theme.
     pub(crate) fn toggle_dark_mode(&mut self) {
         let registry = crate::theme::ThemeRegistry::load();
         if let Some(variant) = registry.get_variant(&self.theme, !self.is_light_variant) {
@@ -48,26 +53,31 @@ impl Presenter {
         }
     }
 
+    /// Increase the global content scale by 5 percentage points (max 200%).
     pub(crate) fn scale_up(&mut self) {
         self.global_scale = (self.global_scale + 5).min(200);
         self.needs_full_redraw = true;
     }
 
+    /// Decrease the global content scale by 5 percentage points (min 50%).
     pub(crate) fn scale_down(&mut self) {
         self.global_scale = self.global_scale.saturating_sub(5).max(50);
         self.needs_full_redraw = true;
     }
 
+    /// Increase the runtime image scale offset by 10 (max +100).
     pub(crate) fn image_scale_up(&mut self) {
         self.image_scale_offset = (self.image_scale_offset + 10).min(100);
         self.needs_full_redraw = true;
     }
 
+    /// Decrease the runtime image scale offset by 10 (min -90).
     pub(crate) fn image_scale_down(&mut self) {
         self.image_scale_offset = (self.image_scale_offset - 10).max(-90);
         self.needs_full_redraw = true;
     }
 
+    /// Adjust the per-slide font size offset by `delta` (clamped to -20..20).
     pub(crate) fn adjust_font_offset(&mut self, delta: i8) {
         if self.font_capability.is_available() {
             let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
@@ -82,6 +92,7 @@ impl Presenter {
         }
     }
 
+    /// Reset the current slide's font size offset to the default.
     pub(crate) fn reset_font_offset(&mut self) {
         if self.font_capability.is_available() {
             self.slide_font_offsets.remove(&self.current);
@@ -92,6 +103,7 @@ impl Presenter {
         }
     }
 
+    /// Return the current global content scale percentage.
     pub(crate) fn current_scale(&self) -> u8 {
         self.global_scale
     }
@@ -146,6 +158,7 @@ impl Presenter {
         let _ = self.state.save();
     }
 
+    /// Format the elapsed presentation timer as HH:MM:SS.
     pub(crate) fn format_timer(&self) -> String {
         match self.timer_start {
             Some(start) => {
