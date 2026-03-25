@@ -51,6 +51,7 @@ use crate::terminal::protocols::{self, ImageProtocol, FontSizeCapability, TextSc
 use crate::theme::colors::{hex_to_color, ensure_badge_contrast, interpolate_color};
 use crate::theme::Theme;
 
+mod types;
 mod state;
 mod navigation;
 mod font;
@@ -58,6 +59,12 @@ mod ui;
 mod content;
 mod input;
 mod rendering;
+mod output;
+mod line_writer;
+
+pub use types::PresenterConfig;
+pub(crate) use types::*;
+pub(crate) use output::*;
 
 /// Kitty Graphics Protocol: delete all images (quiet mode).
 const KITTY_CLEAR_IMAGES: &[u8] = b"\x1b_Ga=d,d=a,q=2\x1b\\";
@@ -105,179 +112,7 @@ fn protocol_cache_key(proto: ImageProtocol) -> u8 {
     }
 }
 
-/// Parse a line containing ANSI color escape sequences into styled spans.
-/// Converts SGR codes (e.g., \x1B[31m for red) into StyledSpan foreground colors.
-/// Falls back to `default_fg` for unrecognized codes or when reset (\x1B[0m) is used.
-fn parse_ansi_styled_spans(s: &str, default_fg: crossterm::style::Color) -> Vec<StyledSpan> {
-    use crossterm::style::Color;
 
-    let mut spans: Vec<StyledSpan> = Vec::new();
-    let mut current_fg = default_fg;
-    let mut is_bold = false;
-    let mut text = String::new();
-    let mut chars = s.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '\x1B' {
-            if chars.peek() == Some(&'[') {
-                chars.next(); // consume '['
-                // Flush accumulated text
-                if !text.is_empty() {
-                    let mut span = StyledSpan::new(&text).with_fg(current_fg);
-                    if is_bold { span = span.bold(); }
-                    spans.push(span);
-                    text.clear();
-                }
-                // Parse SGR parameters
-                let mut params = String::new();
-                while let Some(&next) = chars.peek() {
-                    if next.is_ascii_alphabetic() || next == '~' {
-                        chars.next();
-                        if next == 'm' {
-                            // Process SGR codes
-                            for code in params.split(';') {
-                                match code.trim() {
-                                    "0" | "" => { current_fg = default_fg; is_bold = false; }
-                                    "1" => { is_bold = true; }
-                                    "22" => { is_bold = false; }
-                                    "30" => current_fg = Color::Black,
-                                    "31" => current_fg = Color::Red,
-                                    "32" => current_fg = Color::Green,
-                                    "33" => current_fg = Color::Yellow,
-                                    "34" => current_fg = Color::Blue,
-                                    "35" => current_fg = Color::Magenta,
-                                    "36" => current_fg = Color::Cyan,
-                                    "37" => current_fg = Color::White,
-                                    "90" => current_fg = Color::DarkGrey,
-                                    "91" => current_fg = Color::DarkRed,
-                                    "92" => current_fg = Color::DarkGreen,
-                                    "93" => current_fg = Color::DarkYellow,
-                                    "94" => current_fg = Color::DarkBlue,
-                                    "95" => current_fg = Color::DarkMagenta,
-                                    "96" => current_fg = Color::DarkCyan,
-                                    "97" => current_fg = Color::Grey,
-                                    _ => {} // ignore unknown codes
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    chars.next();
-                    params.push(next);
-                }
-            } else if chars.peek() == Some(&']') {
-                // Skip OSC sequences
-                chars.next();
-                while let Some(&next) = chars.peek() {
-                    chars.next();
-                    if next == '\x07' { break; }
-                    if next == '\x1B' && chars.peek() == Some(&'\\') {
-                        chars.next();
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        if c == '\t' || (c >= ' ' && c != '\x7F') {
-            text.push(c);
-        }
-    }
-    // Flush remaining text
-    if !text.is_empty() {
-        let mut span = StyledSpan::new(&text).with_fg(current_fg);
-        if is_bold { span = span.bold(); }
-        spans.push(span);
-    }
-    spans
-}
-
-/// Get comment prefix for a programming language (used in code block labels).
-fn comment_prefix_for(lang: &str) -> &'static str {
-    match lang {
-        "python" | "python3" | "py" | "bash" | "sh" | "ruby" | "rb" | "yaml" | "toml" | "r" => "# ",
-        "html" | "xml" => "<!-- ",
-        "css" => "/* ",
-        "sql" | "lua" | "haskell" => "-- ",
-        "c" | "cpp" | "c++" | "java" | "javascript" | "js" | "typescript" | "go" | "golang" | "rust"
-        | "swift" | "kotlin" | "scala" | "php" | "dart" | "zig" => "// ",
-        _ => "// ",
-    }
-}
-
-/// The current interaction mode of the presenter.
-///
-/// Ostendo is a modal application (similar to Vim). The mode determines
-/// which keys are active and what is drawn on screen. For example, in
-/// `Command` mode the bottom bar shows a `:` prompt, while `Overview`
-/// mode replaces the slide with a grid of slide titles.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Mode {
-    /// Default mode: slide content visible, navigation keys active.
-    Normal,
-    /// Command-line input mode (`:theme dark`, `:goto 5`, etc.).
-    Command,
-    /// Numeric goto-slide input mode (`g` then type a number).
-    Goto,
-    /// Full-screen help overlay showing all keybindings and directives.
-    Help,
-    /// Grid overview of all slides for quick navigation.
-    Overview,
-}
-
-/// Cache key for rendered image data.
-///
-/// Images are expensive to render (especially ASCII art conversion and
-/// protocol encoding). This key uniquely identifies a rendered result so
-/// it can be reused across frames. The key includes the GIF frame index
-/// so each frame of an animated GIF gets its own cache entry.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-struct ImageCacheKey {
-    /// Filesystem path to the source image file.
-    path: PathBuf,
-    /// Target width in terminal columns (changes with scale/resize).
-    render_width: usize,
-    /// Numeric identifier for the image protocol (0=Kitty, 1=iTerm2, etc.).
-    protocol: u8,
-    /// For animated GIFs, which frame this entry represents. Always 0 for static images.
-    gif_frame_index: usize,
-    /// Optional hex color override from `<!-- image_color: #hex -->` directive.
-    color_override: String,
-}
-
-/// How font size changes are animated during slide transitions.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum FontTransitionMode {
-    /// No animation — font changes instantly.
-    None,
-    /// Scatter-dissolve: characters randomly replaced by spaces during transition.
-    Dissolve,
-    /// Smooth fade: content uniformly dims to background, font changes, then fades in.
-    Fade,
-}
-
-/// Cached rendered image data.
-///
-/// There are two rendering paths depending on the terminal's image protocol:
-/// - **Lines**: ASCII/half-block art stored as styled text lines (works everywhere).
-/// - **Protocol**: Raw escape sequence data for Kitty/iTerm2/Sixel (placed after
-///   the text buffer is flushed, since protocol images overlay terminal cells).
-enum CachedImage {
-    /// ASCII or half-block art rendered as styled terminal text lines.
-    Lines(Vec<StyledLine>),
-    /// Raw protocol escape data (iTerm2/Sixel) plus the number of
-    /// terminal rows the image occupies (used for placeholder spacing).
-    Protocol { escape_data: String, placeholder_height: usize },
-    /// Kitty v2: reference to a Kitty image. Contains the transmit escape
-    /// for lazy transmission on first use, then only `a=p` placement (~50 bytes).
-    KittyRef {
-        image_id: u32,
-        cols: usize,
-        rows: usize,
-        /// The full `a=t` transmit escape. Sent once on first render, then cleared.
-        transmit_escape: Option<String>,
-    },
-}
 
 /// The main presentation engine.
 ///
@@ -523,33 +358,6 @@ pub struct Presenter {
     figfont: Option<figlet_rs::FIGfont>,
 }
 
-/// Configuration parameters for constructing a [`Presenter`].
-///
-/// Bundles the startup options passed to [`Presenter::new`] to keep the
-/// constructor signature within clippy's argument-count limit.
-pub struct PresenterConfig {
-    /// The parsed slide deck.
-    pub slides: Vec<Slide>,
-    /// Front-matter metadata (author, date, accent, default alignment).
-    pub meta: PresentationMeta,
-    /// The initial theme to use.
-    pub theme: Theme,
-    /// Starting slide index (0 = use saved state, >0 = override).
-    pub start: usize,
-    /// Path to the markdown file (for hot reload and code execution).
-    pub presentation_path: PathBuf,
-    /// CLI override for image protocol ("auto", "kitty", "iterm", "sixel", "ascii").
-    pub image_mode: String,
-    /// Optional WebSocket remote control channels.
-    pub remote_channels: Option<(
-        std::sync::mpsc::Receiver<crate::remote::RemoteCommand>,
-        tokio::sync::broadcast::Sender<String>,
-    )>,
-    /// If true, disables all code execution.
-    pub no_exec: bool,
-    /// If true, allows remote-initiated code execution.
-    pub remote_exec: bool,
-}
 
 impl Presenter {
     /// Create a new `Presenter` with the given slides, theme, and configuration.
@@ -973,72 +781,6 @@ impl Presenter {
         }
     }
 
-    /// Write a single styled line to the terminal output buffer using the default background.
-    ///
-    /// Delegates to `queue_styled_line_with_bg` with the theme's background color.
-    /// Each `StyledSpan` in the line is rendered with its own foreground, background,
-    /// and text attributes (bold, italic, dim, etc.).
-    fn queue_styled_line(&self, w: &mut impl Write, line: &StyledLine, term_width: usize) -> Result<()> {
-        self.queue_styled_line_with_bg(w, line, term_width, self.bg_color)
-    }
-
-    /// Write a styled line with a custom default background (used for gradient rows).
-    fn queue_styled_line_with_bg(&self, w: &mut impl Write, line: &StyledLine, term_width: usize, default_bg: Color) -> Result<()> {
-        let mut chars_written = 0usize;
-        // Set default background for the entire line
-        queue!(w, SetBackgroundColor(default_bg))?;
-        for span in &line.spans {
-            if chars_written >= term_width {
-                break;
-            }
-            // Reset attributes before each span to avoid leaking
-            queue!(w, SetAttribute(Attribute::NoBold),
-                      SetAttribute(Attribute::NoItalic),
-                      SetAttribute(Attribute::NormalIntensity),
-                      SetAttribute(Attribute::NotCrossedOut),
-                      SetAttribute(Attribute::NoUnderline))?;
-            let bg = span.bg.unwrap_or(default_bg);
-            let fg = span.fg.unwrap_or(self.text_color);
-            queue!(w, SetForegroundColor(fg))?;
-            queue!(w, SetBackgroundColor(bg))?;
-            if span.bold {
-                queue!(w, SetAttribute(Attribute::Bold))?;
-            }
-            if span.italic {
-                queue!(w, SetAttribute(Attribute::Italic))?;
-            }
-            if span.dim {
-                queue!(w, SetAttribute(Attribute::Dim))?;
-            }
-            if span.strikethrough {
-                queue!(w, SetAttribute(Attribute::CrossedOut))?;
-            }
-            if span.underline {
-                queue!(w, SetAttribute(Attribute::Underlined))?;
-            }
-            // Truncate span text to fit within terminal width
-            let base_width = unicode_width::UnicodeWidthStr::width(span.text.as_str());
-            let scale_factor = if span.text_scale >= 2 { span.text_scale as usize } else { 1 };
-            let effective_width = base_width * scale_factor;
-            let remaining = term_width.saturating_sub(chars_written);
-            if effective_width <= remaining {
-                write_span_text(w, span.text_scale, &span.text)?;
-                chars_written += effective_width;
-            } else {
-                let char_budget = remaining / scale_factor;
-                let truncated = truncate_to_width(&span.text, char_budget);
-                let trunc_w = unicode_width::UnicodeWidthStr::width(truncated.as_str());
-                write_span_text(w, span.text_scale, &truncated)?;
-                chars_written += trunc_w * scale_factor;
-            }
-        }
-        // Reset attributes and fill rest of line with background
-        queue!(w, SetAttribute(Attribute::Reset), SetBackgroundColor(default_bg))?;
-        if chars_written < term_width {
-            write!(w, "{}", " ".repeat(term_width - chars_written))?;
-        }
-        Ok(())
-    }
 
     /// Returns true if the current slide has an animated GIF image.
     fn current_slide_has_gif(&self) -> bool {
@@ -1083,68 +825,6 @@ fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
-/// Write text to the output buffer, applying OSC 66 text scaling when `scale >= 2`.
-///
-/// OSC 66 is a Kitty-specific escape sequence that tells the terminal to
-/// render text at a larger size (2x, 3x, etc.) within a single cell span.
-/// When scale is 1 (or 0), the text is written directly without any escape.
-fn write_span_text(w: &mut impl Write, scale: u8, text: &str) -> Result<()> {
-    if scale >= 2 {
-        write!(w, "\x1b]66;s={};{}\x07", scale, text)?;
-    } else {
-        write!(w, "{}", text)?;
-    }
-    Ok(())
-}
-
-/// Truncate a string to fit within `max_cols` display columns.
-///
-/// Uses Unicode character widths (not byte count) so that wide characters
-/// (CJK, emoji) are measured correctly. For example, a full-width character
-/// counts as 2 columns.
-fn truncate_to_width(s: &str, max_cols: usize) -> String {
-    use unicode_width::UnicodeWidthChar;
-    let mut result = String::new();
-    let mut w = 0;
-    for ch in s.chars() {
-        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if w + cw > max_cols {
-            break;
-        }
-        result.push(ch);
-        w += cw;
-    }
-    result
-}
-
-/// Simple word-wrapping: splits text at word boundaries to fit within `width` display columns.
-///
-/// Words that exceed the width on their own are placed on a single line without
-/// breaking mid-word. Returns a `Vec<String>` where each entry is one wrapped line.
-fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
-    if width == 0 || text.is_empty() {
-        return vec![text.to_string()];
-    }
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.is_empty() {
-        return vec![String::new()];
-    }
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in words {
-        let test = if current.is_empty() { word.to_string() } else { format!("{} {}", current, word) };
-        if unicode_width::UnicodeWidthStr::width(test.as_str()) > width && !current.is_empty() {
-            lines.push(current);
-            current = word.to_string();
-        } else {
-            current = test;
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
 
 #[cfg(test)]
 mod tests {
