@@ -9,6 +9,5 @@ SECURITY.md
 presentations/dakotacon-2026/
 
 # Claude Code local settings
-.agents/
 CLAUDE.md.bak
 tests/integration/results/
