@@ -244,10 +244,17 @@ fn main() -> Result<()> {
         None
     };
 
-    let mut presenter = render::Presenter::new(
-        slides, meta, theme, cli.slide.saturating_sub(1), &file, &cli.image_mode, remote_channels,
-        cli.no_exec, cli.remote_exec,
-    );
+    let mut presenter = render::Presenter::new(render::PresenterConfig {
+        slides,
+        meta,
+        theme,
+        start: cli.slide.saturating_sub(1),
+        presentation_path: file,
+        image_mode: cli.image_mode.clone(),
+        remote_channels,
+        no_exec: cli.no_exec,
+        remote_exec: cli.remote_exec,
+    });
     if cli.fullscreen {
         presenter.set_fullscreen(true);
     }

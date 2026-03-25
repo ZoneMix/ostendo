@@ -298,7 +298,7 @@ impl Presenter {
                 }
             }
             let has_exec = self.allow_exec && (slide.code_blocks.iter().any(|cb| cb.exec_mode.is_some())
-                || slide.columns.as_ref().map_or(false, |cols|
+                || slide.columns.as_ref().is_some_and(|cols|
                     cols.contents.iter().any(|c| c.code_blocks.iter().any(|cb| cb.exec_mode.is_some()))
                 ));
             let font_offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);

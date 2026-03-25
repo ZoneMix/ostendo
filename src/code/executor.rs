@@ -217,11 +217,9 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
         // Collect any remaining stderr after stdout closes
         if let Some(stderr) = stderr {
             let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    if !l.is_empty() {
-                        let _ = tx.send(Some(format!("[stderr] {}", l)));
-                    }
+            for l in reader.lines().map_while(Result::ok) {
+                if !l.is_empty() {
+                    let _ = tx.send(Some(format!("[stderr] {}", l)));
                 }
             }
         }

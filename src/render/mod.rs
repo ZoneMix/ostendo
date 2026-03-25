@@ -6,3 +6,4 @@ pub mod layout;
 mod progress;
 
 pub use engine::Presenter;
+pub use engine::PresenterConfig;

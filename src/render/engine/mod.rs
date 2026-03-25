@@ -33,7 +33,7 @@ use crossterm::{
 };
 use std::collections::HashMap;
 use std::io::{self, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::code::highlight::Highlighter;
@@ -562,6 +562,34 @@ pub struct Presenter {
     figfont: Option<figlet_rs::FIGfont>,
 }
 
+/// Configuration parameters for constructing a [`Presenter`].
+///
+/// Bundles the startup options passed to [`Presenter::new`] to keep the
+/// constructor signature within clippy's argument-count limit.
+pub struct PresenterConfig {
+    /// The parsed slide deck.
+    pub slides: Vec<Slide>,
+    /// Front-matter metadata (author, date, accent, default alignment).
+    pub meta: PresentationMeta,
+    /// The initial theme to use.
+    pub theme: Theme,
+    /// Starting slide index (0 = use saved state, >0 = override).
+    pub start: usize,
+    /// Path to the markdown file (for hot reload and code execution).
+    pub presentation_path: PathBuf,
+    /// CLI override for image protocol ("auto", "kitty", "iterm", "sixel", "ascii").
+    pub image_mode: String,
+    /// Optional WebSocket remote control channels.
+    pub remote_channels: Option<(
+        std::sync::mpsc::Receiver<crate::remote::RemoteCommand>,
+        tokio::sync::broadcast::Sender<String>,
+    )>,
+    /// If true, disables all code execution.
+    pub no_exec: bool,
+    /// If true, allows remote-initiated code execution.
+    pub remote_exec: bool,
+}
+
 impl Presenter {
     /// Create a new `Presenter` with the given slides, theme, and configuration.
     ///
@@ -577,29 +605,19 @@ impl Presenter {
     ///
     /// # Parameters
     ///
-    /// - `slides` — The parsed slide deck.
-    /// - `meta` — Front-matter metadata (author, date, accent, default alignment).
-    /// - `theme` — The initial theme to use.
-    /// - `start` — Starting slide index (0 = use saved state, >0 = override).
-    /// - `presentation_path` — Path to the markdown file (for hot reload and code execution).
-    /// - `image_mode` — CLI override for image protocol ("auto", "kitty", "iterm", "sixel", "ascii").
-    /// - `remote_channels` — Optional WebSocket remote control channels.
-    /// - `no_exec` — If true, disables all code execution.
-    /// - `remote_exec` — If true, allows remote-initiated code execution.
-    pub fn new(
-        slides: Vec<Slide>,
-        meta: PresentationMeta,
-        theme: Theme,
-        start: usize,
-        presentation_path: &Path,
-        image_mode: &str,
-        remote_channels: Option<(
-            std::sync::mpsc::Receiver<crate::remote::RemoteCommand>,
-            tokio::sync::broadcast::Sender<String>,
-        )>,
-        no_exec: bool,
-        remote_exec: bool,
-    ) -> Self {
+    /// - `cfg` — All startup options bundled in a [`PresenterConfig`].
+    pub fn new(cfg: PresenterConfig) -> Self {
+        let PresenterConfig {
+            slides,
+            meta,
+            theme,
+            start,
+            presentation_path,
+            image_mode,
+            remote_channels,
+            no_exec,
+            remote_exec,
+        } = cfg;
         let bg = hex_to_color(&theme.colors.background).unwrap_or(Color::Black);
         let mut accent = hex_to_color(&theme.colors.accent).unwrap_or(Color::Green);
         // Presentation-level accent override from front matter
@@ -628,7 +646,7 @@ impl Presenter {
         };
         let window_size = WindowSize::query();
         let (w, h) = (window_size.columns, window_size.rows);
-        let state = StateManager::load(presentation_path);
+        let state = StateManager::load(&presentation_path);
         // Restore slide position from saved state (CLI --slide flag overrides)
         let restored_image_scale = state.get_image_scale_offset();
         let restored_slide = if start == 0 {
@@ -638,11 +656,11 @@ impl Presenter {
         };
         // Restore per-slide font offsets from saved state
         let mut slide_font_offsets: HashMap<usize, i8> = HashMap::new();
-        for i in 0..slides.len() {
+        for (i, slide) in slides.iter().enumerate() {
             // Markdown directive sets the base; saved state overrides
             if let Some(saved) = state.get_font_offset(i) {
                 slide_font_offsets.insert(i, saved);
-            } else if let Some(md_size) = slides[i].font_size {
+            } else if let Some(md_size) = slide.font_size {
                 // Convert markdown font_size (-3..7) to offset: (size - 1) * 2pt steps
                 let offset = (md_size - 1) * 2;
                 if offset != 0 {
@@ -650,7 +668,7 @@ impl Presenter {
                 }
             }
         }
-        let image_protocol = match image_mode {
+        let image_protocol = match image_mode.as_str() {
             "kitty" => ImageProtocol::Kitty,
             "iterm" | "iterm2" => ImageProtocol::Iterm2,
             "sixel" => ImageProtocol::Sixel,
@@ -747,8 +765,8 @@ impl Presenter {
             help_badge_bg,
             font_capability,
             original_font_size,
-            file_watcher: Some(crate::watch::FileWatcher::new(presentation_path.to_path_buf())),
-            presentation_path: presentation_path.to_path_buf(),
+            file_watcher: Some(crate::watch::FileWatcher::new(presentation_path.clone())),
+            presentation_path,
             last_rendered_slide: None,
             last_rendered_scroll: 0,
             last_rendered_width: 0,
@@ -1506,8 +1524,7 @@ mod tests {
 
         // Simulate what happens with a single highlighted span
         let mut col_rows: Vec<Vec<StyledSpan>> = Vec::new();
-        let mut spans: Vec<StyledSpan> = Vec::new();
-        spans.push(StyledSpan::new("    ")); // left padding
+        let mut spans: Vec<StyledSpan> = vec![StyledSpan::new("    ")]; // left padding
         let mut char_count = 0usize;
 
         let txt = long_line;
@@ -1565,8 +1582,7 @@ mod tests {
         // Total: 8 + 11 + 2 + 51 = 72 chars, should wrap into 3 rows at width 30
 
         let mut col_rows: Vec<Vec<StyledSpan>> = Vec::new();
-        let mut current_spans: Vec<StyledSpan> = Vec::new();
-        current_spans.push(StyledSpan::new("    ")); // left padding
+        let mut current_spans: Vec<StyledSpan> = vec![StyledSpan::new("    ")]; // left padding
         let mut char_count = 0usize;
 
         for span_text in &spans_input {

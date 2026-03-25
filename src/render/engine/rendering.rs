@@ -1157,15 +1157,12 @@ impl Presenter {
                 }
 
                 // Final font step — land exactly on target
-                match self.font_capability {
-                    FontSizeCapability::KittyRemote => {
-                        let stdout = io::stdout();
-                        let mut pre = stdout.lock();
-                        pre.write_all(kitty_font_escape(target).as_bytes())?;
-                        pre.flush()?;
-                    }
-                    _ => {} // Ghostty keystrokes already sent above
-                }
+                if self.font_capability == FontSizeCapability::KittyRemote {
+                    let stdout = io::stdout();
+                    let mut pre = stdout.lock();
+                    pre.write_all(kitty_font_escape(target).as_bytes())?;
+                    pre.flush()?;
+                } // else: Ghostty keystrokes already sent above
                 font_applied = true;
                 self.pending_dissolve_in = true;
             }

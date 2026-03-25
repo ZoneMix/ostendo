@@ -578,8 +578,7 @@ impl Presenter {
                 // Highlighted code lines — soft-wrap in columns
                 let highlighted = self.highlighter.highlight(&cb.code, &cb.language);
                 for hline in &highlighted {
-                    let mut spans = Vec::new();
-                    spans.push(StyledSpan::new("    ").with_bg(self.code_bg_color));
+                    let mut spans = vec![StyledSpan::new("    ").with_bg(self.code_bg_color)];
                     let mut char_count = 0usize;
                     for span in hline {
                         let txt = span.text.trim_end_matches('\n');
@@ -641,7 +640,7 @@ impl Presenter {
 
                         // Determine color override from the column image directive
                         let color_override = col_img.color.as_deref()
-                            .and_then(|c| crate::theme::colors::hex_to_color(c));
+                            .and_then(crate::theme::colors::hex_to_color);
 
                         // Render as ASCII art
                         let ascii_rows = crate::terminal::ascii_art::render_ascii_art(
