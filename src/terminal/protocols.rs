@@ -316,8 +316,8 @@ mod tests {
 
     #[test]
     fn kitty_animation_is_none_for_ghostty() {
-        let _term = EnvGuard::set("TERM_PROGRAM", "ghostty");
         let _lock = ENV_LOCK.lock().unwrap();
+        let _term = EnvGuard::set("TERM_PROGRAM", "ghostty");
         let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
         let _tmux = EnvGuard::remove("TMUX");
         assert_eq!(detect_kitty_animation(), KittyAnimationCapability::None);
@@ -325,8 +325,8 @@ mod tests {
 
     #[test]
     fn kitty_animation_is_supported_for_real_kitty_outside_tmux() {
-        let _term = EnvGuard::remove("TERM_PROGRAM");
         let _lock = ENV_LOCK.lock().unwrap();
+        let _term = EnvGuard::remove("TERM_PROGRAM");
         let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
         let _tmux = EnvGuard::remove("TMUX");
         assert_eq!(detect_kitty_animation(), KittyAnimationCapability::Supported);
@@ -334,8 +334,8 @@ mod tests {
 
     #[test]
     fn kitty_animation_is_none_inside_tmux() {
-        let _term = EnvGuard::remove("TERM_PROGRAM");
         let _lock = ENV_LOCK.lock().unwrap();
+        let _term = EnvGuard::remove("TERM_PROGRAM");
         let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
         let _tmux = EnvGuard::set("TMUX", "/tmp/tmux-1,100,0");
         assert_eq!(detect_kitty_animation(), KittyAnimationCapability::None);
@@ -345,50 +345,50 @@ mod tests {
 
     #[test]
     fn protocol_is_iterm2_for_iterm_app_term_program() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _tp = EnvGuard::set("TERM_PROGRAM", "iTerm.app");
         let _lc = EnvGuard::remove("LC_TERMINAL");
         let _is = EnvGuard::remove("ITERM_SESSION_ID");
-        let _lock = ENV_LOCK.lock().unwrap();
         let _tmux = EnvGuard::remove("TMUX");
         assert_eq!(detect_protocol(), ImageProtocol::Iterm2);
     }
 
     #[test]
     fn protocol_is_iterm2_for_lc_terminal_iterm2() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _tp = EnvGuard::remove("TERM_PROGRAM");
         let _lc = EnvGuard::set("LC_TERMINAL", "iTerm2");
         let _is = EnvGuard::remove("ITERM_SESSION_ID");
-        let _lock = ENV_LOCK.lock().unwrap();
         let _tmux = EnvGuard::remove("TMUX");
         assert_eq!(detect_protocol(), ImageProtocol::Iterm2);
     }
 
     #[test]
     fn protocol_is_iterm2_for_wezterm() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _tp = EnvGuard::set("TERM_PROGRAM", "WezTerm");
         let _lc = EnvGuard::remove("LC_TERMINAL");
         let _is = EnvGuard::remove("ITERM_SESSION_ID");
-        let _lock = ENV_LOCK.lock().unwrap();
         let _tmux = EnvGuard::remove("TMUX");
         assert_eq!(detect_protocol(), ImageProtocol::Iterm2);
     }
 
     #[test]
     fn protocol_is_kitty_for_ghostty() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _tp = EnvGuard::set("TERM_PROGRAM", "ghostty");
         let _lc = EnvGuard::remove("LC_TERMINAL");
         let _is = EnvGuard::remove("ITERM_SESSION_ID");
-        let _lock = ENV_LOCK.lock().unwrap();
         let _tmux = EnvGuard::remove("TMUX");
         assert_eq!(detect_protocol(), ImageProtocol::Kitty);
     }
 
     #[test]
     fn protocol_is_kitty_when_kitty_window_id_set_outside_tmux() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _tp = EnvGuard::remove("TERM_PROGRAM");
         let _lc = EnvGuard::remove("LC_TERMINAL");
         let _is = EnvGuard::remove("ITERM_SESSION_ID");
-        let _lock = ENV_LOCK.lock().unwrap();
         let _tmux = EnvGuard::remove("TMUX");
         let _kw = EnvGuard::set("KITTY_WINDOW_ID", "5");
         let _term = EnvGuard::remove("TERM");
@@ -397,10 +397,10 @@ mod tests {
 
     #[test]
     fn protocol_defaults_to_iterm2_when_no_env_vars_set() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _tp = EnvGuard::remove("TERM_PROGRAM");
         let _lc = EnvGuard::remove("LC_TERMINAL");
         let _is = EnvGuard::remove("ITERM_SESSION_ID");
-        let _lock = ENV_LOCK.lock().unwrap();
         let _tmux = EnvGuard::remove("TMUX");
         let _kw = EnvGuard::remove("KITTY_WINDOW_ID");
         let _term = EnvGuard::remove("TERM");
