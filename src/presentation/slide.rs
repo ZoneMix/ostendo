@@ -83,7 +83,6 @@ pub struct PresentationMeta {
 ///
 /// The render engine reads these fields to decide what to draw on each frame.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Slide {
     /// Zero-based slide index within the presentation.
     pub number: usize,
@@ -111,6 +110,8 @@ pub struct Slide {
     pub notes: String,
     /// Suggested timing in minutes for this slide (for pacing). Parsed from
     /// `<!-- timing: 2.5 -->` directives.
+    /// Parsed and tested; renderer support pending.
+    #[allow(dead_code)]
     pub timing_minutes: f64,
     /// Multi-column layout, present when the slide uses a `<!-- columns: ... -->` directive.
     /// Contains the width ratios and per-column content.
@@ -128,6 +129,8 @@ pub struct Slide {
     pub text_scale: Option<u8>,
     /// Per-slide title scale percentage. Set via `<!-- title_scale: N -->`.
     /// Controls the OSC 66 text scaling for the slide title.
+    /// Parsed and tested; renderer support pending.
+    #[allow(dead_code)]
     pub title_scale: Option<u8>,
     /// Custom footer text displayed at the bottom of the slide.
     /// Set via `<!-- footer: Your text here -->`.
@@ -205,11 +208,12 @@ pub struct ColumnLayout {
 /// logic operates on `StyledLine` virtual buffers, which protocol-based
 /// rendering (Kitty, iTerm2, Sixel) cannot participate in.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ColumnImage {
     /// Filesystem path to the image file (resolved to absolute during parsing).
     pub path: String,
     /// Alt text from the Markdown image syntax.
+    /// Parsed for future alt-text display on render failure.
+    #[allow(dead_code)]
     pub alt: String,
     /// Rendering mode override (e.g., `"ascii"`, `"kitty"`). Column images
     /// are always rendered as ASCII regardless of this value, but it is
@@ -285,7 +289,6 @@ pub enum ExecMode {
 /// The renderer uses the `render_mode` and terminal capabilities to decide
 /// which image protocol to use (Kitty, iTerm inline, Sixel, or ASCII fallback).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SlideImage {
     /// Filesystem path to the image file (absolute or relative to the presentation file).
     pub path: PathBuf,
@@ -386,7 +389,6 @@ pub struct BlockQuote {
 /// tool which produces an SVG or PNG image that is then displayed using the
 /// terminal's image protocol.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MermaidBlock {
     /// The raw Mermaid diagram definition (e.g., `graph TD; A-->B`).
     pub source: String,

@@ -10,8 +10,6 @@
 //! hanging the presentation or consuming excessive resources:
 //!
 //! - **Code size**: 64 KB maximum (`MAX_CODE_LENGTH`)
-//! - **Output size**: 1 MB maximum (`MAX_OUTPUT_SIZE`) -- truncated beyond this
-//! - **Timeout**: 30 seconds (`EXEC_TIMEOUT_SECS`) -- process killed after this
 //!
 //! # Auto-wrapping
 //!
@@ -30,7 +28,6 @@ use anyhow::{bail, Result};
 use regex::Regex;
 use std::process::Command;
 use std::sync::{mpsc, LazyLock};
-use std::time::Duration;
 
 /// Regex for detecting C function definitions (used by auto-wrap heuristic).
 static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
@@ -46,106 +43,13 @@ static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
 /// Prevents accidentally pasting enormous files into a code block.
 const MAX_CODE_LENGTH: usize = 64 * 1024;
 
-/// Maximum output size captured from a child process (1 MB).
-#[allow(dead_code)]
-const MAX_OUTPUT_SIZE: usize = 1024 * 1024;
-
-/// Hard timeout for any single code execution (30 seconds).
-#[allow(dead_code)]
-const EXEC_TIMEOUT_SECS: u64 = 30;
-
-/// The captured output from running a code block.
-#[allow(dead_code)]
-pub struct ExecutionResult {
-    /// Standard output from the child process.
-    pub stdout: String,
-    /// Standard error from the child process (compiler errors end up here).
-    pub stderr: String,
-}
-
-/// Execute a code snippet synchronously and return its captured output.
-///
-/// # Parameters
-///
-/// - `language` -- the language identifier (e.g. `"python"`, `"rust"`, `"c++"`).
-///   Aliases like `"py"`, `"js"`, `"rs"` are normalized automatically.
-/// - `code` -- the source code to execute.  Must be under 64 KB.
-/// - `working_dir` -- optional working directory for the child process.
-///
-/// # Errors
-///
-/// Returns an error if the code exceeds the size limit or the child process
-/// fails to spawn.  Compilation errors are returned inside `ExecutionResult.stderr`.
-#[allow(dead_code)]
-pub fn execute_code(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
-    if code.len() > MAX_CODE_LENGTH {
-        bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
-    }
-    // Normalize language aliases
-    let lang = normalize_language(language);
-    // Auto-wrap bare snippets so they compile as complete programs
-    let code = wrap_for_execution(&lang, code);
-
-    match lang.as_str() {
-        "python" => {
-            run_with_timeout("python3", &["-c", &code], working_dir)
-        }
-        "bash" | "sh" => {
-            run_with_timeout("bash", &["-c", &code], working_dir)
-        }
-        "javascript" => {
-            run_with_timeout("node", &["-e", &code], working_dir)
-        }
-        "ruby" => {
-            run_with_timeout("ruby", &["-e", &code], working_dir)
-        }
-        "rust" => {
-            let dir = tempfile::tempdir()?;
-            let src = dir.path().join("main.rs");
-            let bin = dir.path().join("main");
-            std::fs::write(&src, &*code)?;
-            let compile = Command::new("rustc")
-                .arg(&src)
-                .arg("-o")
-                .arg(&bin)
-                .output()?;
-            if !compile.status.success() {
-                return Ok(ExecutionResult {
-                    stdout: String::new(),
-                    stderr: String::from_utf8_lossy(&compile.stderr).to_string(),
-                });
-            }
-            let bin_str = bin.to_string_lossy().to_string();
-            run_with_timeout(&bin_str, &[], working_dir)
-        }
-        "c" => {
-            compile_and_run(&code, detect_c_compiler(), &["-x", "c", "-o"], working_dir)
-        }
-        "cpp" | "c++" => {
-            compile_and_run(&code, detect_cpp_compiler(), &["-x", "c++", "-std=c++17", "-o"], working_dir)
-        }
-        "go" => {
-            let dir = tempfile::tempdir()?;
-            let src = dir.path().join("main.go");
-            std::fs::write(&src, &*code)?;
-            let src_str = src.to_string_lossy().to_string();
-            run_with_timeout("go", &["run", &src_str], working_dir)
-        }
-        _ => {
-            // Fallback to shell
-            run_with_timeout("sh", &["-c", &code], working_dir)
-        }
-    }
-}
-
 /// Spawn code execution in a background thread, returning a receiver for streaming output lines.
 /// Sends each line as it becomes available in real-time. Sends `None` when complete.
 ///
-/// Unlike `execute_code()` which blocks until the process finishes and returns
-/// all output at once, this function reads stdout line-by-line from the child
-/// process pipe, sending each line through the channel as soon as it's written.
-/// This enables live streaming of output in the presentation (e.g., demo scripts
-/// that use `sleep` delays between commands will show output incrementally).
+/// Reads stdout line-by-line from the child process pipe, sending each line
+/// through the channel as soon as it's written.  This enables live streaming
+/// of output in the presentation (e.g., demo scripts that use `sleep` delays
+/// between commands will show output incrementally).
 pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<mpsc::Receiver<Option<String>>> {
     if code.len() > MAX_CODE_LENGTH {
         bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
@@ -229,77 +133,6 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
     });
 
     Ok(rx)
-}
-
-/// Run a command with a timeout. Kills the entire process group if it exceeds
-/// EXEC_TIMEOUT_SECS, preventing fork bombs and orphaned child processes.
-#[allow(dead_code)]
-fn run_with_timeout(cmd: &str, args: &[&str], working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
-    use std::os::unix::process::CommandExt;
-
-    let mut command = Command::new(cmd);
-    command.args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if let Some(wd) = working_dir {
-        command.current_dir(wd);
-    }
-    // Create a new process group so we can kill all descendants on timeout.
-    // SAFETY: pre_exec runs between fork() and exec(); setsid() is async-signal-safe.
-    // If setsid() fails, we fall back to killing just the child process.
-    unsafe {
-        command.pre_exec(|| {
-            let result = libc::setsid();
-            if result == -1 {
-                // setsid failed — child stays in parent's process group.
-                // Not fatal: timeout will still kill the direct child.
-                return Ok(());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command.spawn()?;
-    let child_pid = child.id();
-
-    let timeout = Duration::from_secs(EXEC_TIMEOUT_SECS);
-    let start = std::time::Instant::now();
-
-    // Poll for completion with timeout
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                let stdout = child.stdout.take().map(|mut s| {
-                    read_limited(&mut s, MAX_OUTPUT_SIZE)
-                }).unwrap_or_default();
-                let stderr = child.stderr.take().map(|mut s| {
-                    read_limited(&mut s, MAX_OUTPUT_SIZE)
-                }).unwrap_or_default();
-                return Ok(ExecutionResult {
-                    stdout,
-                    stderr,
-                });
-            }
-            Ok(None) => {
-                if start.elapsed() > timeout {
-                    // SAFETY: Kill the entire process group (negative PID).
-                    // setsid() in pre_exec created a new PGID = child PID, so
-                    // -pgid targets only the child's group, not our process.
-                    // Safe i32 cast with fallback to child.kill() on overflow.
-                    if let Ok(pgid) = i32::try_from(child_pid) {
-                        unsafe { libc::kill(-pgid, libc::SIGKILL); }
-                    }
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Ok(ExecutionResult {
-                        stdout: String::new(),
-                        stderr: format!("Execution timed out after {} seconds", EXEC_TIMEOUT_SECS),
-                    });
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => bail!("Failed to wait for process: {}", e),
-        }
-    }
 }
 
 /// Normalize language identifiers to canonical forms.
@@ -622,102 +455,6 @@ fn wrap_go(code: &str) -> String {
     }
     out.push_str("}\n");
     out
-}
-
-/// Check if a command exists in PATH.
-#[allow(dead_code)]
-fn which_exists(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Detect available C compiler (prefer cc, then gcc, then clang).
-#[allow(dead_code)]
-fn detect_c_compiler() -> &'static str {
-    if which_exists("cc") { return "cc"; }
-    if which_exists("gcc") { return "gcc"; }
-    if which_exists("clang") { return "clang"; }
-    "cc"
-}
-
-/// Detect available C++ compiler (prefer c++, then g++, then clang++).
-#[allow(dead_code)]
-fn detect_cpp_compiler() -> &'static str {
-    if which_exists("c++") { return "c++"; }
-    if which_exists("g++") { return "g++"; }
-    if which_exists("clang++") { return "clang++"; }
-    "c++"
-}
-
-/// Compile C/C++ code via stdin pipe and run the resulting binary.
-///
-/// The code is piped to the compiler's stdin (using `-` as the input filename)
-/// which avoids writing a temporary source file.  The compiled binary is placed
-/// in a temporary directory and executed with the standard timeout.
-#[allow(dead_code)]
-fn compile_and_run(code: &str, compiler: &str, extra_args: &[&str], working_dir: Option<&std::path::Path>) -> Result<ExecutionResult> {
-    let dir = tempfile::tempdir()?;
-    let bin = dir.path().join("a.out");
-    let bin_str = bin.to_string_lossy().to_string();
-
-    // Build compiler args: <extra_args> <bin_path> -
-    let mut args: Vec<&str> = extra_args.to_vec();
-    args.push(&bin_str);
-    args.push("-"); // read from stdin
-
-    let mut child = Command::new(compiler)
-        .args(&args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
-
-    if let Some(ref mut stdin) = child.stdin {
-        use std::io::Write;
-        let _ = stdin.write_all(code.as_bytes());
-    }
-    drop(child.stdin.take());
-
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        return Ok(ExecutionResult {
-            stdout: String::new(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
-    }
-
-    run_with_timeout(&bin_str, &[], working_dir)
-}
-
-/// Read from a stream up to `limit` bytes, returning as a String.
-/// If the output exceeds the limit, it is truncated with a message.
-#[allow(dead_code)]
-fn read_limited(reader: &mut impl std::io::Read, limit: usize) -> String {
-    let mut buf = vec![0u8; limit + 1];
-    let mut total = 0;
-    loop {
-        match reader.read(&mut buf[total..]) {
-            Ok(0) => break,
-            Ok(n) => {
-                total += n;
-                if total > limit {
-                    total = limit;
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    let mut s = String::from_utf8_lossy(&buf[..total]).into_owned();
-    if total == limit {
-        s.push_str("\n[output truncated at 1MB]");
-    }
-    s
 }
 
 #[cfg(test)]

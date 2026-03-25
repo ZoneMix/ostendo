@@ -102,6 +102,9 @@ pub enum AnimationKind {
     /// An entrance effect revealing the new slide buffer.
     Entrance(EntranceAnimation),
     /// A continuous loop effect modifying the current slide buffer.
+    /// Matched in rendering.rs dispatch; constructed only in tests since loops
+    /// bypass AnimationState in the live engine (managed via active_loop vec).
+    #[allow(dead_code)]
     Loop(LoopAnimation),
 }
 
@@ -127,8 +130,6 @@ pub struct AnimationState {
     pub frame: u64,
     /// The previous slide's rendered content (only used by transitions).
     pub old_buffer: Vec<StyledLine>,
-    /// The current/new slide's rendered content.
-    pub new_buffer: Vec<StyledLine>,
     /// When true, the transition only fades/dissolves the old content out
     /// (to background) without revealing new content.
     pub exit_only: bool,
@@ -141,7 +142,6 @@ impl AnimationState {
     pub fn new_transition(
         kind: TransitionType,
         old_buffer: Vec<StyledLine>,
-        new_buffer: Vec<StyledLine>,
     ) -> Self {
         let duration_ms = match kind {
             TransitionType::Dissolve => 600,
@@ -154,33 +154,32 @@ impl AnimationState {
             duration_ms,
             frame: 0,
             old_buffer,
-            new_buffer,
             exit_only: false,
         }
     }
 
     /// Creates a new entrance animation state with a fixed 500ms duration.
-    pub fn new_entrance(kind: EntranceAnimation, buffer: Vec<StyledLine>) -> Self {
+    pub fn new_entrance(kind: EntranceAnimation) -> Self {
         Self {
             kind: AnimationKind::Entrance(kind),
             started: Instant::now(),
             duration_ms: 500,
             frame: 0,
             old_buffer: Vec::new(),
-            new_buffer: buffer,
             exit_only: false,
         }
     }
 
     /// Creates a new loop animation state that runs indefinitely (`duration_ms = u64::MAX`).
-    pub fn new_loop(kind: LoopAnimation, buffer: Vec<StyledLine>) -> Self {
+    /// Only used in tests -- loop animations are managed directly by the render engine.
+    #[cfg(test)]
+    pub fn new_loop(kind: LoopAnimation) -> Self {
         Self {
             kind: AnimationKind::Loop(kind),
             started: Instant::now(),
             duration_ms: u64::MAX,
             frame: 0,
             old_buffer: Vec::new(),
-            new_buffer: buffer,
             exit_only: false,
         }
     }
@@ -294,7 +293,6 @@ mod tests {
         let state = AnimationState::new_transition(
             TransitionType::Fade,
             vec![StyledLine::plain("old")],
-            vec![StyledLine::plain("new")],
         );
         // Just created -- progress should be near 0
         assert!(state.progress() < 0.5);
@@ -305,7 +303,6 @@ mod tests {
     fn test_loop_never_done() {
         let state = AnimationState::new_loop(
             LoopAnimation::Pulse,
-            vec![StyledLine::plain("test")],
         );
         assert!(!state.is_done());
     }

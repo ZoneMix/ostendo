@@ -11,13 +11,13 @@ impl Presenter {
 
         if let Some(tt) = transition_type {
             let has_entrance = slide.entrance_animation.is_some();
-            let mut anim = AnimationState::new_transition(tt, old_buffer, Vec::new());
+            let mut anim = AnimationState::new_transition(tt, old_buffer);
             // When an entrance animation follows, the transition only fades out
             // old content — the entrance handles revealing new content.
             anim.exit_only = has_entrance;
             self.active_animation = Some(anim);
         } else if let Some(ea) = slide.entrance_animation {
-            self.active_animation = Some(AnimationState::new_entrance(ea, Vec::new()));
+            self.active_animation = Some(AnimationState::new_entrance(ea));
         }
 
         // Set up loop animation (runs independently after transition/entrance complete)

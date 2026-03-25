@@ -32,7 +32,6 @@ use std::env;
 /// Detected once at startup by [`detect_protocol`] and used throughout
 /// the image rendering pipeline to choose the correct escape sequences.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum ImageProtocol {
     /// Kitty Graphics Protocol -- highest quality, supports Kitty and Ghostty.
     Kitty,

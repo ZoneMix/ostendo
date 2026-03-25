@@ -109,7 +109,7 @@ impl Presenter {
                     if matches!(anim.kind, AnimationKind::Transition(_)) {
                         let slide = &self.slides[self.current];
                         if let Some(ea) = slide.entrance_animation {
-                            self.active_animation = Some(AnimationState::new_entrance(ea, Vec::new()));
+                            self.active_animation = Some(AnimationState::new_entrance(ea));
                         } else {
                             self.active_animation = None;
                         }

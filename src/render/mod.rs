@@ -1,5 +1,4 @@
 mod engine;
-#[allow(dead_code)]
 pub mod animation;
 pub mod text;
 pub mod layout;

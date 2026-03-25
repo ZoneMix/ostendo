@@ -37,7 +37,6 @@ use unicode_width::UnicodeWidthStr;
 /// StyledSpan::new("hello").with_fg(Color::Red).bold().italic()
 /// ```
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct StyledSpan {
     /// The raw text content of this span (no ANSI codes -- styling is applied at render time).
     pub text: String,
@@ -65,7 +64,6 @@ pub struct StyledSpan {
     pub animatable: bool,
 }
 
-#[allow(dead_code)]
 impl StyledSpan {
     /// Create a new span with the given text and no styling applied.
     pub fn new(text: &str) -> Self {
@@ -120,6 +118,8 @@ impl StyledSpan {
     }
 
     /// Enable underline decoration.  Builder method -- returns `self` for chaining.
+    /// Part of the StyledSpan builder API for completeness.
+    #[allow(dead_code)]
     pub fn underline(mut self) -> Self {
         self.underline = true;
         self
@@ -127,6 +127,8 @@ impl StyledSpan {
 
     /// Set the OSC 66 text scale factor (Kitty terminal only).
     /// Values 2-7 enlarge the text; 0 or 1 means normal size.
+    /// Used in tests; production code sets the field directly.
+    #[allow(dead_code)]
     pub fn text_scale(mut self, scale: u8) -> Self {
         self.text_scale = scale;
         self
@@ -147,6 +149,8 @@ impl StyledSpan {
     }
 
     /// Number of terminal rows this span occupies (1 for normal, scale for scaled).
+    /// Used by StyledLine::height() which is exercised in tests.
+    #[allow(dead_code)]
     pub fn height(&self) -> usize {
         if self.text_scale >= 2 {
             self.text_scale as usize
@@ -162,7 +166,6 @@ impl StyledSpan {
 /// `sparkle(figlet)` only targets lines tagged as [`FigletTitle`], leaving
 /// code blocks and regular text untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-#[allow(dead_code)]
 pub enum LineContentType {
     /// Normal body text, bullet points, blockquotes, etc.
     #[default]
@@ -172,10 +175,14 @@ pub enum LineContentType {
     /// Image rendered as colored ASCII characters (fallback mode).
     AsciiImage,
     /// Syntax-highlighted code block.
+    /// Reserved for future animation targeting (e.g., `sparkle(code)`).
+    #[allow(dead_code)]
     CodeBlock,
     /// Mermaid or other diagram rendered as ASCII.
     Diagram,
     /// Empty spacing line used for vertical alignment or scaled-text placeholders.
+    /// Used by scale_placeholder() for OSC 66 text scaling rows.
+    #[allow(dead_code)]
     Padding,
 }
 
@@ -195,7 +202,6 @@ pub struct StyledLine {
     pub content_type: LineContentType,
 }
 
-#[allow(dead_code)]
 impl StyledLine {
     /// Create a blank line with no spans (renders as an empty row).
     pub fn empty() -> Self {
@@ -212,6 +218,8 @@ impl StyledLine {
     }
 
     /// Create a line containing a single span with the given foreground color.
+    /// Part of the StyledLine builder API for completeness.
+    #[allow(dead_code)]
     pub fn styled(text: &str, fg: Color) -> Self {
         Self {
             spans: vec![StyledSpan::new(text).with_fg(fg)],
@@ -221,6 +229,8 @@ impl StyledLine {
     }
 
     /// Create a placeholder line for scaled text (skipped during rendering).
+    /// Reserved for OSC 66 multicell text support.
+    #[allow(dead_code)]
     pub fn scale_placeholder() -> Self {
         Self { spans: Vec::new(), is_scale_placeholder: true, content_type: LineContentType::Padding }
     }
@@ -231,6 +241,8 @@ impl StyledLine {
     }
 
     /// Maximum height among all spans (for OSC 66 scaled text).
+    /// Used in tests; reserved for OSC 66 multicell rendering.
+    #[allow(dead_code)]
     pub fn height(&self) -> usize {
         self.spans.iter().map(|s| s.height()).max().unwrap_or(1)
     }
@@ -255,6 +267,7 @@ impl StyledLine {
 /// # Returns
 ///
 /// A new `Vec<StyledLine>` where every entry is at most `max_width` columns wide.
+/// Used in tests; available as a utility for future callers.
 #[allow(dead_code)]
 pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLine> {
     let mut result = Vec::new();
@@ -319,6 +332,7 @@ pub fn wrap_styled_lines(lines: &[StyledLine], max_width: usize) -> Vec<StyledLi
 ///
 /// This is used to produce fixed-width rows so the terminal background fills
 /// the entire window evenly (important for gradient themes).
+/// Used in tests; available as a utility for future callers.
 #[allow(dead_code)]
 pub fn pad_line(line: &StyledLine, width: usize) -> StyledLine {
     let current = line.width();

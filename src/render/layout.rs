@@ -28,7 +28,6 @@ pub struct WindowSize {
     pub pixel_height: u16,
 }
 
-#[allow(dead_code)]
 impl WindowSize {
     /// Query the terminal for its current size including pixel dimensions.
     pub fn query() -> Self {
@@ -67,6 +66,7 @@ impl WindowSize {
 
     /// Aspect ratio correction factor: (pixels_per_row / pixels_per_column).
     /// Used to convert image aspect ratio to terminal cell aspect ratio.
+    #[cfg(test)]
     pub fn aspect_ratio(&self) -> f64 {
         self.pixels_per_column() / self.pixels_per_row()
     }
