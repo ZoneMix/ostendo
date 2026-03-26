@@ -1,3 +1,5 @@
+//! Presentation data structures and session state persistence.
+
 mod slide;
 mod state;
 

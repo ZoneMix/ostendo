@@ -1,3 +1,5 @@
+//! Box-drawing style diagram renderer using Unicode border characters.
+
 /// Box-drawing style renderer.
 ///
 /// Produces Unicode box-drawing diagrams:

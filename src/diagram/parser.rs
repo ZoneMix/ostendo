@@ -1,3 +1,5 @@
+//! Diagram DSL parser for the graph description language.
+
 /// Diagram DSL parser.
 ///
 /// Syntax:

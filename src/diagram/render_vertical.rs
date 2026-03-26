@@ -1,3 +1,5 @@
+//! Vertical flow diagram renderer using pipes and arrows.
+
 /// Vertical flow renderer.
 ///
 /// Produces top-to-bottom pipe diagrams:

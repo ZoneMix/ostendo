@@ -1,3 +1,5 @@
+//! Compact bracket-style diagram renderer.
+
 /// Bracket-style renderer.
 ///
 /// Produces compact bracket diagrams:

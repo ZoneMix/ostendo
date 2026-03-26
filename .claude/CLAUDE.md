@@ -34,6 +34,7 @@ Markdown source
 |---|---|
 | `main.rs` | CLI (clap), entry point |
 | `markdown/parser.rs` | Markdown -> Vec<Slide> |
+| `markdown/parser_tests.rs` | Parser unit tests |
 | `markdown/regex_patterns.rs` | ~30 LazyLock<Regex> directive patterns |
 | `markdown/inline.rs` | Bold/italic/code/strikethrough |
 | `markdown/tables.rs` | Table cell parsing, alignment |
@@ -42,17 +43,22 @@ Markdown source
 | `render/engine/mod.rs` | Presenter struct, lifecycle |
 | `render/engine/rendering.rs` | render_frame(), smart redraw |
 | `render/engine/input.rs` | Event loop, key/mouse/remote |
-| `render/engine/content.rs` | Tables, columns, FIGlet titles, exec output |
+| `render/engine/content.rs` | FIGlet titles, decorated titles, exec output |
 | `render/engine/ui.rs` | Status bar, help overlay, overview grid |
 | `render/engine/font.rs` | Kitty RC / Ghostty AppleScript font control |
 | `render/engine/state.rs` | Toggles, scale, theme, persistence |
 | `render/engine/navigation.rs` | Slide movement, scrolling, animations |
+| `render/engine/types.rs` | Mode, ImageCacheKey, FontTransitionMode, PresenterConfig |
+| `render/engine/output.rs` | parse_ansi_styled_spans, write_span_text, textwrap |
+| `render/engine/line_writer.rs` | queue_styled_line, queue_styled_line_with_bg |
+| `render/engine/columns.rs` | Multi-column layout rendering |
+| `render/engine/table_render.rs` | Markdown table rendering, box-drawing borders |
 | `render/animation/` | Transitions, entrances, loop animations |
 | `render/text.rs` | StyledLine/StyledSpan virtual buffer |
 | `terminal/protocols.rs` | Image protocol & font capability detection |
-| `theme/` | Registry, WCAG validation, color utilities |
+| `theme/` | Registry, WCAG validation, color utilities, schema |
 | `code/executor.rs` | Language execution, timeout, sandbox |
-| `image_util/` | Protocol-specific image rendering |
+| `image_util/` | Protocol-specific image rendering, Kitty protocol |
 | `diagram/` | ASCII diagram engine (box, bracket, vertical) |
 | `export/` | HTML and PDF export |
 | `remote/` | WebSocket server, auth, rate limiting |

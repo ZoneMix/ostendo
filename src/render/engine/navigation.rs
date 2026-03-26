@@ -1,3 +1,5 @@
+//! Slide navigation, scrolling, and animation trigger logic.
+
 use super::*;
 
 impl Presenter {

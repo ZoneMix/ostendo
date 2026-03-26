@@ -1,3 +1,5 @@
+//! Unit tests for the Markdown-to-slide parser.
+
 use super::*;
 use crate::presentation::TableAlign;
 

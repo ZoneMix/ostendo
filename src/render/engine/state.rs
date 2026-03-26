@@ -1,3 +1,5 @@
+//! Presenter state toggles, scale adjustments, and theme application.
+
 use super::*;
 
 impl Presenter {

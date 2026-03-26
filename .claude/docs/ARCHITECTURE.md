@@ -1,79 +1,91 @@
 # Architecture
 
-Module map with responsibilities. Line counts are approximate.
+Module map with responsibilities. Line counts from v0.4.1 post-optimization.
 
 ## Core Pipeline
 
 | Module | Lines | Tests | Responsibility |
 |---|---|---|---|
-| `src/main.rs` | ~261 | 0 | CLI (clap), entry point, early-exit flags |
-| `src/markdown/parser.rs` | ~1166 | yes | Markdown -> Vec<Slide> parser |
-| `src/markdown/regex_patterns.rs` | ~243 | 0 | ~30 LazyLock<Regex> directive patterns |
-| `src/markdown/inline.rs` | ~158 | yes | Bold/italic/code/strikethrough inline parser |
-| `src/markdown/tables.rs` | ~72 | 0 | Table cell parsing, alignment detection |
-| `src/presentation/slide.rs` | ~462 | 0 | Slide struct, all content type definitions |
-| `src/presentation/state.rs` | ~245 | 0 | StateManager (JSON persistence to disk) |
+| `src/main.rs` | 268 | 0 | CLI (clap), entry point, early-exit flags |
+| `src/markdown/parser.rs` | 830 | 42 | Markdown to Vec of Slide parser |
+| `src/markdown/parser_tests.rs` | 419 | 42 | Parser test suite (separate file) |
+| `src/markdown/regex_patterns.rs` | 242 | 0 | 30+ LazyLock Regex directive patterns |
+| `src/markdown/inline.rs` | 311 | 13 | Bold/italic/code/strikethrough inline parser |
+| `src/markdown/tables.rs` | 72 | 0 | Table cell parsing, alignment detection |
+| `src/presentation/slide.rs` | 676 | 28 | Slide struct, all content type definitions |
+| `src/presentation/state.rs` | 250 | 4 | StateManager (JSON persistence to disk) |
 
 ## Render Engine
 
-| Module | Lines | Responsibility |
-|---|---|---|
-| `src/render/engine/mod.rs` | ~1470 | Presenter struct, lifecycle, terminal setup/teardown |
-| `src/render/engine/rendering.rs` | ~1272 | render_frame(), smart redraw, viewport calculation |
-| `src/render/engine/input.rs` | ~537 | Event loop, key/mouse/remote command handling |
-| `src/render/engine/content.rs` | ~537 | Tables, columns, FIGlet titles, exec output rendering |
-| `src/render/engine/ui.rs` | ~407 | Status bar, help overlay, overview grid |
-| `src/render/engine/font.rs` | ~233 | Kitty RC / Ghostty AppleScript font control |
-| `src/render/engine/state.rs` | ~162 | Toggle methods, scale adjustments, theme application |
-| `src/render/engine/navigation.rs` | ~147 | Slide movement, scrolling, animation triggers |
+| Module | Lines | Tests | Responsibility |
+|---|---|---|---|
+| `src/render/engine/mod.rs` | 1132 | 16 | Presenter struct, lifecycle, terminal setup/teardown |
+| `src/render/engine/rendering.rs` | 1004 | 0 | render_frame(), smart redraw, viewport calculation |
+| `src/render/engine/input.rs` | 537 | 0 | Event loop, key/mouse/remote command handling |
+| `src/render/engine/content.rs` | 408 | 12 | FIGlet titles, decorated titles, exec output |
+| `src/render/engine/ui.rs` | 407 | 0 | Status bar, help overlay, overview grid |
+| `src/render/engine/font.rs` | 619 | 0 | Kitty RC, Ghostty AppleScript, font transitions |
+| `src/render/engine/state.rs` | 176 | 0 | Toggle methods, scale adjustments, theme application |
+| `src/render/engine/navigation.rs` | 156 | 0 | Slide movement, scrolling, animation triggers |
+| `src/render/engine/types.rs` | 111 | 0 | Mode, ImageCacheKey, FontTransitionMode, PresenterConfig |
+| `src/render/engine/output.rs` | 172 | 0 | parse_ansi_styled_spans, write_span_text, textwrap |
+| `src/render/engine/line_writer.rs` | 83 | 0 | queue_styled_line, queue_styled_line_with_bg |
+| `src/render/engine/columns.rs` | 322 | 0 | Multi-column layout rendering |
+| `src/render/engine/table_render.rs` | 138 | 0 | Markdown table rendering, box-drawing borders |
 
 ## Animation System
 
 | Module | Lines | Tests | Responsibility |
 |---|---|---|---|
-| `src/render/animation/mod.rs` | ~347 | 7 | AnimationState, types, dispatch, parsing |
-| `src/render/animation/transitions.rs` | ~277 | 0 | Fade, slide-left, dissolve transitions |
-| `src/render/animation/entrance.rs` | ~104 | 0 | Typewriter, fade_in, slide_down entrances |
-| `src/render/animation/loops.rs` | ~478 | 0 | Matrix, bounce, pulse, sparkle, spin loops |
+| `src/render/animation/mod.rs` | 344 | 8 | AnimationState, types, dispatch, parsing |
+| `src/render/animation/transitions.rs` | 285 | 0 | Fade, slide-left, dissolve transitions |
+| `src/render/animation/entrance.rs` | 104 | 0 | Typewriter, fade_in, slide_down entrances |
+| `src/render/animation/loops.rs` | 657 | 14 | Matrix, bounce, pulse, sparkle, spin loops |
 
 ## Supporting Systems
 
-| Module | Lines | Responsibility |
-|---|---|---|
-| `src/render/layout.rs` | ~50 | WindowSize, terminal dimension queries |
-| `src/render/text.rs` | ~150 | StyledLine/StyledSpan virtual buffer types |
-| `src/render/progress.rs` | ~30 | Progress bar rendering |
-| `src/terminal/protocols.rs` | ~207 | Image protocol & font capability detection |
-| `src/terminal/ascii_art.rs` | ~203 | ASCII art image renderer (half-block characters) |
-| `src/theme/mod.rs` | ~300 | ThemeRegistry, WCAG contrast validation |
-| `src/theme/colors.rs` | ~200 | Hex parsing, color interpolation, HSV conversion |
-| `src/theme/builtin.rs` | ~100 | Compile-time embedded themes (generated by build.rs) |
-| `src/code/executor.rs` | ~476 | 8-language execution, timeout, sandbox |
-| `src/code/highlight.rs` | ~100 | Syntax highlighting via syntect |
-| `src/code/pty.rs` | ~100 | PTY execution for interactive code blocks |
-| `src/image_util/render.rs` | ~400 | Protocol-specific image rendering |
-| `src/image_util/mermaid.rs` | ~200 | Mermaid diagram rendering via mmdc CLI |
-| `src/diagram/` | ~1067 | ASCII diagram engine (box, bracket, vertical styles) |
-| `src/export/html.rs` | ~300 | Self-contained HTML export |
-| `src/export/pdf.rs` | ~144 | PDF via headless Chrome/wkhtmltopdf |
-| `src/remote/server.rs` | ~500 | WebSocket server, auth, rate limiting |
-| `src/remote/html.rs` | ~400 | Embedded HTML remote control UI |
-| `src/watch.rs` | ~50 | File watcher for hot reload (500ms polling) |
+| Module | Lines | Tests | Responsibility |
+|---|---|---|---|
+| `src/render/layout.rs` | 103 | 2 | WindowSize, terminal dimension queries |
+| `src/render/text.rs` | 433 | 12 | StyledLine/StyledSpan virtual buffer types |
+| `src/render/progress.rs` | 60 | 4 | Progress bar rendering |
+| `src/terminal/protocols.rs` | 409 | 18 | Image protocol, font capability detection |
+| `src/terminal/ascii_art.rs` | 323 | 9 | ASCII art image renderer (half-block characters) |
+| `src/theme/mod.rs` | 159 | 5 | ThemeRegistry, WCAG contrast validation |
+| `src/theme/colors.rs` | 234 | 6 | Hex parsing, color interpolation, HSV conversion |
+| `src/theme/builtin.rs` | 31 | 0 | Compile-time embedded themes (generated by build.rs) |
+| `src/theme/schema.rs` | 123 | 0 | YAML schema definitions for themes |
+| `src/code/executor.rs` | 636 | 14 | Streaming execution, language wrapping, sandbox |
+| `src/code/highlight.rs` | 102 | 0 | Syntax highlighting via syntect |
+| `src/image_util/mod.rs` | 237 | 0 | Image loading, GIF frame extraction |
+| `src/image_util/render.rs` | 390 | 2 | Protocol-specific image rendering |
+| `src/image_util/kitty.rs` | 262 | 10 | Kitty graphics protocol transmit/display |
+| `src/image_util/mermaid.rs` | 122 | 0 | Mermaid diagram rendering via mmdc CLI |
+| `src/diagram/mod.rs` | 224 | 5 | Adaptive renderer, style dispatch |
+| `src/diagram/parser.rs` | 198 | 11 | Graph DSL parser |
+| `src/diagram/render_box.rs` | 305 | 4 | Box-drawing style (Unicode borders) |
+| `src/diagram/render_bracket.rs` | 189 | 3 | Bracket style (compact) |
+| `src/diagram/render_vertical.rs` | 160 | 3 | Vertical flow style (pipes) |
+| `src/export/html.rs` | 314 | 2 | Self-contained HTML export |
+| `src/export/pdf.rs` | 127 | 2 | PDF via headless Chrome/wkhtmltopdf |
+| `src/remote/mod.rs` | 230 | 4 | Commands, state types |
+| `src/remote/server.rs` | 317 | 0 | WebSocket server, auth, rate limiting |
+| `src/remote/html.rs` | 723 | 0 | Embedded HTML remote control UI |
+| `src/watch.rs` | 65 | 0 | File watcher for hot reload (500ms polling) |
 
 ## Key Dependencies
 
 | Crate | Version | Purpose |
 |---|---|---|
-| `crossterm` | 0.29 | Terminal I/O, events, cursor, styling |
-| `clap` | 4 | CLI argument parsing (derive) |
-| `syntect` | 5 | Syntax highlighting |
-| `image` | 0.25 | Image loading, GIF decoding |
-| `fast_image_resize` | 5 | High-performance image resizing |
-| `tokio` + `tokio-tungstenite` | 1 / 0.28 | Async WebSocket server |
-| `resvg` | 0.47 | SVG rendering (Mermaid diagrams) |
-| `figlet-rs` | 0.1 | FIGlet ASCII art generation |
-| `serde` + `serde_yml` | 1 / 0.0.12 | Theme YAML parsing |
-| `anyhow` + `thiserror` | 1 / 2 | Error handling |
-| `portable-pty` | 0.9 | PTY execution |
-| `icy_sixel` | 0.1 | Sixel image encoding |
-| `comrak` | 0.50 | (available but not primary parser) |
+| crossterm | 0.29 | Terminal IO, events, cursor, styling |
+| clap | 4 | CLI argument parsing (derive) |
+| syntect | 5 | Syntax highlighting |
+| image | 0.25 | Image loading, GIF decoding |
+| fast_image_resize | 5 | High-performance image resizing |
+| tokio + tokio-tungstenite | 1 / 0.28 | Async WebSocket server |
+| resvg | 0.47 | SVG rendering (Mermaid diagrams) |
+| figlet-rs | 0.1 | FIGlet ASCII art generation |
+| serde + serde_yml | 1 / 0.0.12 | Theme YAML parsing |
+| anyhow + thiserror | 1 / 2 | Error handling |
+| portable-pty | 0.9 | PTY execution |
+| icy_sixel | 0.1 | Sixel image encoding |
