@@ -102,13 +102,17 @@ impl Presenter {
     ///
     /// If the terminal is wide enough (>100 columns), a third section of
     /// markdown directives is shown below the two columns.
-    pub(crate) fn render_help_buf(&self, w: &mut impl Write) -> Result<()> {
+    pub(crate) fn render_help_buf(&mut self, w: &mut impl Write) -> Result<()> {
         let tw = self.width as usize;
         let th = self.height as usize;
 
-        // Clear any Kitty images so they don't show through the help overlay
+        // Clear any Kitty images so they don't show through the help overlay.
+        // Also invalidate caches so images are re-transmitted when returning
+        // to Normal mode.
         if self.image_protocol == ImageProtocol::Kitty {
             w.write_all(KITTY_CLEAR_IMAGES)?;
+            self.kitty_transmitted.clear();
+            self.image_cache.clear();
         }
 
         // Fill background for all rows
@@ -341,7 +345,7 @@ impl Presenter {
     ///
     /// The grid fills top-down then left-to-right (first column fills
     /// vertically before the second column begins).
-    pub(crate) fn render_overview_buf(&self, w: &mut impl Write) -> Result<()> {
+    pub(crate) fn render_overview_buf(&mut self, w: &mut impl Write) -> Result<()> {
         let tw = self.width as usize;
         let th = self.height as usize;
 
@@ -351,9 +355,12 @@ impl Presenter {
             write!(w, "{}", " ".repeat(tw))?;
         }
 
-        // Clear Kitty images if applicable
+        // Clear Kitty images if applicable.  Also invalidate caches so images
+        // are re-transmitted when returning to Normal mode.
         if self.image_protocol == ImageProtocol::Kitty {
             w.write_all(KITTY_CLEAR_IMAGES)?;
+            self.kitty_transmitted.clear();
+            self.image_cache.clear();
         }
 
         queue!(w, cursor::MoveTo(2, 1), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;

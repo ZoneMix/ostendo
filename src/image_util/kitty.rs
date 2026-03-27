@@ -106,9 +106,11 @@ pub fn placement_escape(id: u32, cols: usize, rows: usize) -> String {
     )
 }
 
-/// Delete ALL images (placements + data). Use on slide change or exit.
+/// Delete ALL visible image placements. Use on slide change or exit.
+/// Uses `d=a` which deletes all visible placements. For full cleanup
+/// including image data, use per-ID `d=I` deletes first.
 pub fn delete_all_escape() -> String {
-    "\x1b_Ga=d,d=A,q=2;AAAA\x1b\\".to_string()
+    "\x1b_Ga=d,d=a,q=2\x1b\\".to_string()
 }
 
 #[cfg(test)]
@@ -205,7 +207,7 @@ mod tests {
     fn test_delete_all_escape() {
         let esc = delete_all_escape();
         assert!(esc.contains("a=d"));
-        assert!(esc.contains("d=A"));
+        assert!(esc.contains("d=a"));
     }
 
     #[test]

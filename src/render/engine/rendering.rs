@@ -85,6 +85,36 @@ impl Presenter {
             self.apply_font_change(target)?;
         }
 
+        // --- Pre-render Kitty Image Cleanup ---
+        // Clear Kitty images when the display state changes and there are
+        // transmitted Kitty images to delete.  The check uses
+        // `!self.kitty_transmitted.is_empty()` instead of
+        // `self.image_protocol == Kitty` because per-slide `image_render: kitty`
+        // directives can force Kitty protocol even when the global protocol is
+        // iTerm2/Sixel/etc.  Delete commands are flushed via a separate stdout
+        // lock before the sync block so Kitty processes them first.
+        let need_kitty_clear = !self.kitty_transmitted.is_empty()
+            && (self.last_rendered_slide != Some(self.current)
+                || self.last_rendered_scroll != self.scroll_offset
+                || self.last_rendered_width != self.width
+                || self.last_rendered_height != self.height
+                || self.last_rendered_scale != self.global_scale
+                || self.last_rendered_image_scale != self.image_scale_offset
+                || self.gif_current_frame != self.last_rendered_gif_frame);
+
+        if need_kitty_clear {
+            let stdout_raw = io::stdout();
+            let mut raw = stdout_raw.lock();
+            for img_id in &self.kitty_transmitted {
+                let del = format!("\x1b_Ga=d,d=I,i={},q=2;AAAA\x1b\\", img_id);
+                raw.write_all(del.as_bytes())?;
+            }
+            raw.write_all(KITTY_CLEAR_IMAGES)?;
+            raw.flush()?;
+            self.kitty_transmitted.clear();
+            self.image_cache.clear();
+        }
+
         // --- Begin Synchronized Update Block ---
         // Everything from here until EndSynchronizedUpdate is buffered and
         // sent to the terminal atomically, preventing visible flicker.
@@ -142,19 +172,6 @@ impl Presenter {
             // Only update status bar (timer display) without re-emitting images
             return self.render_status_bar_only(&mut w);
         }
-
-        // Track whether we need to clear old Kitty images.  Only clear when
-        // images actually need re-positioning/re-sizing — NOT on every
-        // needs_full_redraw (which fires on animation ticks and would cause
-        // visible flicker from the clear+re-emit cycle).
-        let need_kitty_clear = self.image_protocol == ImageProtocol::Kitty
-            && (self.last_rendered_slide != Some(self.current)
-                || self.last_rendered_scroll != self.scroll_offset
-                || self.last_rendered_width != self.width
-                || self.last_rendered_height != self.height
-                || self.last_rendered_scale != self.global_scale
-                || self.last_rendered_image_scale != self.image_scale_offset
-                || self.gif_current_frame != self.last_rendered_gif_frame);
 
         // --- Content Assembly ---
         // Build the virtual buffer line by line. The buffer is a Vec<StyledLine>
@@ -236,7 +253,8 @@ impl Presenter {
         // Bullets
         // When ascii_title + column_layout are both active, skip top-level
         // bullet rendering — bullets are inside columns instead.
-        for bullet in if ascii_title_in_columns { &[][..] } else { &slide.bullets[..] } {
+        let bullet_list = if ascii_title_in_columns { &[][..] } else { &slide.bullets[..] };
+        for (bi, bullet) in bullet_list.iter().enumerate() {
             let indent = bullet_indent(bullet.depth);
             let wrapped = textwrap_simple(&bullet.text, content_width.saturating_sub(indent.len() + 2));
             for (i, wline) in wrapped.iter().enumerate() {
@@ -255,8 +273,32 @@ impl Presenter {
                 }
                 lines.push(line);
             }
+            // Add spacing between consecutive top-level bullets for readability
+            if bullet.depth == 0 && bi + 1 < bullet_list.len() {
+                lines.push(StyledLine::empty());
+            }
         }
         if !slide.bullets.is_empty() {
+            lines.push(StyledLine::empty());
+        }
+
+        // Trailing text (plain text lines appearing after bullets)
+        if !slide.trailing_text.is_empty() {
+            let sub_width = content_width.saturating_sub(2);
+            for text in &slide.trailing_text {
+                let wrapped = textwrap_simple(text, sub_width);
+                for wline in &wrapped {
+                    let mut line = StyledLine::empty();
+                    line.push(StyledSpan::new(&pad));
+                    let inline_spans = crate::markdown::parser::parse_inline_formatting(
+                        wline, self.text_color, self.code_bg_color,
+                    );
+                    for span in inline_spans {
+                        line.push(span);
+                    }
+                    lines.push(line);
+                }
+            }
             lines.push(StyledLine::empty());
         }
 
@@ -314,42 +356,68 @@ impl Presenter {
                 lines.push(ll);
             }
 
-            // Highlighted code lines (truncated to block_width)
+            // Highlighted code lines — wrap long lines instead of truncating.
+            // Characters that don't fit the first line continue on the next
+            // with a 2-char extra indent to signal continuation.
             let code_content_width = block_width.saturating_sub(inner_pad);
             let highlighted = self.highlighter.highlight(&cb.code, &cb.language);
             for hline in &highlighted {
-                let mut line = StyledLine::empty();
-                line.push(StyledSpan::new(&pad));
-                line.push(StyledSpan::new("    ").with_bg(self.code_bg_color)); // left padding
-                let mut line_char_count = inner_pad;
+                // Flatten highlighted spans into (char, fg_color) for wrapping
+                let mut flat: Vec<(char, crossterm::style::Color)> = Vec::new();
                 for span in hline {
-                    let txt = span.text.trim_end_matches('\n');
-                    let span_w = unicode_width::UnicodeWidthStr::width(txt);
-                    let remaining = code_content_width.saturating_sub(line_char_count.saturating_sub(inner_pad));
-                    if remaining == 0 {
-                        break;
-                    }
-                    if span_w <= remaining {
-                        line.push(StyledSpan::new(txt)
-                            .with_fg(span.fg)
-                            .with_bg(self.code_bg_color));
-                        line_char_count += span_w;
-                    } else {
-                        let truncated = truncate_to_width(txt, remaining);
-                        let tw = unicode_width::UnicodeWidthStr::width(truncated.as_str());
-                        line.push(StyledSpan::new(&truncated)
-                            .with_fg(span.fg)
-                            .with_bg(self.code_bg_color));
-                        line_char_count += tw;
-                        break;
+                    for ch in span.text.trim_end_matches('\n').chars() {
+                        flat.push((ch, span.fg));
                     }
                 }
-                // Pad to block_width with code_bg
-                let pad_needed = block_width.saturating_sub(line_char_count);
-                if pad_needed > 0 {
-                    line.push(StyledSpan::new(&" ".repeat(pad_needed)).with_bg(self.code_bg_color));
+
+                let mut pos = 0;
+                let mut first = true;
+                loop {
+                    let left_pad_str = if first { "    " } else { "      " };
+                    let left_pad_width = if first { inner_pad } else { inner_pad + 2 };
+                    let avail = code_content_width.saturating_sub(if first { 0 } else { 2 });
+
+                    let mut line = StyledLine::empty();
+                    line.push(StyledSpan::new(&pad));
+                    line.push(StyledSpan::new(left_pad_str).with_bg(self.code_bg_color));
+                    let mut w = 0usize;
+                    let mut cur_text = String::new();
+                    let mut cur_fg = self.text_color;
+                    while pos < flat.len() {
+                        let (ch, fg) = flat[pos];
+                        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                        if w + cw > avail { break; }
+                        // Flush on color change
+                        if !cur_text.is_empty() && fg != cur_fg {
+                            line.push(StyledSpan::new(&cur_text)
+                                .with_fg(cur_fg).with_bg(self.code_bg_color));
+                            cur_text.clear();
+                        }
+                        cur_fg = fg;
+                        cur_text.push(ch);
+                        w += cw;
+                        pos += 1;
+                    }
+                    if !cur_text.is_empty() {
+                        line.push(StyledSpan::new(&cur_text)
+                            .with_fg(cur_fg).with_bg(self.code_bg_color));
+                    }
+                    let total_cols = left_pad_width + w;
+                    let fill = block_width.saturating_sub(total_cols);
+                    if fill > 0 {
+                        line.push(StyledSpan::new(&" ".repeat(fill)).with_bg(self.code_bg_color));
+                    }
+                    lines.push(line);
+                    first = false;
+                    if pos >= flat.len() { break; }
                 }
-                lines.push(line);
+                // Empty source line: emit one blank code line
+                if flat.is_empty() {
+                    let mut line = StyledLine::empty();
+                    line.push(StyledSpan::new(&pad));
+                    line.push(StyledSpan::new(&" ".repeat(block_width)).with_bg(self.code_bg_color));
+                    lines.push(line);
+                }
             }
 
             // Vertical padding bottom (empty line with code_bg)
@@ -546,7 +614,10 @@ impl Presenter {
             let proto_key = protocol_cache_key(effective_protocol);
             // Apply image_scale directive + runtime offset
             let effective_scale = (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
-            let img_width = (content_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
+            // Right-positioned images overlay content, so scale from terminal width
+            // (not content_width which is narrow at large font sizes).
+            let img_base_width = if img.position == ImagePosition::Right { tw } else { content_width };
+            let img_width = (img_base_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
             // Right-positioned images can use the full content height (they overlay text)
             let height_divisor = if img.position == ImagePosition::Right { 1.0 } else { 2.0 };
             let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / height_divisor).max(1.0) as usize;
@@ -556,6 +627,7 @@ impl Presenter {
             let cache_key = ImageCacheKey {
                 path: img.path.clone(),
                 render_width: img_width,
+                terminal_width: tw,
                 protocol: proto_key,
                 gif_frame_index: frame_idx,
                 color_override: img.color_override.clone(),
@@ -574,8 +646,10 @@ impl Presenter {
                 // img_extra_margin centers within content when img < content_width)
                 let img_extra_margin = content_width.saturating_sub(img_width) / 2;
                 let img_pad = " ".repeat(margin + img_extra_margin);
+                // Pass img_width + pad so render_slide_image computes
+                // display_width = (img_width + pad) - pad = img_width correctly.
                 let rendered = render_slide_image(
-                    img, img_width, img_max_height, &img_pad,
+                    img, img_width + img_pad.len(), img_max_height, &img_pad,
                     self.accent_color, self.text_color,
                     effective_protocol, self.bg_color,
                     &self.window_size, preloaded,
@@ -815,6 +889,22 @@ impl Presenter {
             }
         }
 
+        // --- Scroll Overflow Indicator ---
+        // When content extends beyond the visible viewport, render a dimmed
+        // down-arrow on the right edge of the last visible content row so the
+        // presenter knows there is more content below.
+        let has_overflow_below = lines.len() > visible_end;
+        if has_overflow_below && !self.pending_dissolve_in && visible_end > visible_start {
+            let indicator = "\u{25BC}"; // BLACK DOWN-POINTING TRIANGLE
+            let indicator_col = tw.saturating_sub(2) as u16;
+            let last_row = (status_bar_rows + (visible_end - visible_start) - 1) as u16;
+            queue!(w, cursor::MoveTo(indicator_col, last_row))?;
+            queue!(w, SetForegroundColor(self.accent_color))?;
+            queue!(w, crossterm::style::SetAttribute(crossterm::style::Attribute::Dim))?;
+            write!(w, "{indicator}")?;
+            queue!(w, crossterm::style::SetAttribute(crossterm::style::Attribute::NormalIntensity))?;
+        }
+
         // Cache current buffer for transition source on next slide change.
         // Moved here (after the last read of `lines`) to avoid a full clone.
         self.last_rendered_buffer = lines;
@@ -921,12 +1011,7 @@ impl Presenter {
         }
 
         // --- Protocol Image Emission ---
-        // Clear old Kitty images right before placing new content, so the
-        // delete and new frame appear atomically within the synchronized update.
-        if need_kitty_clear {
-            w.write_all(KITTY_CLEAR_IMAGES)?;
-        }
-
+        // Kitty image deletes were already sent before the sync block.
         // Write protocol image data after line rendering (Kitty/iTerm2/Sixel).
         // Skip during transitions/entrance animations and dissolve-in — emitting
         // images on every animation frame causes visible flicker from rapid
@@ -937,14 +1022,22 @@ impl Presenter {
         );
         if !self.pending_dissolve_in && !animation_active {
             for (escape_data, line_offset, img_cols, img_pos) in &pending_protocol_images {
-                if *line_offset >= visible_start && *line_offset < visible_end {
-                    let display_row = line_offset - visible_start;
-                    let screen_row = (status_bar_rows + display_row) as u16;
-                    if *img_pos == ImagePosition::Right && *img_cols > 0 {
-                        // Right-aligned: position image flush to right edge
+                if *img_pos == ImagePosition::Right {
+                    // Right-positioned images overlay content from the top of the
+                    // visible area.  They are always placed at the first content
+                    // row regardless of scroll offset or vertical centering.
+                    let screen_row = status_bar_rows as u16;
+                    if *img_cols > 0 {
                         let right_col = tw.saturating_sub(*img_cols) as u16;
                         queue!(w, cursor::MoveTo(right_col, screen_row))?;
-                    } else if *img_cols > 0 {
+                    } else {
+                        queue!(w, cursor::MoveTo(0, screen_row))?;
+                    }
+                    write!(w, "{}", escape_data)?;
+                } else if *line_offset >= visible_start && *line_offset < visible_end {
+                    let display_row = line_offset - visible_start;
+                    let screen_row = (status_bar_rows + display_row) as u16;
+                    if *img_cols > 0 {
                         // Center image within terminal width
                         let center_col = (tw.saturating_sub(*img_cols) / 2) as u16;
                         queue!(w, cursor::MoveTo(center_col, screen_row))?;
@@ -954,6 +1047,36 @@ impl Presenter {
                     }
                     write!(w, "{}", escape_data)?;
                 }
+            }
+        }
+
+        // --- Fill any remaining unfilled rows at the very bottom ---
+        // The content area + footer + notes may not cover all terminal rows.
+        // Fill from after the notes panel (or content area if no notes) down
+        // to the bottom of the terminal. Skip the last row only if the
+        // command/goto bar is active (rendered just above this block).
+        {
+            let notes_end = if self.show_notes && !slide.notes.is_empty() {
+                // Notes panel occupies 7 rows at the bottom: th-7..th-1
+                th
+            } else {
+                // No notes: content fills rows 0..content_area, but reserved_bottom
+                // rows below content_area may be unfilled.
+                status_bar_rows + content_area
+            };
+            let fill_end = if self.mode == Mode::Command || self.mode == Mode::Goto {
+                th.saturating_sub(1)
+            } else {
+                th
+            };
+            for row in notes_end..fill_end {
+                let fill_bg = if has_gradient {
+                    self.row_bg_color(row.saturating_sub(status_bar_rows), gradient_span.max(1))
+                } else {
+                    self.bg_color
+                };
+                queue!(w, cursor::MoveTo(0, row as u16), SetBackgroundColor(fill_bg))?;
+                write!(w, "{:width$}", "", width = tw)?;
             }
         }
 

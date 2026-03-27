@@ -166,6 +166,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut block_quotes: Vec<BlockQuote> = Vec::new();
     let mut table_state: Option<TableParseState> = None;
     let mut blockquote_lines: Vec<String> = Vec::new();
+    let mut trailing_text: Vec<String> = Vec::new();
 
     for line in raw.lines() {
         // ── Multi-line block state handling ──
@@ -505,6 +506,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
                     bullets: Vec::new(),
                     code_blocks: Vec::new(),
                     image: None,
+                    text_lines: Vec::new(),
                 }).collect();
                 column_ratios = Some(ratios);
             }
@@ -650,11 +652,22 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             continue;
         }
 
-        // Subtitle: first non-empty, non-directive line after title
+        // Plain text: non-empty, non-directive lines after the title.
+        // - First such line (before any bullets) becomes the subtitle.
+        // - Inside a column context, pushed to that column's text_lines.
+        // - After bullets have started (outside columns), pushed to trailing_text.
         let stripped = line.trim();
-        if !stripped.is_empty() && title_found && !subtitle_found {
-            subtitle = stripped.to_string();
-            subtitle_found = true;
+        if !stripped.is_empty() && title_found {
+            if let Some(col_idx) = current_column {
+                if col_idx < column_contents.len() {
+                    column_contents[col_idx].text_lines.push(stripped.to_string());
+                }
+            } else if !bullets.is_empty() {
+                trailing_text.push(stripped.to_string());
+            } else if !subtitle_found {
+                subtitle = stripped.to_string();
+                subtitle_found = true;
+            }
         }
     }
 
@@ -764,6 +777,7 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         diagram_blocks,
         theme_override,
         font_transition,
+        trailing_text,
     };
 
     (slide, current_section)

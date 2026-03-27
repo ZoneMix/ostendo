@@ -250,12 +250,15 @@ end tell"#,
         if self.font_change_is_slide_transition != FontTransitionMode::None {
             let old_buf = self.last_rendered_buffer.clone();
             if !old_buf.is_empty() {
-                // Clear Kitty images before the transition
+                // Clear Kitty images before the transition, and invalidate
+                // caches so images are re-transmitted at the new font size.
                 if self.image_protocol == ImageProtocol::Kitty {
                     let stdout = io::stdout();
                     let mut pre = stdout.lock();
                     pre.write_all(KITTY_CLEAR_IMAGES)?;
                     pre.flush()?;
+                    self.kitty_transmitted.clear();
+                    self.image_cache.clear();
                 }
 
                 // For Ghostty, fire the keystrokes now — the dissolve
@@ -346,10 +349,12 @@ end tell"#,
                                     }
                                 }
                                 if col < tw {
-                                    for _ in 0..tw - col { write!(fw, " ")?; }
+                                    queue!(fw, SetBackgroundColor(row_bg))?;
+                                    write!(fw, "{:width$}", "", width = tw - col)?;
                                 }
                             } else {
-                                for _ in 0..tw { write!(fw, " ")?; }
+                                queue!(fw, SetBackgroundColor(row_bg))?;
+                                write!(fw, "{:width$}", "", width = tw)?;
                             }
                         }
                         queue!(fw, EndSynchronizedUpdate, ResetColor)?;
@@ -425,6 +430,8 @@ end tell"#,
                     if self.image_protocol == ImageProtocol::Kitty {
                         pre.write_all(KITTY_CLEAR_IMAGES)?;
                         pre.flush()?;
+                        self.kitty_transmitted.clear();
+                        self.image_cache.clear();
                     }
 
                     if !skip_stepping {
@@ -469,6 +476,22 @@ end tell"#,
         self.window_size = WindowSize::query();
         self.width = self.window_size.columns;
         self.height = self.window_size.rows;
+        // Re-send OSC 11 terminal bg so newly created cells from the font
+        // resize inherit the correct theme bg instead of the old color.
+        Self::set_terminal_bg(self.bg_color);
+        // Full screen clear at new dimensions to prevent bg color bands
+        // where old-dimension cells had a different background.
+        {
+            let stdout = io::stdout();
+            let mut pre = stdout.lock();
+            queue!(pre, BeginSynchronizedUpdate)?;
+            for row in 0..self.height {
+                queue!(pre, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                write!(pre, "{:width$}", "", width = self.width as usize)?;
+            }
+            queue!(pre, EndSynchronizedUpdate, ResetColor)?;
+            pre.flush()?;
+        }
         self.needs_full_redraw = true;
         Ok(())
     }
@@ -588,13 +611,20 @@ end tell"#,
             if is_last {
                 let dis_tw = self.width as usize;
                 for (escape_data, line_offset, img_cols, img_pos) in pending_protocol_images {
-                    if *line_offset >= visible_start && *line_offset < visible_end {
-                        let display_row = line_offset - visible_start;
-                        let screen_row = (status_bar_rows + display_row) as u16;
-                        if *img_pos == ImagePosition::Right && *img_cols > 0 {
+                    if *img_pos == ImagePosition::Right {
+                        // Right-positioned images always at top of content area
+                        let screen_row = status_bar_rows as u16;
+                        if *img_cols > 0 {
                             let right_col = dis_tw.saturating_sub(*img_cols) as u16;
                             queue!(dw, cursor::MoveTo(right_col, screen_row))?;
-                        } else if *img_cols > 0 {
+                        } else {
+                            queue!(dw, cursor::MoveTo(0, screen_row))?;
+                        }
+                        write!(dw, "{}", escape_data)?;
+                    } else if *line_offset >= visible_start && *line_offset < visible_end {
+                        let display_row = line_offset - visible_start;
+                        let screen_row = (status_bar_rows + display_row) as u16;
+                        if *img_cols > 0 {
                             let center_col = (dis_tw.saturating_sub(*img_cols) / 2) as u16;
                             queue!(dw, cursor::MoveTo(center_col, screen_row))?;
                         } else {

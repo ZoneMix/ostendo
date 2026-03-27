@@ -448,6 +448,7 @@ impl Presenter {
             KeyCode::Char(':') => {
                 self.mode = Mode::Command;
                 self.command_buf.clear();
+                self.needs_full_redraw = true;
             }
             _ => {}
         }
@@ -461,10 +462,14 @@ impl Presenter {
     /// `Ok(false)` since commands cannot quit the application directly.
     pub(crate) fn handle_command_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.needs_full_redraw = true;
+            }
             KeyCode::Enter => {
                 let cmd = self.command_buf.clone();
                 self.mode = Mode::Normal;
+                self.needs_full_redraw = true;
                 self.execute_command(&cmd);
             }
             KeyCode::Backspace => { self.command_buf.pop(); }

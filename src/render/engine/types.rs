@@ -40,6 +40,10 @@ pub(crate) struct ImageCacheKey {
     pub(crate) path: PathBuf,
     /// Target width in terminal columns (changes with scale/resize).
     pub(crate) render_width: usize,
+    /// Terminal width at render time — font changes alter tw, which changes
+    /// the centering pad baked into ASCII art lines. Without this field,
+    /// stale cached lines rendered at a different tw would be off-center.
+    pub(crate) terminal_width: usize,
     /// Numeric identifier for the image protocol (0=Kitty, 1=iTerm2, etc.).
     pub(crate) protocol: u8,
     /// For animated GIFs, which frame this entry represents. Always 0 for static images.

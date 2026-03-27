@@ -178,6 +178,10 @@ pub struct Slide {
     /// size changes take effect instantly without an animated transition.
     /// Set via `<!-- font_transition: none -->`.
     pub font_transition: Option<String>,
+    /// Plain text lines that appear after the bullet list on a slide.
+    /// Captured by the parser when a non-directive, non-heading text line
+    /// follows an existing bullet list (outside of a column context).
+    pub trailing_text: Vec<String>,
 }
 
 /// Describes a multi-column layout for a slide.
@@ -234,6 +238,9 @@ pub struct ColumnContent {
     pub code_blocks: Vec<CodeBlock>,
     /// Optional image to render as ASCII art within this column.
     pub image: Option<ColumnImage>,
+    /// Plain text lines (e.g., column headers) that appear before bullets
+    /// within this column.
+    pub text_lines: Vec<String>,
 }
 
 /// A single bullet point item from a Markdown list.
@@ -454,6 +461,7 @@ impl Default for Slide {
             diagram_blocks: Vec::new(),
             theme_override: None,
             font_transition: None,
+            trailing_text: Vec::new(),
         }
     }
 }
@@ -592,6 +600,7 @@ mod tests {
                 scale: Some(80),
                 color: None,
             }),
+            text_lines: Vec::new(),
         };
         assert!(col.image.is_some());
         let img = col.image.unwrap();
@@ -605,6 +614,7 @@ mod tests {
             bullets: vec![Bullet { text: "item".to_string(), depth: 0 }],
             code_blocks: Vec::new(),
             image: None,
+            text_lines: Vec::new(),
         };
         assert!(col.image.is_none());
         assert_eq!(col.bullets.len(), 1);

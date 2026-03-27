@@ -68,8 +68,9 @@ pub use types::PresenterConfig;
 pub(crate) use types::*;
 pub(crate) use output::*;
 
-/// Kitty Graphics Protocol: delete all images (quiet mode).
-const KITTY_CLEAR_IMAGES: &[u8] = b"\x1b_Ga=d,d=a,q=2\x1b\\";
+/// Kitty Graphics Protocol: delete all visible placements (quiet mode).
+/// The `;AAAA` payload is required — Kitty APC format expects `\x1b_G<keys>;<data>\x1b\\`.
+const KITTY_CLEAR_IMAGES: &[u8] = b"\x1b_Ga=d,d=a,q=2;AAAA\x1b\\";
 
 /// Build a Kitty RC escape sequence to set font size to an absolute value.
 fn kitty_font_escape(size: f64) -> String {
@@ -503,7 +504,7 @@ impl Presenter {
             notes_scroll: 0,
             show_fullscreen: false,
             show_theme_name: false,
-            show_sections: true,
+            show_sections: false,
             scroll_offset: 0,
             timer_start: None,
             width: w,
@@ -644,6 +645,21 @@ impl Presenter {
         // Set terminal default background to theme bg so cells created by
         // font-change resizes inherit the correct color (no black flicker).
         Self::set_terminal_bg(self.bg_color);
+        // Full screen clear on enter — ensures the alternate screen buffer is
+        // filled with the correct theme bg, especially when resuming from a
+        // save state where the starting slide may have a per-slide theme override.
+        {
+            let tw = self.width as usize;
+            let clear_stdout = io::stdout();
+            let mut cw = BufWriter::with_capacity(8 * 1024, clear_stdout.lock());
+            queue!(cw, BeginSynchronizedUpdate)?;
+            for row in 0..self.height {
+                queue!(cw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                write!(cw, "{:width$}", "", width = tw)?;
+            }
+            queue!(cw, EndSynchronizedUpdate, ResetColor)?;
+            cw.flush()?;
+        }
         // Images are rendered and transmitted LAZILY on first use per slide
         // (in render_frame's or_insert_with closure). This keeps startup instant
         // instead of blocking 5-10s encoding all images upfront.

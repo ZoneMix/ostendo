@@ -31,8 +31,12 @@ impl Presenter {
     /// - `lines` — The virtual buffer to append output lines to.
     pub(crate) fn render_exec_output(&self, pad: &str, lines: &mut Vec<StyledLine>) {
         if let Some(ref output) = self.exec_output {
+            // Compute wrap width that respects both left and right margins.
+            // pad.len() is the left margin; apply a symmetric right margin so
+            // output stays within the content area instead of running to the edge.
+            let right_margin = pad.len();
             let prefix_width = pad.len() + 2; // pad + "  "
-            let wrap_width = (self.width as usize).saturating_sub(prefix_width + 1);
+            let wrap_width = (self.width as usize).saturating_sub(prefix_width + right_margin + 1);
             lines.push(StyledLine::empty());
             let mut oh = StyledLine::empty();
             oh.push(StyledSpan::new(pad));
@@ -191,21 +195,92 @@ impl Presenter {
             return;
         }
 
-        // Try splitting into words, rendering each word on its own FIGlet line
+        // Try progressive word grouping: pack words into the fewest FIGlet
+        // lines possible.  e.g. "Session 1: Patient Denial" tries:
+        //   ["Session 1:", "Patient Denial"] before ["Session", "1:", "Patient", "Denial"]
         let words: Vec<&str> = title.split_whitespace().collect();
         if words.len() > 1 {
+            // Greedy grouping: start a group, keep adding words while FIGlet fits
+            let mut groups: Vec<String> = Vec::new();
+            let mut group_renders: Vec<String> = Vec::new();
+            let mut i = 0;
             let mut all_fit = true;
-            let mut word_renders: Vec<String> = Vec::new();
-            for word in &words {
-                if let Some(rendered_str) = fits(word) {
-                    word_renders.push(rendered_str);
+            while i < words.len() {
+                let mut group = words[i].to_string();
+                let mut best_render = fits(&group);
+                let mut j = i + 1;
+                while j < words.len() {
+                    let candidate = format!("{} {}", group, words[j]);
+                    if let Some(rendered) = fits(&candidate) {
+                        group = candidate;
+                        best_render = Some(rendered);
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(rendered) = best_render {
+                    groups.push(group);
+                    group_renders.push(rendered);
+                    i = j;
                 } else {
                     all_fit = false;
                     break;
                 }
             }
+            // Post-process: merge orphan groups (single short word or trailing
+            // punctuation) back into the previous group so tokens like "2:" never
+            // render alone as a giant FIGlet line.
+            if all_fit && groups.len() > 1 {
+                let mut merged_groups: Vec<String> = Vec::new();
+                let mut merged_renders: Vec<Option<String>> = Vec::new();
+                for (idx, group) in groups.iter().enumerate() {
+                    let word_count = group.split_whitespace().count();
+                    let is_orphan = word_count == 1
+                        && (group.len() <= 3
+                            || group.ends_with(':')
+                            || group.ends_with(';')
+                            || group.ends_with(',')
+                            || group.ends_with('.')
+                            || group.ends_with('!')
+                            || group.ends_with('?'));
+                    if is_orphan && idx > 0 {
+                        // Merge with previous group
+                        let prev_idx = merged_groups.len() - 1;
+                        let combined = format!("{} {}", merged_groups[prev_idx], group);
+                        let combined_render = fits(&combined);
+                        merged_groups[prev_idx] = combined;
+                        merged_renders[prev_idx] = combined_render;
+                    } else {
+                        merged_groups.push(group.clone());
+                        merged_renders.push(Some(group_renders[idx].clone()));
+                    }
+                }
+                groups = merged_groups;
+                // Rebuild group_renders from merged_renders (None = use plain bold fallback)
+                let final_renders = merged_renders;
+
+                for (idx, rendered_opt) in final_renders.iter().enumerate() {
+                    if let Some(rendered_str) = rendered_opt {
+                        for fig_line in rendered_str.lines() {
+                            let mut line = StyledLine::empty();
+                            line.push(StyledSpan::new(pad));
+                            line.push(StyledSpan::new(fig_line).with_fg(self.accent_color).bold());
+                            line.content_type = LineContentType::FigletTitle;
+                            lines.push(line);
+                        }
+                    } else {
+                        // Merged group doesn't fit FIGlet -- render as plain bold
+                        let mut line = StyledLine::empty();
+                        line.push(StyledSpan::new(pad));
+                        line.push(StyledSpan::new(&groups[idx]).with_fg(self.accent_color).bold());
+                        lines.push(line);
+                    }
+                }
+                return;
+            }
             if all_fit {
-                for rendered_str in &word_renders {
+                for rendered_str in &group_renders {
                     for fig_line in rendered_str.lines() {
                         let mut line = StyledLine::empty();
                         line.push(StyledSpan::new(pad));

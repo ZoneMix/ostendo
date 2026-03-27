@@ -96,6 +96,27 @@ impl Presenter {
                 }
             }
 
+            // Column text lines (e.g., headers) rendered before bullets.
+            // Each line is word-wrapped and gets bold inline formatting.
+            for text in &content.text_lines {
+                let wrap_width = cw.saturating_sub(2);
+                if wrap_width == 0 { continue; }
+                let wrapped = textwrap_simple(text, wrap_width);
+                for wline in &wrapped {
+                    let inline_spans = crate::markdown::parser::parse_inline_formatting(
+                        wline, self.text_color, self.code_bg_color,
+                    );
+                    let mut spans: Vec<StyledSpan> = Vec::new();
+                    for span in inline_spans {
+                        spans.push(span.bold());
+                    }
+                    col_rows.push((spans, false, false, false));
+                }
+            }
+            if !content.text_lines.is_empty() && !content.bullets.is_empty() {
+                col_rows.push((vec![StyledSpan::new(&" ".repeat(cw))], false, false, false));
+            }
+
             // Bullets with inline formatting, themed markers, and word wrapping.
             // When column text_scale is set and this is not an image column,
             // wrap width is divided by the scale factor (each char takes scale columns)
