@@ -1,7 +1,7 @@
 # Theme List
 
 29 built-in themes in `themes/*.yaml`, embedded at compile time via `build.rs`.
-All themes pass WCAG 2.0 contrast validation (text:bg >= 4.5:1, accent:bg >= 3.0:1).
+All themes pass WCAG 2.0 contrast validation (text:bg >= 4.5:1, accent:bg >= 3.0:1, code_bg:bg >= 1.2:1).
 
 ## Dark Themes
 
@@ -30,6 +30,7 @@ All themes pass WCAG 2.0 contrast validation (text:bg >= 4.5:1, accent:bg >= 3.0
 | `sunset_warm` | Sunset Warm | `#1A0A0A` | `#FF6B35` | `#E0E0E0` |
 | `twilight` | Twilight | `#14101E` | `#A78BDA` | `#D8D0E8` |
 | `vaporwave` | Vaporwave | `#1a0033` | `#FF6EC7` | `#E0E0FF` |
+| `sunray` | Sunray | `#45005C`| `#FFD37A` | `#FBEBFF` |
 
 ## Light Themes
 

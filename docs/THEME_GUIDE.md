@@ -23,6 +23,7 @@
 | `solarized` | Solarized | #002B36 (base03) | #B58900 (yellow) | #839496 | Classic, readable |
 | `sunset_warm` | Sunset Warm | #1A0A0A (dark warm) | #FF6B35 (orange) | #E0E0E0 | Warm, energetic |
 | `vaporwave` | Vaporwave | #1A0033 (deep purple) | #FF6EC7 (pink) | #E0E0FF | Aesthetic, creative |
+| `sunray` | Sunray | #45005C (purple warm) | #FFD37A (cream orange) | #FBEBFF | Aesthetic, rising light |
 
 ### Light Themes
 
