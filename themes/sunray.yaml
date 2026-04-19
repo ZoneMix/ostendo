@@ -1,0 +1,17 @@
+name: "Sunray"
+slug: "sunray"
+colors:
+  background: "#45005C"
+  accent: "#FFD37A"
+  text: "#FBEBFF"
+  code_background: "#673172"
+fonts:
+  heading: "Inter"
+  body: "Space Mono"
+  code: "Space Mono"
+layout: "left"
+visual_style: "gradient"
+gradient:
+  from: "#45005C"
+  to: "#4d3700"
+  direction: "vertical"
