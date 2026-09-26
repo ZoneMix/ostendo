@@ -37,15 +37,15 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --profile dist --target ${{ matrix.target }}
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
-        run: cp target/${{ matrix.target }}/release/ostendo ${{ matrix.name }}
+        run: cp target/${{ matrix.target }}/dist/ostendo ${{ matrix.name }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
-        run: cp target/${{ matrix.target }}/release/ostendo.exe ${{ matrix.name }}
+        run: cp target/${{ matrix.target }}/dist/ostendo.exe ${{ matrix.name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
