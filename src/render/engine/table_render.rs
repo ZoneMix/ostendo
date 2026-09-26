@@ -35,7 +35,9 @@ impl Presenter {
         use crate::presentation::TableAlign;
 
         let num_cols = table.headers.len();
-        if num_cols == 0 { return; }
+        if num_cols == 0 {
+            return;
+        }
 
         // Calculate column widths based on content
         let mut col_widths: Vec<usize> = table.headers.iter().map(|h| h.len()).collect();
@@ -49,20 +51,29 @@ impl Presenter {
         // Add padding (1 space each side)
         let col_widths: Vec<usize> = col_widths.iter().map(|w| w + 2).collect();
         let total_w: usize = col_widths.iter().sum::<usize>() + num_cols + 1; // +1 for borders
-        // Ensure we don't exceed content_width
+                                                                              // Ensure we don't exceed content_width
         let _ = total_w.min(content_width);
 
         // Helper to format a cell with alignment
         let fmt_cell = |text: &str, width: usize, align: TableAlign| -> String {
             let inner_w = width.saturating_sub(2); // minus padding
-            let truncated = if text.len() > inner_w { &text[..inner_w] } else { text };
+            let truncated = if text.len() > inner_w {
+                &text[..inner_w]
+            } else {
+                text
+            };
             let pad_total = inner_w.saturating_sub(truncated.len());
             match align {
                 TableAlign::Right => format!(" {:>width$} ", truncated, width = inner_w),
                 TableAlign::Center => {
                     let left_pad = pad_total / 2;
                     let right_pad = pad_total - left_pad;
-                    format!(" {}{}{} ", " ".repeat(left_pad), truncated, " ".repeat(right_pad))
+                    format!(
+                        " {}{}{} ",
+                        " ".repeat(left_pad),
+                        truncated,
+                        " ".repeat(right_pad)
+                    )
                 }
                 TableAlign::Left => format!(" {:<width$} ", truncated, width = inner_w),
             }
@@ -76,7 +87,11 @@ impl Presenter {
         let mut top = String::from("┌");
         for (i, w) in col_widths.iter().enumerate() {
             top.push_str(&"─".repeat(*w));
-            if i < num_cols - 1 { top.push('┬'); } else { top.push('┐'); }
+            if i < num_cols - 1 {
+                top.push('┬');
+            } else {
+                top.push('┐');
+            }
         }
         let mut tl = StyledLine::empty();
         tl.push(StyledSpan::new(pad));
@@ -100,7 +115,11 @@ impl Presenter {
         let mut sep = String::from("├");
         for (i, w) in col_widths.iter().enumerate() {
             sep.push_str(&"─".repeat(*w));
-            if i < num_cols - 1 { sep.push('┼'); } else { sep.push('┤'); }
+            if i < num_cols - 1 {
+                sep.push('┼');
+            } else {
+                sep.push('┤');
+            }
         }
         let mut sl = StyledLine::empty();
         sl.push(StyledSpan::new(pad));
@@ -115,7 +134,11 @@ impl Presenter {
             rl.push(StyledSpan::new("  "));
             rl.push(StyledSpan::new("│").with_fg(self.accent_color).dim());
             for (i, cell) in row.iter().enumerate() {
-                let w = if i < col_widths.len() { col_widths[i] } else { cell.len() + 2 };
+                let w = if i < col_widths.len() {
+                    col_widths[i]
+                } else {
+                    cell.len() + 2
+                };
                 let formatted = fmt_cell(cell, w, get_align(i));
                 rl.push(StyledSpan::new(&formatted).with_fg(self.text_color));
                 rl.push(StyledSpan::new("│").with_fg(self.accent_color).dim());
@@ -127,7 +150,11 @@ impl Presenter {
         let mut bot = String::from("└");
         for (i, w) in col_widths.iter().enumerate() {
             bot.push_str(&"─".repeat(*w));
-            if i < num_cols - 1 { bot.push('┴'); } else { bot.push('┘'); }
+            if i < num_cols - 1 {
+                bot.push('┴');
+            } else {
+                bot.push('┘');
+            }
         }
         let mut bl = StyledLine::empty();
         bl.push(StyledSpan::new(pad));

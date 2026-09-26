@@ -31,18 +31,18 @@
 //!   one full screen of terminal content. Every animation function takes buffer(s) as input
 //!   and returns a new buffer with the animation effect applied.
 
-mod transitions;
 mod entrance;
 mod loops;
+mod transitions;
 
 use std::time::Instant;
 
 use crate::render::text::StyledLine;
 
 // Re-export dispatch functions so callers don't change.
-pub use transitions::render_transition_frame;
 pub use entrance::render_entrance_frame;
 pub use loops::render_loop_frame;
+pub use transitions::render_transition_frame;
 
 /// Available transition types that play when navigating between slides.
 ///
@@ -139,10 +139,7 @@ impl AnimationState {
     /// Creates a new transition animation state.
     ///
     /// Duration varies by type: Dissolve = 600ms, Fade = 400ms, SlideLeft = 300ms.
-    pub fn new_transition(
-        kind: TransitionType,
-        old_buffer: Vec<StyledLine>,
-    ) -> Self {
+    pub fn new_transition(kind: TransitionType, old_buffer: Vec<StyledLine>) -> Self {
         let duration_ms = match kind {
             TransitionType::Dissolve => 600,
             TransitionType::Fade => 400,
@@ -274,9 +271,15 @@ mod tests {
 
     #[test]
     fn test_parse_entrance() {
-        assert_eq!(parse_entrance("typewriter"), Some(EntranceAnimation::Typewriter));
+        assert_eq!(
+            parse_entrance("typewriter"),
+            Some(EntranceAnimation::Typewriter)
+        );
         assert_eq!(parse_entrance("fade_in"), Some(EntranceAnimation::FadeIn));
-        assert_eq!(parse_entrance("slide_down"), Some(EntranceAnimation::SlideDown));
+        assert_eq!(
+            parse_entrance("slide_down"),
+            Some(EntranceAnimation::SlideDown)
+        );
         assert_eq!(parse_entrance("unknown"), None);
     }
 
@@ -290,10 +293,8 @@ mod tests {
 
     #[test]
     fn test_animation_state_progress() {
-        let state = AnimationState::new_transition(
-            TransitionType::Fade,
-            vec![StyledLine::plain("old")],
-        );
+        let state =
+            AnimationState::new_transition(TransitionType::Fade, vec![StyledLine::plain("old")]);
         // Just created -- progress should be near 0
         assert!(state.progress() < 0.5);
         assert!(!state.is_done());
@@ -301,9 +302,7 @@ mod tests {
 
     #[test]
     fn test_loop_never_done() {
-        let state = AnimationState::new_loop(
-            LoopAnimation::Pulse,
-        );
+        let state = AnimationState::new_loop(LoopAnimation::Pulse);
         assert!(!state.is_done());
     }
 
@@ -314,7 +313,8 @@ mod tests {
         let new = vec![StyledLine::plain("new content")];
         let result = render_transition_frame(&old, &new, 0.0, TransitionType::Fade, bg, 80, false);
         assert_eq!(result.len(), 1);
-        let result_end = render_transition_frame(&old, &new, 1.0, TransitionType::Fade, bg, 80, false);
+        let result_end =
+            render_transition_frame(&old, &new, 1.0, TransitionType::Fade, bg, 80, false);
         assert_eq!(result_end.len(), 1);
     }
 
@@ -324,11 +324,13 @@ mod tests {
         let old = vec![StyledLine::plain("AAAA")];
         let new = vec![StyledLine::plain("BBBB")];
         // At progress 0, all old
-        let result_0 = render_transition_frame(&old, &new, 0.0, TransitionType::Dissolve, bg, 80, false);
+        let result_0 =
+            render_transition_frame(&old, &new, 0.0, TransitionType::Dissolve, bg, 80, false);
         let text_0 = line_to_string(&result_0[0]);
         assert!(text_0.contains('A'));
         // At progress 1, all new
-        let result_1 = render_transition_frame(&old, &new, 1.0, TransitionType::Dissolve, bg, 80, false);
+        let result_1 =
+            render_transition_frame(&old, &new, 1.0, TransitionType::Dissolve, bg, 80, false);
         let text_1 = line_to_string(&result_1[0]);
         assert!(text_1.contains('B'));
     }

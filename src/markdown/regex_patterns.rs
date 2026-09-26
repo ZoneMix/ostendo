@@ -17,9 +17,8 @@ pub(crate) static FENCE_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Matches the opening of a diagram code block with an optional style parameter.
 /// Capture group: (1) style name (e.g., "bracket", "vertical").
 /// Example: `` ```diagram style=bracket ``
-pub(crate) static DIAGRAM_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^```diagram\s*(?:style=(\w+))?\s*$"#).unwrap()
-});
+pub(crate) static DIAGRAM_FENCE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^```diagram\s*(?:style=(\w+))?\s*$"#).unwrap());
 
 /// Matches the closing of a fenced code block (three backticks on their own line).
 /// Example: `` ``` ``
@@ -50,8 +49,9 @@ pub(crate) static IMAGE_POS_RE: LazyLock<Regex> =
 
 /// Matches `<!-- image_render: ascii|kitty|iterm|iterm2|sixel -->`. Forces a specific image protocol.
 /// Example: `"<!-- image_render: kitty -->"`
-pub(crate) static IMAGE_RENDER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*image_render:\s*(ascii|kitty|iterm2?|sixel)\s*-->").unwrap());
+pub(crate) static IMAGE_RENDER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*<!--\s*image_render:\s*(ascii|kitty|iterm2?|sixel)\s*-->").unwrap()
+});
 
 /// Matches `<!-- image_scale: <percent> -->`. Scales the image (1-100%).
 /// Example: `"<!-- image_scale: 50 -->"`
@@ -75,8 +75,7 @@ pub(crate) static NOTES_SINGLE_RE: LazyLock<Regex> =
 
 /// Matches the closing `-->` of a multi-line notes block.
 /// Example: `"-->"`
-pub(crate) static NOTES_END_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-->\s*$").unwrap());
+pub(crate) static NOTES_END_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-->\s*$").unwrap());
 
 /// Matches any single-line HTML comment. Used as a catch-all to skip unrecognized directives.
 /// Example: `"<!-- any comment here -->"`
@@ -136,8 +135,7 @@ pub(crate) static COLUMN_TEXT_SCALE_RE: LazyLock<Regex> =
 
 /// Matches a Markdown level-1 heading (`# Title text`). Capture group (1) is the title.
 /// Example: `"# Welcome to My Presentation"`
-pub(crate) static TITLE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^#\s+(.+)$").unwrap());
+pub(crate) static TITLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#\s+(.+)$").unwrap());
 
 /// Matches a Markdown image reference. Capture groups: (1) alt text, (2) file path.
 /// Example: `"![architecture diagram](images/arch.png)"`
@@ -184,14 +182,16 @@ pub(crate) static FOOTER_ALIGN_RE: LazyLock<Regex> =
 /// Matches `<!-- align: top|center|vcenter|hcenter -->`. Controls vertical/horizontal alignment.
 /// `center` = both axes, `vcenter` = vertical only, `hcenter` = horizontal only.
 /// Example: `"<!-- align: center -->"`
-pub(crate) static ALIGN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*align:\s*(top|center|vcenter|hcenter)\s*-->").unwrap());
+pub(crate) static ALIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*<!--\s*align:\s*(top|center|vcenter|hcenter)\s*-->").unwrap()
+});
 
 /// Matches `<!-- title_decoration: underline|box|banner|none -->`. Adds visual decoration to
 /// the slide title.
 /// Example: `"<!-- title_decoration: box -->"`
-pub(crate) static TITLE_DECORATION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*title_decoration:\s*(underline|box|banner|none)\s*-->").unwrap());
+pub(crate) static TITLE_DECORATION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*<!--\s*title_decoration:\s*(underline|box|banner|none)\s*-->").unwrap()
+});
 
 /// Matches `<!-- transition: fade|slide|dissolve -->`. Sets the transition animation when
 /// navigating to this slide.
@@ -202,15 +202,20 @@ pub(crate) static TRANSITION_RE: LazyLock<Regex> =
 /// Matches `<!-- animation: typewriter|fade_in|slide_down -->`. Sets a one-shot entrance
 /// animation that plays when the slide first appears.
 /// Example: `"<!-- animation: typewriter -->"`
-pub(crate) static ANIMATION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*animation:\s*(typewriter|fade_in|slide_down)\s*-->").unwrap());
+pub(crate) static ANIMATION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*<!--\s*animation:\s*(typewriter|fade_in|slide_down)\s*-->").unwrap()
+});
 
 /// Matches `<!-- loop_animation: <type>[(target)] -->`. Sets a continuous animation that runs
 /// while the slide is displayed. Optional `(target)` limits the effect to `figlet` or `image`.
 /// Multiple loop animations are allowed on a single slide.
 /// Example: `"<!-- loop_animation: sparkle(figlet) -->"`
-pub(crate) static LOOP_ANIMATION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*loop_animation:\s*(matrix|bounce|pulse|sparkle|spin)(?:\((\w+)\))?\s*-->").unwrap());
+pub(crate) static LOOP_ANIMATION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^\s*<!--\s*loop_animation:\s*(matrix|bounce|pulse|sparkle|spin)(?:\((\w+)\))?\s*-->",
+    )
+    .unwrap()
+});
 
 /// Matches `<!-- fullscreen -->` or `<!-- fullscreen: true|false -->`. When enabled, the slide
 /// hides the status bar and uses the full terminal height.

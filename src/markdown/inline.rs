@@ -51,7 +51,9 @@ pub fn parse_inline_formatting(
                 inner.push(chars[pos]);
                 pos += 1;
             }
-            if pos + 1 < chars.len() { pos += 2; } // skip closing **
+            if pos + 1 < chars.len() {
+                pos += 2;
+            } // skip closing **
             if !inner.is_empty() {
                 // Parse inner content for nested italic (*...*) within bold
                 let inner_chars: Vec<char> = inner.chars().collect();
@@ -69,9 +71,16 @@ pub fn parse_inline_formatting(
                             italic_text.push(inner_chars[ipos]);
                             ipos += 1;
                         }
-                        if ipos < inner_chars.len() { ipos += 1; } // skip closing *
+                        if ipos < inner_chars.len() {
+                            ipos += 1;
+                        } // skip closing *
                         if !italic_text.is_empty() {
-                            spans.push(StyledSpan::new(&italic_text).with_fg(base_fg).bold().italic());
+                            spans.push(
+                                StyledSpan::new(&italic_text)
+                                    .with_fg(base_fg)
+                                    .bold()
+                                    .italic(),
+                            );
                         }
                     } else {
                         plain.push(inner_chars[ipos]);
@@ -96,7 +105,9 @@ pub fn parse_inline_formatting(
                 inner.push(chars[pos]);
                 pos += 1;
             }
-            if pos + 1 < chars.len() { pos += 2; }
+            if pos + 1 < chars.len() {
+                pos += 2;
+            }
             if !inner.is_empty() {
                 spans.push(StyledSpan::new(&inner).with_fg(base_fg).strikethrough());
             }
@@ -114,9 +125,15 @@ pub fn parse_inline_formatting(
                 inner.push(chars[pos]);
                 pos += 1;
             }
-            if pos < chars.len() { pos += 1; } // skip closing `
+            if pos < chars.len() {
+                pos += 1;
+            } // skip closing `
             if !inner.is_empty() {
-                spans.push(StyledSpan::new(&format!(" {} ", inner)).with_fg(base_fg).with_bg(code_bg));
+                spans.push(
+                    StyledSpan::new(&format!(" {} ", inner))
+                        .with_fg(base_fg)
+                        .with_bg(code_bg),
+                );
             }
             continue;
         }
@@ -135,7 +152,9 @@ pub fn parse_inline_formatting(
                 inner.push(chars[pos]);
                 pos += 1;
             }
-            if pos < chars.len() { pos += 1; } // skip closing marker
+            if pos < chars.len() {
+                pos += 1;
+            } // skip closing marker
             if !inner.is_empty() {
                 spans.push(StyledSpan::new(&inner).with_fg(base_fg).italic());
             }
@@ -236,7 +255,10 @@ mod tests {
     #[test]
     fn backtick_code_uses_code_bg_and_padding() {
         let spans = parse_inline_formatting("`code`", FG, BG);
-        let code_span = spans.iter().find(|s| s.bg.is_some()).expect("code span with bg not found");
+        let code_span = spans
+            .iter()
+            .find(|s| s.bg.is_some())
+            .expect("code span with bg not found");
         assert_eq!(code_span.bg, Some(BG));
         // inline code is wrapped with a leading and trailing space
         assert!(code_span.text.contains("code"));

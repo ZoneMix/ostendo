@@ -31,7 +31,9 @@ pub struct ThemeGradient {
 }
 
 /// Provides the default gradient direction when the field is missing from YAML.
-fn default_gradient_direction() -> String { "vertical".to_string() }
+fn default_gradient_direction() -> String {
+    "vertical".to_string()
+}
 
 /// A complete theme definition, loaded from a YAML file in `themes/`.
 ///
@@ -116,8 +118,14 @@ pub struct ThemeFonts {
 }
 
 /// Provides the default layout value when the field is missing from YAML.
-fn default_layout() -> String { "left".to_string() }
+fn default_layout() -> String {
+    "left".to_string()
+}
 /// Provides the default visual style when the field is missing from YAML.
-fn default_visual_style() -> String { "bold".to_string() }
+fn default_visual_style() -> String {
+    "bold".to_string()
+}
 /// Provides the default code background color when the field is missing from YAML.
-fn default_code_bg() -> String { "#1A1A1A".to_string() }
+fn default_code_bg() -> String {
+    "#1A1A1A".to_string()
+}

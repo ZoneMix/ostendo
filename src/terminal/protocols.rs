@@ -329,7 +329,10 @@ mod tests {
         let _term = EnvGuard::remove("TERM_PROGRAM");
         let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
         let _tmux = EnvGuard::remove("TMUX");
-        assert_eq!(detect_kitty_animation(), KittyAnimationCapability::Supported);
+        assert_eq!(
+            detect_kitty_animation(),
+            KittyAnimationCapability::Supported
+        );
     }
 
     #[test]

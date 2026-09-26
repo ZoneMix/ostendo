@@ -9,8 +9,13 @@ impl Presenter {
         let old_buffer = self.last_rendered_buffer.clone();
 
         // Determine transition: per-slide directive overrides global meta
-        let transition_type = slide.transition
-            .or_else(|| if self.meta.transition.is_empty() { None } else { parse_transition(&self.meta.transition) });
+        let transition_type = slide.transition.or_else(|| {
+            if self.meta.transition.is_empty() {
+                None
+            } else {
+                parse_transition(&self.meta.transition)
+            }
+        });
 
         if let Some(tt) = transition_type {
             let has_entrance = slide.entrance_animation.is_some();
@@ -24,7 +29,11 @@ impl Presenter {
         }
 
         // Set up loop animation (runs independently after transition/entrance complete)
-        self.active_loop = slide.loop_animations.iter().map(|(la, _)| (*la, 0)).collect();
+        self.active_loop = slide
+            .loop_animations
+            .iter()
+            .map(|(la, _)| (*la, 0))
+            .collect();
 
         self.needs_full_redraw = true;
     }
@@ -45,12 +54,13 @@ impl Presenter {
         self.gif_current_frame = 0;
         self.gif_last_advance = std::time::Instant::now();
         // Font transition animation: parse per-slide directive
-        self.font_change_is_slide_transition = match self.slides[self.current].font_transition.as_deref() {
-            Some("none") => FontTransitionMode::None,
-            Some("fade") => FontTransitionMode::Fade,
-            Some("dissolve") => FontTransitionMode::Dissolve,
-            _ => FontTransitionMode::Fade, // Default: smooth fade
-        };
+        self.font_change_is_slide_transition =
+            match self.slides[self.current].font_transition.as_deref() {
+                Some("none") => FontTransitionMode::None,
+                Some("fade") => FontTransitionMode::Fade,
+                Some("dissolve") => FontTransitionMode::Dissolve,
+                _ => FontTransitionMode::Fade, // Default: smooth fade
+            };
         // Apply per-slide theme override (or restore base theme)
         self.apply_slide_theme();
         // Apply per-slide fullscreen directive. User toggle (f key) is sticky
@@ -134,7 +144,9 @@ impl Presenter {
         while section_start > 0 && self.slides[section_start - 1].section == *current_section {
             section_start -= 1;
         }
-        if section_start == 0 { return; }
+        if section_start == 0 {
+            return;
+        }
         let prev_section = &self.slides[section_start - 1].section;
         let mut target = section_start - 1;
         while target > 0 && self.slides[target - 1].section == *prev_section {

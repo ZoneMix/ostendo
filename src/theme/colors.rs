@@ -44,7 +44,11 @@ pub fn lighten_color(color: Color, amount: f64) -> Color {
         let r2 = (r as f64 + (255.0 - r as f64) * amount).min(255.0) as u8;
         let g2 = (g as f64 + (255.0 - g as f64) * amount).min(255.0) as u8;
         let b2 = (b as f64 + (255.0 - b as f64) * amount).min(255.0) as u8;
-        Color::Rgb { r: r2, g: g2, b: b2 }
+        Color::Rgb {
+            r: r2,
+            g: g2,
+            b: b2,
+        }
     } else {
         color
     }
@@ -69,7 +73,11 @@ pub fn relative_luminance(r: u8, g: u8, b: u8) -> f64 {
     // come from the sRGB specification (IEC 61966-2-1).
     let to_linear = |c: u8| -> f64 {
         let s = c as f64 / 255.0;
-        if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
     };
     // Weighted sum per ITU-R BT.709: green contributes most to perceived brightness.
     0.2126 * to_linear(r) + 0.7152 * to_linear(g) + 0.0722 * to_linear(b)
@@ -219,7 +227,11 @@ mod tests {
     #[test]
     fn test_interpolate_color_endpoints() {
         let black = Color::Rgb { r: 0, g: 0, b: 0 };
-        let white = Color::Rgb { r: 255, g: 255, b: 255 };
+        let white = Color::Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        };
         assert_eq!(interpolate_color(black, white, 0.0), black);
         assert_eq!(interpolate_color(black, white, 1.0), white);
     }
@@ -227,8 +239,19 @@ mod tests {
     #[test]
     fn test_interpolate_color_midpoint() {
         let black = Color::Rgb { r: 0, g: 0, b: 0 };
-        let white = Color::Rgb { r: 254, g: 254, b: 254 };
+        let white = Color::Rgb {
+            r: 254,
+            g: 254,
+            b: 254,
+        };
         let mid = interpolate_color(black, white, 0.5);
-        assert_eq!(mid, Color::Rgb { r: 127, g: 127, b: 127 });
+        assert_eq!(
+            mid,
+            Color::Rgb {
+                r: 127,
+                g: 127,
+                b: 127
+            }
+        );
     }
 }

@@ -30,14 +30,17 @@ use std::process::Command;
 use std::sync::{mpsc, LazyLock};
 
 /// Regex for detecting C function definitions (used by auto-wrap heuristic).
-static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
+static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool)\s+\w+\s*\(").unwrap()
-);
+});
 
 /// Regex for detecting C++ function definitions (extended type set).
-static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector)\s+\w+\s*\(").unwrap()
-);
+static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector)\s+\w+\s*\(",
+    )
+    .unwrap()
+});
 
 /// Maximum code length allowed for execution (64 KB).
 /// Prevents accidentally pasting enormous files into a code block.
@@ -50,7 +53,11 @@ const MAX_CODE_LENGTH: usize = 64 * 1024;
 /// through the channel as soon as it's written.  This enables live streaming
 /// of output in the presentation (e.g., demo scripts that use `sleep` delays
 /// between commands will show output incrementally).
-pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<mpsc::Receiver<Option<String>>> {
+pub fn execute_code_streaming(
+    language: &str,
+    code: &str,
+    working_dir: Option<&std::path::Path>,
+) -> Result<mpsc::Receiver<Option<String>>> {
     if code.len() > MAX_CODE_LENGTH {
         bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
     }
@@ -76,7 +83,8 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
 
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let mut command = Command::new(cmd);
-        command.args(&arg_refs)
+        command
+            .args(&arg_refs)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .env("PYTHONUNBUFFERED", "1");
@@ -171,10 +179,10 @@ fn normalize_language(lang: &str) -> String {
 /// This lets presenters write concise snippets without boilerplate.
 fn wrap_for_execution(lang: &str, code: &str) -> String {
     match lang {
-        "rust"       => wrap_rust(code),
-        "c"          => wrap_c(code),
-        "cpp"        => wrap_cpp(code),
-        "go"         => wrap_go(code),
+        "rust" => wrap_rust(code),
+        "c" => wrap_c(code),
+        "cpp" => wrap_cpp(code),
+        "go" => wrap_go(code),
         // Interpreted languages: pass through unchanged
         "python" | "bash" | "sh" | "ruby" | "javascript" => code.to_string(),
         _ => code.to_string(),
@@ -271,7 +279,10 @@ fn wrap_c(code: &str) -> String {
             if brace_depth == 0 {
                 in_fn = false;
             }
-        } else if C_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
+        } else if C_FN_PATTERN.is_match(trimmed)
+            && !trimmed.starts_with("int main")
+            && !trimmed.starts_with("void main")
+        {
             in_fn = true;
             brace_depth = trimmed.chars().filter(|&c| c == '{').count();
             brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
@@ -332,7 +343,10 @@ fn wrap_cpp(code: &str) -> String {
             if brace_depth == 0 {
                 in_fn = false;
             }
-        } else if CPP_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
+        } else if CPP_FN_PATTERN.is_match(trimmed)
+            && !trimmed.starts_with("int main")
+            && !trimmed.starts_with("void main")
+        {
             in_fn = true;
             brace_depth = trimmed.chars().filter(|&c| c == '{').count();
             brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
@@ -382,12 +396,12 @@ fn wrap_go(code: &str) -> String {
 
     // Detect which standard-library packages the snippet uses
     let known_packages: &[(&str, &str)] = &[
-        ("fmt.",     "fmt"),
-        ("os.",      "os"),
+        ("fmt.", "fmt"),
+        ("os.", "os"),
         ("strings.", "strings"),
         ("strconv.", "strconv"),
-        ("math.",    "math"),
-        ("time.",    "time"),
+        ("math.", "math"),
+        ("time.", "time"),
     ];
 
     let mut imports: Vec<&str> = Vec::new();
@@ -469,8 +483,14 @@ mod tests {
 println!("{}", x);"#;
         let wrapped = wrap_for_execution("rust", code);
         assert!(wrapped.contains("fn main()"), "should contain fn main()");
-        assert!(wrapped.contains("use std::io::Write;"), "should contain prelude");
-        assert!(wrapped.contains("    let x = 42;"), "body should be indented");
+        assert!(
+            wrapped.contains("use std::io::Write;"),
+            "should contain prelude"
+        );
+        assert!(
+            wrapped.contains("    let x = 42;"),
+            "body should be indented"
+        );
         assert!(wrapped.contains("    println!"), "body should be indented");
     }
 
@@ -480,7 +500,10 @@ println!("{}", x);"#;
     println!("hello");
 }"#;
         let wrapped = wrap_for_execution("rust", code);
-        assert_eq!(wrapped, code, "code with fn main should be returned unchanged");
+        assert_eq!(
+            wrapped, code,
+            "code with fn main should be returned unchanged"
+        );
     }
 
     #[test]
@@ -490,7 +513,10 @@ println!("{}", x);"#;
         // `use` lines should appear before fn main
         let main_pos = wrapped.find("fn main()").unwrap();
         let use_pos = wrapped.find("use std::collections::HashMap;").unwrap();
-        assert!(use_pos < main_pos, "use statements should come before fn main");
+        assert!(
+            use_pos < main_pos,
+            "use statements should come before fn main"
+        );
         // The body line should be inside main
         assert!(wrapped.contains("    let m = HashMap::new();"));
     }
@@ -518,7 +544,10 @@ int main() {
     return 0;
 }"#;
         let wrapped = wrap_for_execution("c", code);
-        assert_eq!(wrapped, code, "code with int main should be returned unchanged");
+        assert_eq!(
+            wrapped, code,
+            "code with int main should be returned unchanged"
+        );
     }
 
     // ---- C++ wrapping ----
@@ -560,7 +589,10 @@ func main() {
     fmt.Println("hi")
 }"#;
         let wrapped = wrap_for_execution("go", code);
-        assert_eq!(wrapped, code, "code with func main() should be returned unchanged");
+        assert_eq!(
+            wrapped, code,
+            "code with func main() should be returned unchanged"
+        );
     }
 
     #[test]
@@ -580,8 +612,14 @@ func main() {
         let wrapped = wrap_for_execution("rust", code);
         let main_pos = wrapped.find("fn main()").unwrap();
         let fn_pos = wrapped.find("fn add(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    println!"), "println should be inside main");
+        assert!(
+            fn_pos < main_pos,
+            "helper fn should be extracted before main"
+        );
+        assert!(
+            wrapped.contains("    println!"),
+            "println should be inside main"
+        );
     }
 
     #[test]
@@ -590,8 +628,14 @@ func main() {
         let wrapped = wrap_for_execution("c", code);
         let main_pos = wrapped.find("int main()").unwrap();
         let fn_pos = wrapped.find("int factorial(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    printf("), "printf should be inside main");
+        assert!(
+            fn_pos < main_pos,
+            "helper fn should be extracted before main"
+        );
+        assert!(
+            wrapped.contains("    printf("),
+            "printf should be inside main"
+        );
     }
 
     #[test]
@@ -600,8 +644,14 @@ func main() {
         let wrapped = wrap_for_execution("go", code);
         let main_pos = wrapped.find("func main()").unwrap();
         let fn_pos = wrapped.find("func add(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    fmt.Println(add(3, 4))"), "Println should be inside main");
+        assert!(
+            fn_pos < main_pos,
+            "helper fn should be extracted before main"
+        );
+        assert!(
+            wrapped.contains("    fmt.Println(add(3, 4))"),
+            "Println should be inside main"
+        );
     }
 
     // ---- Interpreted languages: pass-through ----
@@ -624,7 +674,10 @@ func main() {
     fn test_wrap_javascript_unchanged() {
         let code = "console.log('hello')";
         let wrapped = wrap_for_execution("javascript", code);
-        assert_eq!(wrapped, code, "javascript code should pass through unchanged");
+        assert_eq!(
+            wrapped, code,
+            "javascript code should pass through unchanged"
+        );
     }
 
     #[test]

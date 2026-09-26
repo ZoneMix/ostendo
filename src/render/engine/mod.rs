@@ -26,9 +26,12 @@
 use anyhow::Result;
 use crossterm::{
     cursor,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEventKind,
+    },
     queue,
-    style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor, ResetColor},
+    style::{Attribute, Color, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{self, BeginSynchronizedUpdate, EndSynchronizedUpdate},
 };
 use std::collections::HashMap;
@@ -37,36 +40,35 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::code::highlight::Highlighter;
-use crate::render::animation::{
-    AnimationState, AnimationKind, parse_transition,
-    render_transition_frame, render_entrance_frame,
-    render_loop_frame,
-};
-use crate::image_util::render::{RenderedImage, render_slide_image};
+use crate::image_util::render::{render_slide_image, RenderedImage};
 use crate::presentation::{ExecMode, PresentationMeta, Slide, SlideAlignment, StateManager};
+use crate::render::animation::{
+    parse_transition, render_entrance_frame, render_loop_frame, render_transition_frame,
+    AnimationKind, AnimationState,
+};
 use crate::render::layout::WindowSize;
 use crate::render::progress::render_progress_bar;
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
-use crate::terminal::protocols::{self, ImageProtocol, FontSizeCapability, TextScaleCapability};
-use crate::theme::colors::{hex_to_color, ensure_badge_contrast, interpolate_color};
+use crate::terminal::protocols::{self, FontSizeCapability, ImageProtocol, TextScaleCapability};
+use crate::theme::colors::{ensure_badge_contrast, hex_to_color, interpolate_color};
 use crate::theme::Theme;
 
-mod types;
-mod state;
-mod navigation;
-mod font;
-mod ui;
 mod columns;
 mod content;
+mod font;
 mod input;
-mod rendering;
-mod table_render;
-mod output;
 mod line_writer;
+mod navigation;
+mod output;
+mod rendering;
+mod state;
+mod table_render;
+mod types;
+mod ui;
 
+pub(crate) use output::*;
 pub use types::PresenterConfig;
 pub(crate) use types::*;
-pub(crate) use output::*;
 
 /// Kitty Graphics Protocol: delete all visible placements (quiet mode).
 /// The `;AAAA` payload is required — Kitty APC format expects `\x1b_G<keys>;<data>\x1b\\`.
@@ -95,7 +97,10 @@ fn scaled_content_width(tw: usize, scale: u8) -> usize {
 }
 
 /// Resolve an `ImageRenderMode` to a concrete `ImageProtocol`.
-fn resolve_image_protocol(mode: crate::presentation::ImageRenderMode, default: ImageProtocol) -> ImageProtocol {
+fn resolve_image_protocol(
+    mode: crate::presentation::ImageRenderMode,
+    default: ImageProtocol,
+) -> ImageProtocol {
     match mode {
         crate::presentation::ImageRenderMode::Kitty => ImageProtocol::Kitty,
         crate::presentation::ImageRenderMode::Iterm => ImageProtocol::Iterm2,
@@ -115,8 +120,6 @@ fn protocol_cache_key(proto: ImageProtocol) -> u8 {
     }
 }
 
-
-
 /// The main presentation engine.
 ///
 /// `Presenter` owns every piece of state needed to run a terminal-based
@@ -133,7 +136,6 @@ fn protocol_cache_key(proto: ImageProtocol) -> u8 {
 ///    animation tick, or timer update.
 pub struct Presenter {
     // --- Slide Data ---
-
     /// The parsed slide deck. Each `Slide` contains title, bullets, code blocks,
     /// images, directives, and speaker notes.
     slides: Vec<Slide>,
@@ -145,7 +147,6 @@ pub struct Presenter {
     current: usize,
 
     // --- UI State ---
-
     /// Current interaction mode (Normal, Command, Goto, Help, Overview).
     mode: Mode,
     /// Text buffer for the `:command` input bar.
@@ -169,14 +170,12 @@ pub struct Presenter {
     timer_start: Option<Instant>,
 
     // --- Terminal Dimensions ---
-
     /// Current terminal width in columns (updated on resize events).
     width: u16,
     /// Current terminal height in rows (updated on resize events).
     height: u16,
 
     // --- Code Execution ---
-
     /// Syntax highlighter for code blocks (shared across all slides).
     highlighter: Highlighter,
     /// Accumulated stdout/stderr from the most recent code execution.
@@ -190,13 +189,11 @@ pub struct Presenter {
     exec_block_index: usize,
 
     // --- Persistence ---
-
     /// JSON state manager for saving/restoring slide position, font offsets,
     /// and theme selection across restarts.
     state: StateManager,
 
     // --- Image Rendering ---
-
     /// Detected (or CLI-overridden) terminal image protocol (Kitty, iTerm2, Sixel, ASCII).
     image_protocol: ImageProtocol,
     /// Whether Kitty supports native animation frames (a=f).
@@ -216,7 +213,8 @@ pub struct Presenter {
     gif_frames: HashMap<PathBuf, std::sync::Arc<Vec<crate::image_util::GifFrame>>>,
     /// Handle for the background thread that decodes GIF frames at startup.
     /// `None` once decoding is complete or if no GIFs exist.
-    gif_loading: Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>>,
+    gif_loading:
+        Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>>,
     /// Current frame index for animated GIF playback (wraps around).
     gif_current_frame: usize,
     /// Timestamp of last GIF frame advance (used to honor per-frame delays).
@@ -225,7 +223,6 @@ pub struct Presenter {
     window_size: WindowSize,
 
     // --- Remote Control ---
-
     /// Channel receiver for commands from the WebSocket remote control server.
     /// `None` if remote control is not enabled.
     remote_rx: Option<std::sync::mpsc::Receiver<crate::remote::RemoteCommand>>,
@@ -234,7 +231,6 @@ pub struct Presenter {
 
     // --- Theme Colors ---
     // These are resolved from the theme's hex strings at startup for fast access.
-
     /// Background color for the slide area.
     bg_color: Color,
     /// Accent color used for titles, bullets markers, borders, and highlights.
@@ -245,7 +241,6 @@ pub struct Presenter {
     code_bg_color: Color,
 
     // --- Font & Scale ---
-
     /// Per-slide font size offsets (slide index -> offset in 2pt steps).
     /// Populated from markdown `<!-- font_size -->` directives and user `]`/`[` adjustments.
     slide_font_offsets: HashMap<usize, i8>,
@@ -262,14 +257,12 @@ pub struct Presenter {
     original_font_size: Option<String>,
 
     // --- Hot Reload ---
-
     /// File watcher that polls the presentation file for changes every 500ms.
     file_watcher: Option<crate::watch::FileWatcher>,
     /// Absolute path to the presentation markdown file (needed for reload and code execution).
     presentation_path: PathBuf,
 
     // --- Theme Gradient ---
-
     /// Starting color for the background gradient (top or left edge).
     gradient_from: Option<Color>,
     /// Ending color for the background gradient (bottom or right edge).
@@ -280,7 +273,6 @@ pub struct Presenter {
     is_light_variant: bool,
 
     // --- Animations ---
-
     /// The currently playing one-shot animation (slide transition or entrance effect).
     /// `None` when no animation is active.
     active_animation: Option<crate::render::animation::AnimationState>,
@@ -292,12 +284,10 @@ pub struct Presenter {
     last_rendered_buffer: Vec<StyledLine>,
 
     // --- Mermaid Diagrams ---
-
     /// Optional Mermaid diagram renderer (requires `mmdc` CLI to be installed).
     mermaid_renderer: Option<crate::image_util::mermaid::MermaidRenderer>,
 
     // --- Font Change Transition State ---
-
     /// `Some(true/false)` when the user manually toggled fullscreen with `f`.
     /// Used to distinguish user intent from per-slide `<!-- fullscreen -->` directives.
     user_fullscreen_override: Option<bool>,
@@ -323,7 +313,6 @@ pub struct Presenter {
     // These fields cache the state from the last `render_frame()` call.
     // If nothing changed, only the status bar (timer) is redrawn, avoiding
     // expensive image re-emission and full-screen repaints.
-
     /// Slide index that was rendered last frame (or `None` on first render).
     last_rendered_slide: Option<usize>,
     /// Scroll offset that was rendered last frame.
@@ -345,7 +334,6 @@ pub struct Presenter {
     needs_full_redraw: bool,
 
     // --- Miscellaneous ---
-
     /// Runtime image scale adjustment from `>` / `<` keys (-100 to +100).
     image_scale_offset: i8,
     /// List of all available theme slugs (for remote control theme switching).
@@ -360,7 +348,6 @@ pub struct Presenter {
     /// from the bundled `slant.flf` font file.
     figfont: Option<figlet_rs::FIGfont>,
 }
-
 
 impl Presenter {
     /// Create a new `Presenter` with the given slides, theme, and configuration.
@@ -402,7 +389,8 @@ impl Presenter {
         let code_bg = hex_to_color(&theme.colors.code_background).unwrap_or(Color::DarkGrey);
         let help_badge_bg = ensure_badge_contrast(code_bg, bg);
         // Parse gradient colors from theme
-        let (gradient_from, gradient_to, gradient_vertical) = if let Some(ref grad) = theme.gradient {
+        let (gradient_from, gradient_to, gradient_vertical) = if let Some(ref grad) = theme.gradient
+        {
             let from = hex_to_color(&grad.from);
             let to = hex_to_color(&grad.to);
             let vertical = grad.direction != "horizontal";
@@ -453,13 +441,16 @@ impl Presenter {
         };
         // Preload all slide images into memory
         let mut preloaded_images = HashMap::new();
-        let gif_frames: HashMap<PathBuf, std::sync::Arc<Vec<crate::image_util::GifFrame>>> = HashMap::new();
+        let gif_frames: HashMap<PathBuf, std::sync::Arc<Vec<crate::image_util::GifFrame>>> =
+            HashMap::new();
         // Collect GIF paths for background loading
         let mut gif_paths: Vec<PathBuf> = Vec::new();
         for slide in &slides {
             if let Some(ref img) = slide.image {
                 if img.path.exists() && !preloaded_images.contains_key(&img.path) {
-                    let ext = img.path.extension()
+                    let ext = img
+                        .path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
@@ -476,20 +467,21 @@ impl Presenter {
             }
         }
         // Decode GIF frames in background thread to avoid blocking startup
-        let gif_loading: Option<std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>> =
-            if !gif_paths.is_empty() {
-                Some(std::thread::spawn(move || {
-                    let mut result = HashMap::new();
-                    for path in gif_paths {
-                        if let Some(frames) = crate::image_util::load_gif_frames(&path) {
-                            result.insert(path, frames);
-                        }
+        let gif_loading: Option<
+            std::thread::JoinHandle<HashMap<PathBuf, Vec<crate::image_util::GifFrame>>>,
+        > = if !gif_paths.is_empty() {
+            Some(std::thread::spawn(move || {
+                let mut result = HashMap::new();
+                for path in gif_paths {
+                    if let Some(frames) = crate::image_util::load_gif_frames(&path) {
+                        result.insert(path, frames);
                     }
-                    result
-                }))
-            } else {
-                None
-            };
+                }
+                result
+            }))
+        } else {
+            None
+        };
 
         let base_theme = theme.clone();
         let mut presenter = Self {
@@ -575,7 +567,10 @@ impl Presenter {
             },
         };
         // Initialize mermaid renderer if any slide has mermaid blocks
-        let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
+        let has_mermaid = presenter
+            .slides
+            .iter()
+            .any(|s| !s.mermaid_blocks.is_empty());
         if has_mermaid && crate::image_util::mermaid::MermaidRenderer::is_available() {
             presenter.mermaid_renderer = Some(crate::image_util::mermaid::MermaidRenderer::new());
         }
@@ -595,13 +590,19 @@ impl Presenter {
     }
 
     /// Enable or disable fullscreen mode (hides the status bar).
-    pub fn set_fullscreen(&mut self, fs: bool) { self.show_fullscreen = fs; }
+    pub fn set_fullscreen(&mut self, fs: bool) {
+        self.show_fullscreen = fs;
+    }
 
     /// Start the presentation timer from the current moment.
-    pub fn start_timer(&mut self) { self.timer_start = Some(Instant::now()); }
+    pub fn start_timer(&mut self) {
+        self.timer_start = Some(Instant::now());
+    }
 
     /// Reset (stop) the presentation timer.
-    fn reset_timer(&mut self) { self.timer_start = None; }
+    fn reset_timer(&mut self) {
+        self.timer_start = None;
+    }
 
     /// Set the default content scale percentage (e.g., 80 = content uses 80% of terminal width).
     pub fn set_default_scale(&mut self, scale: u8) {
@@ -634,14 +635,23 @@ impl Presenter {
         // Initialize loop/entrance animations for the starting slide
         {
             let slide = &self.slides[self.current];
-            self.active_loop = slide.loop_animations.iter().map(|(la, _)| (*la, 0)).collect();
+            self.active_loop = slide
+                .loop_animations
+                .iter()
+                .map(|(la, _)| (*la, 0))
+                .collect();
             if let Some(fs) = slide.fullscreen {
                 self.show_fullscreen = fs;
             }
         }
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        crossterm::execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide, EnableMouseCapture)?;
+        crossterm::execute!(
+            stdout,
+            terminal::EnterAlternateScreen,
+            cursor::Hide,
+            EnableMouseCapture
+        )?;
         // Set terminal default background to theme bg so cells created by
         // font-change resizes inherit the correct color (no black flicker).
         Self::set_terminal_bg(self.bg_color);
@@ -654,7 +664,11 @@ impl Presenter {
             let mut cw = BufWriter::with_capacity(8 * 1024, clear_stdout.lock());
             queue!(cw, BeginSynchronizedUpdate)?;
             for row in 0..self.height {
-                queue!(cw, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                queue!(
+                    cw,
+                    cursor::MoveTo(0, row),
+                    SetBackgroundColor(self.bg_color)
+                )?;
                 write!(cw, "{:width$}", "", width = tw)?;
             }
             queue!(cw, EndSynchronizedUpdate, ResetColor)?;
@@ -671,7 +685,12 @@ impl Presenter {
         // Restore terminal default background before leaving alternate screen
         Self::reset_terminal_bg();
         self.reset_font_size();
-        crossterm::execute!(stdout, DisableMouseCapture, cursor::Show, terminal::LeaveAlternateScreen)?;
+        crossterm::execute!(
+            stdout,
+            DisableMouseCapture,
+            cursor::Show,
+            terminal::LeaveAlternateScreen
+        )?;
         terminal::disable_raw_mode()?;
 
         // Save state on exit
@@ -701,14 +720,22 @@ impl Presenter {
 
         let slide = &self.slides[self.current];
         // Collect all executable code blocks: slide-level first, then columns
-        let exec_blocks: Vec<&crate::presentation::CodeBlock> = slide.code_blocks.iter()
+        let exec_blocks: Vec<&crate::presentation::CodeBlock> = slide
+            .code_blocks
+            .iter()
             .filter(|cb| cb.exec_mode.is_some())
             .chain(
-                slide.columns.as_ref()
-                    .map(|cols| cols.contents.iter().flat_map(|c| c.code_blocks.iter())
-                        .filter(|cb| cb.exec_mode.is_some())
-                        .collect::<Vec<_>>())
-                    .unwrap_or_default()
+                slide
+                    .columns
+                    .as_ref()
+                    .map(|cols| {
+                        cols.contents
+                            .iter()
+                            .flat_map(|c| c.code_blocks.iter())
+                            .filter(|cb| cb.exec_mode.is_some())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
             )
             .collect();
         // Fallback: if no exec blocks, try first code block
@@ -749,7 +776,9 @@ impl Presenter {
                 match msg {
                     Some(line) => {
                         if let Some(ref mut output) = self.exec_output {
-                            if !output.is_empty() { output.push('\n'); }
+                            if !output.is_empty() {
+                                output.push('\n');
+                            }
                             output.push_str(&line);
                         }
                         got_output = true;
@@ -770,7 +799,9 @@ impl Presenter {
     fn try_reload(&mut self) {
         if let Ok(source) = std::fs::read_to_string(&self.presentation_path) {
             let base_dir = self.presentation_path.parent();
-            if let Ok((new_meta, new_slides)) = crate::markdown::parse_presentation(&source, base_dir) {
+            if let Ok((new_meta, new_slides)) =
+                crate::markdown::parse_presentation(&source, base_dir)
+            {
                 if !new_slides.is_empty() {
                     // Preload images for new slides
                     for slide in &new_slides {
@@ -799,10 +830,11 @@ impl Presenter {
         }
     }
 
-
     /// Returns true if the current slide has an animated GIF image.
     fn current_slide_has_gif(&self) -> bool {
-        self.slides[self.current].image.as_ref()
+        self.slides[self.current]
+            .image
+            .as_ref()
             .map(|img| self.gif_frames.contains_key(&img.path))
             .unwrap_or(false)
     }
@@ -842,7 +874,6 @@ fn truncate_str(s: &str, max: usize) -> String {
         s.chars().take(max).collect()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -920,8 +951,19 @@ mod tests {
         let tw = 100usize;
         for scale in [50u8, 80, 100, 150, 200] {
             let content_width = scaled_content_width(tw, scale);
-            assert!(content_width <= tw, "scale {} produced width {} > {}", scale, content_width, tw);
-            assert!(content_width >= 50, "scale {} produced width {} < 50", scale, content_width);
+            assert!(
+                content_width <= tw,
+                "scale {} produced width {} > {}",
+                scale,
+                content_width,
+                tw
+            );
+            assert!(
+                content_width >= 50,
+                "scale {} produced width {} < 50",
+                scale,
+                content_width
+            );
         }
     }
 
@@ -954,7 +996,9 @@ mod tests {
             let mut chunk_w = 0usize;
             while offset < chars.len() {
                 let cw = unicode_width::UnicodeWidthChar::width(chars[offset]).unwrap_or(0);
-                if chunk_w + cw > remaining { break; }
+                if chunk_w + cw > remaining {
+                    break;
+                }
                 chunk.push(chars[offset]);
                 chunk_w += cw;
                 offset += 1;
@@ -967,7 +1011,12 @@ mod tests {
         col_rows.push(spans); // final push
 
         // 36 chars with width 20: should produce 2 rows (20 + 16)
-        assert_eq!(col_rows.len(), 2, "Expected 2 wrapped rows, got {}", col_rows.len());
+        assert_eq!(
+            col_rows.len(),
+            2,
+            "Expected 2 wrapped rows, got {}",
+            col_rows.len()
+        );
 
         // First row: "    " + 20 chars = "abcdefghijklmnopqrst"
         let row0_text: String = col_rows[0].iter().map(|s| s.text.as_str()).collect();
@@ -985,9 +1034,9 @@ mod tests {
         // e.g. 8 spaces + "Federated" + ": " + "arn:aws:iam::long-string"
         let code_content_width = 30usize;
         let spans_input: Vec<&str> = vec![
-            "        ",          // 8 chars (indent)
-            "\"Federated\"",     // 11 chars
-            ": ",                // 2 chars
+            "        ",                                               // 8 chars (indent)
+            "\"Federated\"",                                          // 11 chars
+            ": ",                                                     // 2 chars
             "\"arn:aws:iam::ACCOUNT:oidc-provider/oidc.eks.REGION\"", // 51 chars
         ];
         // Total: 8 + 11 + 2 + 51 = 72 chars, should wrap into 3 rows at width 30
@@ -1013,7 +1062,9 @@ mod tests {
                 let mut chunk_w = 0usize;
                 while offset < chars.len() {
                     let cw = unicode_width::UnicodeWidthChar::width(chars[offset]).unwrap_or(0);
-                    if chunk_w + cw > remaining { break; }
+                    if chunk_w + cw > remaining {
+                        break;
+                    }
                     chunk.push(chars[offset]);
                     chunk_w += cw;
                     offset += 1;
@@ -1027,21 +1078,34 @@ mod tests {
         col_rows.push(current_spans); // final push
 
         // 72 chars at width 30: row0=30, row1=30, row2=12 → 3 rows
-        assert_eq!(col_rows.len(), 3, "Expected 3 wrapped rows, got {}. Rows: {:?}",
+        assert_eq!(
             col_rows.len(),
-            col_rows.iter().map(|r| {
-                let text: String = r.iter().map(|s| s.text.as_str()).collect();
-                text
-            }).collect::<Vec<_>>()
+            3,
+            "Expected 3 wrapped rows, got {}. Rows: {:?}",
+            col_rows.len(),
+            col_rows
+                .iter()
+                .map(|r| {
+                    let text: String = r.iter().map(|s| s.text.as_str()).collect();
+                    text
+                })
+                .collect::<Vec<_>>()
         );
 
         // Verify each row's content width (excluding 4-char padding) is <= code_content_width
         for (i, row) in col_rows.iter().enumerate() {
-            let content_width: usize = row.iter().skip(1) // skip padding span
+            let content_width: usize = row
+                .iter()
+                .skip(1) // skip padding span
                 .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
                 .sum();
-            assert!(content_width <= code_content_width,
-                "Row {} content width {} exceeds code_content_width {}", i, content_width, code_content_width);
+            assert!(
+                content_width <= code_content_width,
+                "Row {} content width {} exceeds code_content_width {}",
+                i,
+                content_width,
+                code_content_width
+            );
         }
     }
 
@@ -1074,8 +1138,13 @@ mod tests {
         assert!(!fig_lines.is_empty(), "FIGlet output should have lines");
 
         // Verify lines have non-whitespace content (sparkle needs this)
-        let has_content = fig_lines.iter().any(|l| l.chars().any(|c| !c.is_whitespace()));
-        assert!(has_content, "FIGlet output should have non-whitespace characters");
+        let has_content = fig_lines
+            .iter()
+            .any(|l| l.chars().any(|c| !c.is_whitespace()));
+        assert!(
+            has_content,
+            "FIGlet output should have non-whitespace characters"
+        );
 
         // Simulate what render_ascii_title does
         let mut lines: Vec<StyledLine> = Vec::new();
@@ -1092,25 +1161,37 @@ mod tests {
         }
 
         // Verify sparkle would animate these lines (target = "figlet")
-        use crate::render::animation::{LoopAnimation, render_loop_frame};
+        use crate::render::animation::{render_loop_frame, LoopAnimation};
         let sparkled = render_loop_frame(
-            &lines, LoopAnimation::Sparkle, 42,
-            Color::Green, Color::Black,
-            80, 24,
+            &lines,
+            LoopAnimation::Sparkle,
+            42,
+            Color::Green,
+            Color::Black,
+            80,
+            24,
             Some("figlet"),
         );
-        assert_eq!(sparkled.len(), lines.len(), "Sparkle should preserve line count");
+        assert_eq!(
+            sparkled.len(),
+            lines.len(),
+            "Sparkle should preserve line count"
+        );
 
         // At frame 42, at least some cells should have sparkle characters
-        let original_text: String = lines.iter()
+        let original_text: String = lines
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
             .collect();
-        let sparkled_text: String = sparkled.iter()
+        let sparkled_text: String = sparkled
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
             .collect();
         // Sparkle modifies some characters, so texts should differ
-        assert_ne!(original_text, sparkled_text,
-            "Sparkle should modify at least some characters at frame 42");
+        assert_ne!(
+            original_text, sparkled_text,
+            "Sparkle should modify at least some characters at frame 42"
+        );
     }
 
     #[test]
@@ -1118,7 +1199,11 @@ mod tests {
         let mut buf = Vec::new();
         write_span_text(&mut buf, 3, "Hello").unwrap();
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("\x1b]66;s=3;Hello\x07"), "Expected OSC 66 escape, got: {:?}", output);
+        assert!(
+            output.contains("\x1b]66;s=3;Hello\x07"),
+            "Expected OSC 66 escape, got: {:?}",
+            output
+        );
     }
 
     #[test]

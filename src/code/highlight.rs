@@ -74,9 +74,8 @@ impl Highlighter {
 
         let mut lines = Vec::new();
         for line in LinesWithEndings::from(code) {
-            let ranges: Vec<(Style, &str)> = h
-                .highlight_line(line, &self.syntax_set)
-                .unwrap_or_default();
+            let ranges: Vec<(Style, &str)> =
+                h.highlight_line(line, &self.syntax_set).unwrap_or_default();
             let spans: Vec<HighlightedSpan> = ranges
                 .into_iter()
                 .map(|(style, text)| {

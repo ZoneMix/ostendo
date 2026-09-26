@@ -8,7 +8,7 @@ use crossterm::style::Color;
 use crate::render::text::{StyledLine, StyledSpan};
 use crate::theme::colors::interpolate_color;
 
-use super::{EntranceAnimation, line_to_string, line_char_count};
+use super::{line_char_count, line_to_string, EntranceAnimation};
 
 /// Dispatch function: renders one frame of an entrance animation, returning the partially-revealed buffer.
 ///

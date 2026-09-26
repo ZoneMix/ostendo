@@ -82,7 +82,11 @@ impl Presenter {
     /// Adjust the per-slide font size offset by `delta` (clamped to -20..20).
     pub(crate) fn adjust_font_offset(&mut self, delta: i8) {
         if self.font_capability.is_available() {
-            let cur = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
+            let cur = self
+                .slide_font_offsets
+                .get(&self.current)
+                .copied()
+                .unwrap_or(0);
             let new = cur + delta;
             if (-20..=20).contains(&new) {
                 self.slide_font_offsets.insert(self.current, new);
@@ -115,7 +119,8 @@ impl Presenter {
         self.bg_color = hex_to_color(&new_theme.colors.background).unwrap_or(Color::Black);
         self.accent_color = hex_to_color(&new_theme.colors.accent).unwrap_or(Color::Green);
         self.text_color = hex_to_color(&new_theme.colors.text).unwrap_or(Color::White);
-        self.code_bg_color = hex_to_color(&new_theme.colors.code_background).unwrap_or(Color::DarkGrey);
+        self.code_bg_color =
+            hex_to_color(&new_theme.colors.code_background).unwrap_or(Color::DarkGrey);
         // Parse gradient
         if let Some(ref grad) = new_theme.gradient {
             self.gradient_from = hex_to_color(&grad.from);
@@ -142,7 +147,11 @@ impl Presenter {
     /// Compute the background color for a given row, applying gradient if configured.
     pub(crate) fn row_bg_color(&self, row: usize, total_rows: usize) -> Color {
         if let (Some(from), Some(to)) = (self.gradient_from, self.gradient_to) {
-            let t = if total_rows <= 1 { 0.0 } else { row as f64 / (total_rows - 1) as f64 };
+            let t = if total_rows <= 1 {
+                0.0
+            } else {
+                row as f64 / (total_rows - 1) as f64
+            };
             interpolate_color(from, to, t)
         } else {
             self.bg_color

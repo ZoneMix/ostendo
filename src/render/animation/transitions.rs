@@ -8,7 +8,7 @@ use crossterm::style::Color;
 use crate::render::text::{StyledLine, StyledSpan};
 use crate::theme::colors::interpolate_color;
 
-use super::{TransitionType, line_to_string};
+use super::{line_to_string, TransitionType};
 
 /// Dispatch function: renders one frame of a transition animation, returning the blended buffer.
 ///
@@ -139,7 +139,12 @@ fn render_slide_left(
     let mut result = Vec::with_capacity(max_len);
 
     for i in 0..max_len {
-        let old_chars: Vec<char> = old.get(i).map(line_to_string).unwrap_or_default().chars().collect();
+        let old_chars: Vec<char> = old
+            .get(i)
+            .map(line_to_string)
+            .unwrap_or_default()
+            .chars()
+            .collect();
 
         // Shift old left
         let old_visible: String = old_chars.iter().skip(shift).collect();
@@ -150,7 +155,12 @@ fn render_slide_left(
             let combined = format!("{}{}", old_visible, pad);
             result.push(StyledLine::plain(&combined));
         } else {
-            let new_chars: Vec<char> = new.get(i).map(line_to_string).unwrap_or_default().chars().collect();
+            let new_chars: Vec<char> = new
+                .get(i)
+                .map(line_to_string)
+                .unwrap_or_default()
+                .chars()
+                .collect();
             let new_visible: String = new_chars.iter().take(shift).collect();
             let combined = format!("{}{}", old_visible, new_visible);
             result.push(StyledLine::plain(&combined));
@@ -175,9 +185,10 @@ fn render_dissolve(
 ) -> Vec<StyledLine> {
     let max_len = old.len().max(new.len());
     let jumble_chars: &[char] = &[
-        '\u{2591}', '\u{2592}', '\u{2593}', '\u{2588}', '\u{2503}', '\u{254B}', '\u{2573}', '\u{252B}', '\u{256C}', '\u{2551}', '\u{2560}',
-        '\u{25C6}', '\u{25C7}', '\u{25CB}', '\u{25CF}', '\u{25A1}', '\u{25A0}', '\u{25B3}', '\u{25B2}', '\u{25CC}', '\u{25CD}',
-        '#', '@', '%', '&', '*', '~', '/', '\\', '|',
+        '\u{2591}', '\u{2592}', '\u{2593}', '\u{2588}', '\u{2503}', '\u{254B}', '\u{2573}',
+        '\u{252B}', '\u{256C}', '\u{2551}', '\u{2560}', '\u{25C6}', '\u{25C7}', '\u{25CB}',
+        '\u{25CF}', '\u{25A1}', '\u{25A0}', '\u{25B3}', '\u{25B2}', '\u{25CC}', '\u{25CD}', '#',
+        '@', '%', '&', '*', '~', '/', '\\', '|',
     ];
     let mut result = Vec::with_capacity(max_len);
 
@@ -220,7 +231,11 @@ fn render_dissolve(
         let mut out = String::with_capacity(max_cols);
         for col in 0..max_cols {
             // Deterministic hash per cell
-            let cell_hash = ((row as u64).wrapping_mul(7919).wrapping_add(col as u64 * 6271).wrapping_add(31)) % 1000;
+            let cell_hash = ((row as u64)
+                .wrapping_mul(7919)
+                .wrapping_add(col as u64 * 6271)
+                .wrapping_add(31))
+                % 1000;
             let resolve_at = cell_hash as f64 / 1000.0;
 
             if progress > resolve_at {
@@ -230,7 +245,8 @@ fn render_dissolve(
                     out.push(*new_chars.get(col).unwrap_or(&' '));
                 }
             } else if progress > resolve_at * 0.5 {
-                let jumble_idx = ((cell_hash + (progress * 1000.0) as u64) % jumble_chars.len() as u64) as usize;
+                let jumble_idx =
+                    ((cell_hash + (progress * 1000.0) as u64) % jumble_chars.len() as u64) as usize;
                 out.push(jumble_chars[jumble_idx]);
             } else {
                 out.push(*old_chars.get(col).unwrap_or(&' '));
@@ -253,7 +269,11 @@ fn render_dissolve(
 ///
 /// This is used by the dissolve transition to keep the original slide's colors while
 /// swapping in jumbled or resolved characters.
-pub(super) fn rebuild_line_with_text(source: &StyledLine, new_text: &str, _max_cols: usize) -> StyledLine {
+pub(super) fn rebuild_line_with_text(
+    source: &StyledLine,
+    new_text: &str,
+    _max_cols: usize,
+) -> StyledLine {
     let chars: Vec<char> = new_text.chars().collect();
     let mut line = StyledLine::empty();
     let mut char_pos = 0;

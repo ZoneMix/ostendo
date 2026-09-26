@@ -54,13 +54,17 @@ impl WindowSize {
 
     /// Pixels per terminal column.
     pub fn pixels_per_column(&self) -> f64 {
-        if self.columns == 0 { return 8.0; }
+        if self.columns == 0 {
+            return 8.0;
+        }
         self.pixel_width as f64 / self.columns as f64
     }
 
     /// Pixels per terminal row.
     pub fn pixels_per_row(&self) -> f64 {
-        if self.rows == 0 { return 16.0; }
+        if self.rows == 0 {
+            return 16.0;
+        }
         self.pixel_height as f64 / self.rows as f64
     }
 

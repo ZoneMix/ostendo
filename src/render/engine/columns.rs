@@ -52,12 +52,16 @@ impl Presenter {
         figlet_title: Option<&str>,
     ) {
         let total_ratio: u16 = cols.ratios.iter().map(|&r| r as u16).sum();
-        if total_ratio == 0 || cols.contents.is_empty() { return; }
+        if total_ratio == 0 || cols.contents.is_empty() {
+            return;
+        }
 
         // Calculate column widths
         let separator_width = 3; // " | "
         let usable = content_width.saturating_sub(separator_width * (cols.ratios.len() - 1));
-        let col_widths: Vec<usize> = cols.ratios.iter()
+        let col_widths: Vec<usize> = cols
+            .ratios
+            .iter()
             .map(|&r| (usable as f64 * r as f64 / total_ratio as f64).floor() as usize)
             .collect();
 
@@ -78,7 +82,8 @@ impl Presenter {
                         // Apply column text_scale to FIGlet spans only if the
                         // scaled width fits within the column.
                         if let Some(scale) = cols.text_scale {
-                            let figlet_width: usize = spans.iter()
+                            let figlet_width: usize = spans
+                                .iter()
                                 .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
                                 .sum();
                             if figlet_width * scale as usize <= cw {
@@ -91,7 +96,12 @@ impl Presenter {
                     }
                     // Add a blank line after the FIGlet title
                     if !figlet_lines.is_empty() {
-                        col_rows.push((vec![StyledSpan::new(&" ".repeat(cw))], false, false, false));
+                        col_rows.push((
+                            vec![StyledSpan::new(&" ".repeat(cw))],
+                            false,
+                            false,
+                            false,
+                        ));
                     }
                 }
             }
@@ -100,11 +110,15 @@ impl Presenter {
             // Each line is word-wrapped and gets bold inline formatting.
             for text in &content.text_lines {
                 let wrap_width = cw.saturating_sub(2);
-                if wrap_width == 0 { continue; }
+                if wrap_width == 0 {
+                    continue;
+                }
                 let wrapped = textwrap_simple(text, wrap_width);
                 for wline in &wrapped {
                     let inline_spans = crate::markdown::parser::parse_inline_formatting(
-                        wline, self.text_color, self.code_bg_color,
+                        wline,
+                        self.text_color,
+                        self.code_bg_color,
                     );
                     let mut spans: Vec<StyledSpan> = Vec::new();
                     for span in inline_spans {
@@ -122,16 +136,24 @@ impl Presenter {
             // wrap width is divided by the scale factor (each char takes scale columns)
             // and text_scale is applied to all bullet spans.
             let is_text_column = content.image.is_none();
-            let scale = if is_text_column { cols.text_scale } else { None };
+            let scale = if is_text_column {
+                cols.text_scale
+            } else {
+                None
+            };
             let scale_factor = scale.map(|s| s as usize).unwrap_or(1);
             for bullet in &content.bullets {
-                if bullet.text.is_empty() { continue; }
+                if bullet.text.is_empty() {
+                    continue;
+                }
                 let indent = bullet_indent(bullet.depth);
                 // When text_scale is active, the indent also gets scaled.
                 // Account for the scaled indent width when computing wrap width.
                 let scaled_indent_width = indent.len() * scale_factor;
                 let available = cw.saturating_sub(scaled_indent_width);
-                if available == 0 { continue; }
+                if available == 0 {
+                    continue;
+                }
                 // Wrap width is in unscaled characters (each takes scale_factor cells)
                 let wrap_width = available / scale_factor;
                 let wrapped = textwrap_simple(&bullet.text, wrap_width);
@@ -143,7 +165,9 @@ impl Presenter {
                         spans.push(StyledSpan::new(&" ".repeat(indent.len())));
                     }
                     let inline_spans = crate::markdown::parser::parse_inline_formatting(
-                        wline, self.text_color, self.code_bg_color,
+                        wline,
+                        self.text_color,
+                        self.code_bg_color,
                     );
                     for span in inline_spans {
                         spans.push(span);
@@ -161,7 +185,10 @@ impl Presenter {
             }
 
             // Add spacing between bullets and code blocks
-            if !content.bullets.is_empty() && !content.code_blocks.is_empty() && !col_rows.is_empty() {
+            if !content.bullets.is_empty()
+                && !content.code_blocks.is_empty()
+                && !col_rows.is_empty()
+            {
                 col_rows.push((vec![StyledSpan::new(&" ".repeat(cw))], false, false, false));
             }
 
@@ -171,16 +198,31 @@ impl Presenter {
                 let code_content_width = cw.saturating_sub(inner_pad);
 
                 // Vertical padding top
-                col_rows.push((vec![StyledSpan::new(&" ".repeat(cw)).with_bg(self.code_bg_color)], true, false, false));
+                col_rows.push((
+                    vec![StyledSpan::new(&" ".repeat(cw)).with_bg(self.code_bg_color)],
+                    true,
+                    false,
+                    false,
+                ));
 
                 // Language label
-                let label = if cb.label.is_empty() { cb.language.clone() } else { cb.label.clone() };
+                let label = if cb.label.is_empty() {
+                    cb.language.clone()
+                } else {
+                    cb.label.clone()
+                };
                 if !label.is_empty() {
                     let comment_prefix = comment_prefix_for(&cb.language);
                     let label_text = format!("  {}{}", comment_prefix, label);
-                    col_rows.push((vec![
-                        StyledSpan::new(&label_text).with_fg(self.accent_color).with_bg(self.code_bg_color).dim(),
-                    ], true, false, false));
+                    col_rows.push((
+                        vec![StyledSpan::new(&label_text)
+                            .with_fg(self.accent_color)
+                            .with_bg(self.code_bg_color)
+                            .dim()],
+                        true,
+                        false,
+                        false,
+                    ));
                 }
 
                 // Highlighted code lines — soft-wrap in columns
@@ -206,14 +248,21 @@ impl Presenter {
                             let mut chunk = String::new();
                             let mut chunk_w = 0usize;
                             while offset < chars.len() {
-                                let cw = unicode_width::UnicodeWidthChar::width(chars[offset]).unwrap_or(0);
-                                if chunk_w + cw > remaining { break; }
+                                let cw = unicode_width::UnicodeWidthChar::width(chars[offset])
+                                    .unwrap_or(0);
+                                if chunk_w + cw > remaining {
+                                    break;
+                                }
                                 chunk.push(chars[offset]);
                                 chunk_w += cw;
                                 offset += 1;
                             }
                             if !chunk.is_empty() {
-                                spans.push(StyledSpan::new(&chunk).with_fg(span.fg).with_bg(self.code_bg_color));
+                                spans.push(
+                                    StyledSpan::new(&chunk)
+                                        .with_fg(span.fg)
+                                        .with_bg(self.code_bg_color),
+                                );
                                 char_count += chunk_w;
                             }
                         }
@@ -222,7 +271,12 @@ impl Presenter {
                 }
 
                 // Vertical padding bottom
-                col_rows.push((vec![StyledSpan::new(&" ".repeat(cw)).with_bg(self.code_bg_color)], true, false, false));
+                col_rows.push((
+                    vec![StyledSpan::new(&" ".repeat(cw)).with_bg(self.code_bg_color)],
+                    true,
+                    false,
+                    false,
+                ));
 
                 // Exec mode indicator for column code blocks (hidden when --no-exec)
                 if cb.exec_mode.is_some() && self.allow_exec {
@@ -231,9 +285,12 @@ impl Presenter {
                         Some(ExecMode::Pty) => "  [Ctrl+E to run in PTY]",
                         None => "",
                     };
-                    col_rows.push((vec![
-                        StyledSpan::new(mode_str).with_fg(self.accent_color).dim(),
-                    ], false, false, false));
+                    col_rows.push((
+                        vec![StyledSpan::new(mode_str).with_fg(self.accent_color).dim()],
+                        false,
+                        false,
+                        false,
+                    ));
                 }
             }
 
@@ -247,33 +304,43 @@ impl Presenter {
                         let render_width = (cw as f64 * scale_pct).max(10.0) as usize;
 
                         // Determine color override from the column image directive
-                        let color_override = col_img.color.as_deref()
+                        let color_override = col_img
+                            .color
+                            .as_deref()
                             .and_then(crate::theme::colors::hex_to_color);
 
                         // Render as ASCII art
                         let ascii_rows = crate::terminal::ascii_art::render_ascii_art(
-                            &img, render_width, color_override, Some(self.bg_color),
+                            &img,
+                            render_width,
+                            color_override,
+                            Some(self.bg_color),
                         );
 
                         // Add a blank line before the image if there is preceding content
                         if !col_rows.is_empty() {
                             col_rows.push((
                                 vec![StyledSpan::new(&" ".repeat(cw))],
-                                false, false, false,
+                                false,
+                                false,
+                                false,
                             ));
                         }
 
                         // Push each ASCII art line into column rows
                         for row in &ascii_rows {
-                            let spans: Vec<StyledSpan> = row.iter().map(|cell| {
-                                let mut span = StyledSpan::new(&cell.ch.to_string())
-                                    .with_fg(cell.fg);
-                                if let Some(bg) = cell.bg {
-                                    span = span.with_bg(bg);
-                                }
-                                span.animatable = true;
-                                span
-                            }).collect();
+                            let spans: Vec<StyledSpan> = row
+                                .iter()
+                                .map(|cell| {
+                                    let mut span =
+                                        StyledSpan::new(&cell.ch.to_string()).with_fg(cell.fg);
+                                    if let Some(bg) = cell.bg {
+                                        span = span.with_bg(bg);
+                                    }
+                                    span.animatable = true;
+                                    span
+                                })
+                                .collect();
                             col_rows.push((spans, false, false, true));
                         }
                     }
@@ -295,14 +362,16 @@ impl Presenter {
             for (i, col) in col_lines.iter().enumerate() {
                 let cw = col_widths.get(i).copied().unwrap_or(20);
                 if let Some((spans, is_code, is_figlet, is_ascii_image)) = col.get(row) {
-                    if *is_figlet { row_has_figlet = true; }
-                    if *is_ascii_image { row_has_ascii_image = true; }
+                    if *is_figlet {
+                        row_has_figlet = true;
+                    }
+                    if *is_ascii_image {
+                        row_has_ascii_image = true;
+                    }
                     // Calculate display width of spans — use .width() which
                     // accounts for OSC 66 text_scale (scaled chars occupy
                     // scale * base_width columns).
-                    let span_width: usize = spans.iter()
-                        .map(|s| s.width())
-                        .sum();
+                    let span_width: usize = spans.iter().map(|s| s.width()).sum();
                     // Push styled spans
                     for span in spans {
                         line.push(span.clone());
@@ -311,7 +380,10 @@ impl Presenter {
                     let pad_needed = cw.saturating_sub(span_width);
                     if pad_needed > 0 {
                         if *is_code {
-                            line.push(StyledSpan::new(&" ".repeat(pad_needed)).with_bg(self.code_bg_color));
+                            line.push(
+                                StyledSpan::new(&" ".repeat(pad_needed))
+                                    .with_bg(self.code_bg_color),
+                            );
                         } else {
                             line.push(StyledSpan::new(&" ".repeat(pad_needed)));
                         }

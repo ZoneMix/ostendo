@@ -14,9 +14,9 @@
 //! - `accent:background` >= 3.0:1 (WCAG AA large text / UI components)
 //! - `code_background:background` >= 1.2:1 (subtle distinction)
 
-pub mod schema;
 pub mod builtin;
 pub mod colors;
+pub mod schema;
 
 pub use schema::Theme;
 
@@ -80,7 +80,11 @@ mod tests {
     fn test_all_themes_load() {
         let registry = ThemeRegistry::load();
         let themes = registry.list();
-        assert!(themes.len() >= 20, "Expected at least 20 themes, got {}", themes.len());
+        assert!(
+            themes.len() >= 20,
+            "Expected at least 20 themes, got {}",
+            themes.len()
+        );
     }
 
     #[test]
@@ -88,10 +92,18 @@ mod tests {
         let registry = ThemeRegistry::load();
         for slug in registry.list() {
             let theme = registry.get(&slug).unwrap();
-            assert!(!theme.colors.background.is_empty(), "{} missing background", slug);
+            assert!(
+                !theme.colors.background.is_empty(),
+                "{} missing background",
+                slug
+            );
             assert!(!theme.colors.accent.is_empty(), "{} missing accent", slug);
             assert!(!theme.colors.text.is_empty(), "{} missing text", slug);
-            assert!(!theme.colors.code_background.is_empty(), "{} missing code_background", slug);
+            assert!(
+                !theme.colors.code_background.is_empty(),
+                "{} missing code_background",
+                slug
+            );
         }
     }
 
@@ -126,17 +138,26 @@ mod tests {
             assert!(
                 text_ratio >= 4.5,
                 "{}: text:bg contrast {:.2} < 4.5 (text={}, bg={})",
-                slug, text_ratio, theme.colors.text, theme.colors.background
+                slug,
+                text_ratio,
+                theme.colors.text,
+                theme.colors.background
             );
             assert!(
                 accent_ratio >= 3.0,
                 "{}: accent:bg contrast {:.2} < 3.0 (accent={}, bg={})",
-                slug, accent_ratio, theme.colors.accent, theme.colors.background
+                slug,
+                accent_ratio,
+                theme.colors.accent,
+                theme.colors.background
             );
             assert!(
                 code_ratio >= 1.2,
                 "{}: code_bg:bg contrast {:.2} < 1.2 (code_bg={}, bg={})",
-                slug, code_ratio, theme.colors.code_background, theme.colors.background
+                slug,
+                code_ratio,
+                theme.colors.code_background,
+                theme.colors.background
             );
         }
     }
@@ -148,11 +169,15 @@ mod tests {
             let theme = registry.get(&slug).unwrap();
             assert!(
                 colors::hex_to_color(&theme.colors.background).is_some(),
-                "{}: invalid background color '{}'", slug, theme.colors.background
+                "{}: invalid background color '{}'",
+                slug,
+                theme.colors.background
             );
             assert!(
                 colors::hex_to_color(&theme.colors.accent).is_some(),
-                "{}: invalid accent color '{}'", slug, theme.colors.accent
+                "{}: invalid accent color '{}'",
+                slug,
+                theme.colors.accent
             );
         }
     }

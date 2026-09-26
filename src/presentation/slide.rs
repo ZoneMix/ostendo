@@ -611,7 +611,10 @@ mod tests {
     #[test]
     fn column_content_no_image() {
         let col = ColumnContent {
-            bullets: vec![Bullet { text: "item".to_string(), depth: 0 }],
+            bullets: vec![Bullet {
+                text: "item".to_string(),
+                depth: 0,
+            }],
             code_blocks: Vec::new(),
             image: None,
             text_lines: Vec::new(),
@@ -668,7 +671,10 @@ mod tests {
 
     #[test]
     fn bullet_stores_text_and_depth() {
-        let b = Bullet { text: "hello".to_string(), depth: 2 };
+        let b = Bullet {
+            text: "hello".to_string(),
+            depth: 2,
+        };
         assert_eq!(b.text, "hello");
         assert_eq!(b.depth, 2);
     }
@@ -677,7 +683,10 @@ mod tests {
 
     #[test]
     fn slide_clone_is_independent() {
-        let original = Slide { title: "Original".to_string(), ..Default::default() };
+        let original = Slide {
+            title: "Original".to_string(),
+            ..Default::default()
+        };
         let mut cloned = original.clone();
         cloned.title = "Cloned".to_string();
         assert_eq!(original.title, "Original");

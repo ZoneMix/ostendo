@@ -13,18 +13,18 @@
 //! 6. Create a [`render::Presenter`] and call [`run()`](render::Presenter::run)
 //!    to enter the interactive TUI loop.
 
+mod code;
+mod diagram;
+mod export;
+mod image_util;
 mod markdown;
 mod presentation;
-mod render;
 mod remote;
+mod render;
 mod terminal;
 mod theme;
-mod code;
 mod third_party;
-mod image_util;
-mod export;
 mod watch;
-mod diagram;
 
 use anyhow::Result;
 use clap::Parser;
@@ -144,9 +144,11 @@ fn main() -> Result<()> {
         std::process::exit(1);
     });
 
-    let theme = registry
-        .get(&cli.theme)
-        .unwrap_or_else(|| registry.get("terminal_green").expect("default theme missing"));
+    let theme = registry.get(&cli.theme).unwrap_or_else(|| {
+        registry
+            .get("terminal_green")
+            .expect("default theme missing")
+    });
 
     let source = std::fs::read_to_string(&file)?;
     let (meta, slides) = markdown::parse_presentation(&source, file.parent())?;
@@ -162,7 +164,14 @@ fn main() -> Result<()> {
 
     if cli.export_titles {
         for slide in &slides {
-            println!("{}", if slide.title.is_empty() { "(untitled)" } else { &slide.title });
+            println!(
+                "{}",
+                if slide.title.is_empty() {
+                    "(untitled)"
+                } else {
+                    &slide.title
+                }
+            );
         }
         return Ok(());
     }
@@ -177,15 +186,21 @@ fn main() -> Result<()> {
             if let Some(ref img) = slide.image {
                 if !img.path.exists() {
                     issues.push(format!(
-                        "Slide {}: image not found: {:?}", slide.number, img.path
+                        "Slide {}: image not found: {:?}",
+                        slide.number, img.path
                     ));
                 }
             }
             // Check for empty slides
-            if slide.title.is_empty() && slide.bullets.is_empty()
-                && slide.code_blocks.is_empty() && slide.tables.is_empty()
+            if slide.title.is_empty()
+                && slide.bullets.is_empty()
+                && slide.code_blocks.is_empty()
+                && slide.tables.is_empty()
             {
-                issues.push(format!("Slide {}: appears empty (no title, bullets, code, or tables)", slide.number));
+                issues.push(format!(
+                    "Slide {}: appears empty (no title, bullets, code, or tables)",
+                    slide.number
+                ));
             }
         }
         if issues.is_empty() {
@@ -238,7 +253,8 @@ fn main() -> Result<()> {
             format!("http://127.0.0.1:{}", cli.remote_port)
         };
         eprintln!("Remote control: {}", url);
-        let (rx, tx) = remote::server::RemoteServer::start(cli.remote_port, cli.remote_token.clone());
+        let (rx, tx) =
+            remote::server::RemoteServer::start(cli.remote_port, cli.remote_token.clone());
         Some((rx, tx))
     } else {
         None

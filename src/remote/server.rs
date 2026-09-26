@@ -38,7 +38,10 @@ pub struct RemoteServer;
 
 impl RemoteServer {
     /// Start the WebSocket remote control server in a background thread.
-    pub fn start(port: u16, token: Option<String>) -> (mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>) {
+    pub fn start(
+        port: u16,
+        token: Option<String>,
+    ) -> (mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (state_tx, _) = broadcast::channel(64);
         let state_tx_clone = state_tx.clone();
@@ -105,10 +108,15 @@ async fn handle_connection(
     // Check if this is a WebSocket upgrade request
     if request.contains("Upgrade: websocket") || request.contains("upgrade: websocket") {
         // Validate Origin header for WebSocket connections (CSRF protection)
-        let origin_ok = if let Some(origin_line) = request.lines()
+        let origin_ok = if let Some(origin_line) = request
+            .lines()
             .find(|l| l.to_lowercase().starts_with("origin:"))
         {
-            let origin = origin_line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            let origin = origin_line
+                .split_once(':')
+                .map(|x| x.1)
+                .unwrap_or("")
+                .trim();
             if origin.is_empty() || origin.starts_with("file://") {
                 true
             } else if let Ok(url) = url::Url::parse(origin) {
@@ -121,7 +129,8 @@ async fn handle_connection(
         };
 
         if !origin_ok {
-            let response = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let response =
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let mut request_data = vec![0u8; n];
             let _ = stream.read(&mut request_data).await;
             let _ = stream.write_all(response).await;
@@ -133,7 +142,8 @@ async fn handle_connection(
             let auth_ok = check_bearer_token(&request, expected_token)
                 || check_ws_protocol_token(&request, expected_token);
             if !auth_ok {
-                let response = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let response =
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 let mut request_data = vec![0u8; n];
                 let _ = stream.read(&mut request_data).await;
                 let _ = stream.write_all(response).await;
@@ -143,15 +153,24 @@ async fn handle_connection(
 
         // Use accept_hdr_async to echo Sec-WebSocket-Protocol when token auth is used
         let matched_token = token.clone();
-        let ws_stream = match tokio_tungstenite::accept_hdr_async(stream, move |_req: &tokio_tungstenite::tungstenite::http::Request<()>, mut resp: tokio_tungstenite::tungstenite::http::Response<()>| {
-            if let Some(ref tok) = matched_token {
-                resp.headers_mut().insert(
-                    "Sec-WebSocket-Protocol",
-                    tokio_tungstenite::tungstenite::http::HeaderValue::from_str(tok).unwrap_or_else(|_| tokio_tungstenite::tungstenite::http::HeaderValue::from_static("")),
-                );
-            }
-            Ok(resp)
-        }).await {
+        let ws_stream = match tokio_tungstenite::accept_hdr_async(
+            stream,
+            move |_req: &tokio_tungstenite::tungstenite::http::Request<()>,
+                  mut resp: tokio_tungstenite::tungstenite::http::Response<()>| {
+                if let Some(ref tok) = matched_token {
+                    resp.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        tokio_tungstenite::tungstenite::http::HeaderValue::from_str(tok)
+                            .unwrap_or_else(|_| {
+                                tokio_tungstenite::tungstenite::http::HeaderValue::from_static("")
+                            }),
+                    );
+                }
+                Ok(resp)
+            },
+        )
+        .await
+        {
             Ok(ws) => ws,
             Err(_) => return,
         };

@@ -193,7 +193,11 @@ pub struct StyledLine {
 impl StyledLine {
     /// Create a blank line with no spans (renders as an empty row).
     pub fn empty() -> Self {
-        Self { spans: Vec::new(), is_scale_placeholder: false, content_type: LineContentType::default() }
+        Self {
+            spans: Vec::new(),
+            is_scale_placeholder: false,
+            content_type: LineContentType::default(),
+        }
     }
 
     /// Create a line containing a single unstyled text span.

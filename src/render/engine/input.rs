@@ -42,7 +42,8 @@ impl Presenter {
             if let Some(handle) = self.gif_loading.take() {
                 if handle.is_finished() {
                     if let Ok(loaded) = handle.join() {
-                        self.gif_frames.extend(loaded.into_iter().map(|(k, v)| (k, std::sync::Arc::new(v))));
+                        self.gif_frames
+                            .extend(loaded.into_iter().map(|(k, v)| (k, std::sync::Arc::new(v))));
                         self.needs_full_redraw = true;
                     }
                 } else {
@@ -54,12 +55,22 @@ impl Presenter {
             // Kitty native animation: terminal drives GIF, so no app-side polling needed.
             let has_active_gif = self.current_slide_has_gif();
             let kitty_drives_gif = has_active_gif
-                && self.kitty_animation_cap == crate::terminal::protocols::KittyAnimationCapability::Supported
-                && self.slides[self.current].image.as_ref()
+                && self.kitty_animation_cap
+                    == crate::terminal::protocols::KittyAnimationCapability::Supported
+                && self.slides[self.current]
+                    .image
+                    .as_ref()
                     .map(|img| self.kitty_gif_ids.contains_key(&img.path))
                     .unwrap_or(false);
             let needs_gif_polling = has_active_gif && !kitty_drives_gif;
-            let poll_ms = if self.active_animation.is_some() || !self.active_loop.is_empty() || needs_gif_polling { 33 } else { 100 };
+            let poll_ms = if self.active_animation.is_some()
+                || !self.active_loop.is_empty()
+                || needs_gif_polling
+            {
+                33
+            } else {
+                100
+            };
             let mut had_input = false;
             if event::poll(std::time::Duration::from_millis(poll_ms))? {
                 // Drain ALL pending events before rendering (prevents mouse event flooding)
@@ -73,8 +84,14 @@ impl Presenter {
                         }
                         Event::Mouse(mouse) => {
                             match mouse.kind {
-                                MouseEventKind::ScrollUp => { self.scroll_up(3); had_input = true; }
-                                MouseEventKind::ScrollDown => { self.scroll_down(3); had_input = true; }
+                                MouseEventKind::ScrollUp => {
+                                    self.scroll_up(3);
+                                    had_input = true;
+                                }
+                                MouseEventKind::ScrollDown => {
+                                    self.scroll_down(3);
+                                    had_input = true;
+                                }
                                 _ => {} // ignore move/drag events
                             }
                         }
@@ -211,7 +228,9 @@ impl Presenter {
                     }
                 }
                 crate::remote::RemoteCommand::TimerStart => {
-                    if self.timer_start.is_none() { self.start_timer(); }
+                    if self.timer_start.is_none() {
+                        self.start_timer();
+                    }
                 }
                 crate::remote::RemoteCommand::TimerReset => self.reset_timer(),
                 crate::remote::RemoteCommand::SetTheme(slug) => {
@@ -297,11 +316,18 @@ impl Presenter {
                     }
                 }
             }
-            let has_exec = self.allow_exec && (slide.code_blocks.iter().any(|cb| cb.exec_mode.is_some())
-                || slide.columns.as_ref().is_some_and(|cols|
-                    cols.contents.iter().any(|c| c.code_blocks.iter().any(|cb| cb.exec_mode.is_some()))
-                ));
-            let font_offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
+            let has_exec = self.allow_exec
+                && (slide.code_blocks.iter().any(|cb| cb.exec_mode.is_some())
+                    || slide.columns.as_ref().is_some_and(|cols| {
+                        cols.contents
+                            .iter()
+                            .any(|c| c.code_blocks.iter().any(|cb| cb.exec_mode.is_some()))
+                    }));
+            let font_offset = self
+                .slide_font_offsets
+                .get(&self.current)
+                .copied()
+                .unwrap_or(0);
             let msg = crate::remote::StateMessage {
                 msg_type: "state".to_string(),
                 slide: self.current + 1,
@@ -374,10 +400,14 @@ impl Presenter {
                         self.needs_full_redraw = true;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        if self.current < self.slides.len() - 1 { self.current += 1; }
+                        if self.current < self.slides.len() - 1 {
+                            self.current += 1;
+                        }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        if self.current > 0 { self.current -= 1; }
+                        if self.current > 0 {
+                            self.current -= 1;
+                        }
                     }
                     KeyCode::Char('h') | KeyCode::Left => {
                         // Jump to same position in previous column
@@ -440,10 +470,19 @@ impl Presenter {
             KeyCode::Char('>') => self.image_scale_up(),
             KeyCode::Char('<') => self.image_scale_down(),
             KeyCode::Char(']') if self.font_capability.is_available() => self.adjust_font_offset(1),
-            KeyCode::Char('[') if self.font_capability.is_available() => self.adjust_font_offset(-1),
-            KeyCode::Char('0') if key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::SUPER) => self.reset_font_offset(),
-            KeyCode::Char('o') => { self.mode = Mode::Overview; self.needs_full_redraw = true; }
+            KeyCode::Char('[') if self.font_capability.is_available() => {
+                self.adjust_font_offset(-1)
+            }
+            KeyCode::Char('0')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    || key.modifiers.contains(KeyModifiers::SUPER) =>
+            {
+                self.reset_font_offset()
+            }
+            KeyCode::Char('o') => {
+                self.mode = Mode::Overview;
+                self.needs_full_redraw = true;
+            }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char(':') => {
                 self.mode = Mode::Command;
@@ -472,7 +511,9 @@ impl Presenter {
                 self.needs_full_redraw = true;
                 self.execute_command(&cmd);
             }
-            KeyCode::Backspace => { self.command_buf.pop(); }
+            KeyCode::Backspace => {
+                self.command_buf.pop();
+            }
             KeyCode::Char(c) => self.command_buf.push(c),
             _ => {}
         }

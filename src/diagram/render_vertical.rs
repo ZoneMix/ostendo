@@ -110,9 +110,21 @@ mod tests {
 
     fn test_colors() -> (Color, Color, Color) {
         (
-            Color::Rgb { r: 189, g: 147, b: 249 },
-            Color::Rgb { r: 248, g: 248, b: 242 },
-            Color::Rgb { r: 98, g: 114, b: 164 },
+            Color::Rgb {
+                r: 189,
+                g: 147,
+                b: 249,
+            },
+            Color::Rgb {
+                r: 248,
+                g: 248,
+                b: 242,
+            },
+            Color::Rgb {
+                r: 98,
+                g: 114,
+                b: 164,
+            },
         )
     }
 

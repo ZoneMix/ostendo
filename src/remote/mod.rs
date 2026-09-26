@@ -12,8 +12,8 @@
 //! This module re-exports the `server` submodule which runs the WebSocket listener,
 //! and keeps `html` private since it only contains the embedded remote UI page.
 
-pub mod server;
 mod html;
+pub mod server;
 
 use serde::{Deserialize, Serialize};
 

@@ -46,10 +46,9 @@ pub fn detect_pdf_converter() -> Option<&'static str> {
 ///
 /// Uses headless Chrome (`--print-to-pdf`) or wkhtmltopdf as fallback.
 pub fn export_pdf(html_path: &Path, pdf_path: &Path) -> Result<()> {
-    let converter = detect_pdf_converter()
-        .ok_or_else(|| anyhow::anyhow!(
-            "No PDF converter found. Install Chrome/Chromium or wkhtmltopdf."
-        ))?;
+    let converter = detect_pdf_converter().ok_or_else(|| {
+        anyhow::anyhow!("No PDF converter found. Install Chrome/Chromium or wkhtmltopdf.")
+    })?;
 
     if converter == "wkhtmltopdf" {
         let status = Command::new("wkhtmltopdf")

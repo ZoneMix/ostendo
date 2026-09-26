@@ -36,7 +36,7 @@ use crate::presentation::{
 };
 
 use super::regex_patterns::*;
-use super::tables::{TableParseState, parse_table_cells, parse_table_alignments};
+use super::tables::{parse_table_alignments, parse_table_cells, TableParseState};
 
 // Re-export parse_inline_formatting at this path for backward compatibility.
 // External callers use `crate::markdown::parser::parse_inline_formatting`.
@@ -111,7 +111,12 @@ fn parse_front_matter(block: &str) -> PresentationMeta {
 /// # Returns
 /// A tuple of `(Slide, current_section)` where `current_section` is passed forward so the
 /// next slide can inherit it.
-fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&Path>) -> (Slide, String) {
+fn parse_slide(
+    raw: &str,
+    number: usize,
+    last_section: &str,
+    base_dir: Option<&Path>,
+) -> (Slide, String) {
     let mut title = String::new();
     let mut subtitle = String::new();
     let mut section = String::new();
@@ -135,10 +140,12 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut title_decoration: Option<String> = None;
     let mut transition: Option<crate::render::animation::TransitionType> = None;
     let mut entrance_animation: Option<crate::render::animation::EntranceAnimation> = None;
-    let mut loop_animations: Vec<(crate::render::animation::LoopAnimation, Option<String>)> = Vec::new();
+    let mut loop_animations: Vec<(crate::render::animation::LoopAnimation, Option<String>)> =
+        Vec::new();
     let mut fullscreen: Option<bool> = None;
     let mut show_section: Option<bool> = None;
-    let mut code_preambles: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut code_preambles: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     let mut preamble_lang: Option<String> = None;
     let mut preamble_lines: Vec<String> = Vec::new();
     let mut mermaid_blocks: Vec<MermaidBlock> = Vec::new();
@@ -502,12 +509,15 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
                 .filter_map(|s| s.trim().parse::<u8>().ok())
                 .collect();
             if !ratios.is_empty() {
-                column_contents = ratios.iter().map(|_| ColumnContent {
-                    bullets: Vec::new(),
-                    code_blocks: Vec::new(),
-                    image: None,
-                    text_lines: Vec::new(),
-                }).collect();
+                column_contents = ratios
+                    .iter()
+                    .map(|_| ColumnContent {
+                        bullets: Vec::new(),
+                        code_blocks: Vec::new(),
+                        image: None,
+                        text_lines: Vec::new(),
+                    })
+                    .collect();
                 column_ratios = Some(ratios);
             }
             continue;
@@ -558,7 +568,9 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             continue;
         } else if !blockquote_lines.is_empty() {
             // End of blockquote block
-            block_quotes.push(BlockQuote { lines: std::mem::take(&mut blockquote_lines) });
+            block_quotes.push(BlockQuote {
+                lines: std::mem::take(&mut blockquote_lines),
+            });
         }
 
         // Table parsing
@@ -633,7 +645,9 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             let indent = caps[1].len();
             let text = caps[2].trim().to_string();
             // Skip empty bullets (bare `-` or `*` with no text)
-            if text.is_empty() { continue; }
+            if text.is_empty() {
+                continue;
+            }
             let depth = if indent >= 4 {
                 2
             } else if indent >= 2 {
@@ -660,7 +674,9 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         if !stripped.is_empty() && title_found {
             if let Some(col_idx) = current_column {
                 if col_idx < column_contents.len() {
-                    column_contents[col_idx].text_lines.push(stripped.to_string());
+                    column_contents[col_idx]
+                        .text_lines
+                        .push(stripped.to_string());
                 }
             } else if !bullets.is_empty() {
                 trailing_text.push(stripped.to_string());
@@ -673,7 +689,9 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
     // Flush remaining blockquote
     if !blockquote_lines.is_empty() {
-        block_quotes.push(BlockQuote { lines: blockquote_lines });
+        block_quotes.push(BlockQuote {
+            lines: blockquote_lines,
+        });
     }
     // Flush remaining table
     if let Some(state) = table_state {
@@ -806,7 +824,10 @@ const MAX_SLIDES: usize = 10_000;
 ///
 /// # Errors
 /// Returns an error if the number of `---`-delimited blocks exceeds `MAX_SLIDES + 2`.
-pub fn parse_presentation(source: &str, base_dir: Option<&Path>) -> Result<(PresentationMeta, Vec<Slide>)> {
+pub fn parse_presentation(
+    source: &str,
+    base_dir: Option<&Path>,
+) -> Result<(PresentationMeta, Vec<Slide>)> {
     // Split on --- separators
     let blocks: Vec<&str> = SLIDE_SEPARATOR_RE.split(source).collect();
 
