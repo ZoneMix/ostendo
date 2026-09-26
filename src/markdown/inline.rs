@@ -88,6 +88,12 @@ impl Inline<'_> {
                     self.push(std::mem::take(&mut plain), style, false);
                     if ch == '`' {
                         let code: String = self.chars[i + len..close].iter().collect();
+                        // CommonMark: one space on each side lets code start
+                        // or end with a backtick (`` `` ``` `` ``).
+                        let code = match code.strip_prefix(' ').and_then(|c| c.strip_suffix(' ')) {
+                            Some(inner) if !inner.trim().is_empty() => inner.to_string(),
+                            _ => code,
+                        };
                         self.push(format!(" {code} "), style, true);
                     } else {
                         self.parse(i + len, close, inner);
@@ -209,6 +215,7 @@ mod tests {
             ("~~gone~~ now", &[("gone", "s"), (" now", "")]),
             ("use `println!`", &[("use ", ""), (" println! ", "c")]),
             ("`a *b* c`", &[(" a *b* c ", "c")]),
+            ("`` ```rust ``", &[(" ```rust ", "c")]),
             (
                 "**Bold *and italic* mixed**",
                 &[("Bold ", "b"), ("and italic", "bi"), (" mixed", "b")],

@@ -87,13 +87,13 @@ impl Presenter {
         }
         let left = ellipsize(&left_text, width.saturating_sub(right_w + 2));
         let gap = width.saturating_sub(left.width() + right_w);
-        let mut spans = vec![StyledSpan::new(&left).with_fg(pal.muted)];
+        let mut spans = vec![StyledSpan::new(&left).with_fg(pal.text)];
         spans.push(StyledSpan::new(&" ".repeat(gap)));
         spans.extend(right);
 
         let progress = (self.current + 1) as f64 / self.slides.len().max(1) as f64;
         let fill = (progress * width as f64).round() as usize;
-        let fill_bg = interpolate_color(pal.surface, pal.accent, 0.22);
+        let fill_bg = interpolate_color(pal.surface, pal.accent, 0.18);
         two_tone(padded(spans, width), fill, fill_bg, pal.surface)
     }
 

@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn default_and_variant_slugs_resolve() {
         let registry = ThemeRegistry::load();
-        // main.rs falls back to it when --theme names an unknown slug.
+        // main.rs's DEFAULT_THEME.
         assert!(registry.get("terminal_green").is_some());
         for theme in registry.themes {
             for variant in [&theme.light_variant, &theme.dark_variant]

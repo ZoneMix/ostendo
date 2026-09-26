@@ -363,7 +363,8 @@ fn image_data_uri(path: &Path) -> Option<String> {
     let data = std::fs::read(path).ok()?;
     let is_svg = path
         .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
+        && std::str::from_utf8(&data).is_ok_and(|text| text.contains("<svg"));
     let mime = if is_svg {
         "image/svg+xml"
     } else {
@@ -443,8 +444,14 @@ mod tests {
         image::RgbaImage::new(1, 1).save(&png).unwrap();
         let secret = dir.path().join("credentials");
         std::fs::write(&secret, "aws_secret_access_key=hunter2").unwrap();
+        let renamed = dir.path().join("credentials.svg");
+        std::fs::write(&renamed, "aws_secret_access_key=hunter2").unwrap();
 
-        let content = export(&[slide_with_image(&png), slide_with_image(&secret)]);
+        let content = export(&[
+            slide_with_image(&png),
+            slide_with_image(&secret),
+            slide_with_image(&renamed),
+        ]);
         assert_eq!(content.matches("<img ").count(), 1);
         assert!(content.contains("<img src=\"data:image/png;base64,"));
     }

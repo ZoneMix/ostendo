@@ -60,10 +60,12 @@ pub fn render(
             node_line.push(StyledSpan::new("[").with_fg(accent));
             node_line.push(StyledSpan::new(&node.label).with_fg(text_color).bold());
             node_line.push(StyledSpan::new("]").with_fg(accent));
-            node_line.push(StyledSpan::new(&" ".repeat(right_pad)));
-
             if i + 1 < row.nodes.len() {
-                node_line.push(StyledSpan::new(" → ").with_fg(accent));
+                // The arrow stretches across the room a long annotation needs.
+                let arrow = format!(" {}→ ", "─".repeat(right_pad));
+                node_line.push(StyledSpan::new(&arrow).with_fg(accent));
+            } else {
+                node_line.push(StyledSpan::new(&" ".repeat(right_pad)));
             }
         }
         lines.push(node_line);
@@ -153,33 +155,17 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_bracket() {
+    fn arrows_stretch_so_annotations_sit_under_their_nodes() {
         let (accent, text, dim) = test_colors();
-        let graph = parse("A -> B -> C");
-        let lines = render(&graph, accent, text, dim, "  ");
-        let all_text: String = lines
+        let graph = parse("# Flow\nA -> Build\n: long note : x");
+        let rows: Vec<String> = render(&graph, accent, text, dim, "")
             .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>())
+            .map(|row| row.trim_end().to_string())
             .collect();
-        assert!(all_text.contains("["));
-        assert!(all_text.contains("]"));
-        assert!(all_text.contains("→"));
-        assert!(all_text.contains("A"));
-        assert!(all_text.contains("B"));
-        assert!(all_text.contains("C"));
-    }
-
-    #[test]
-    fn test_bracket_with_title() {
-        let (accent, text, dim) = test_colors();
-        let graph = parse("# Test\nX -> Y");
-        let lines = render(&graph, accent, text, dim, "  ");
-        let all_text: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(all_text.contains("Test"));
+        assert_eq!(
+            rows,
+            ["", "Flow", "", "[A] ──────→ [Build]", " long note   x", ""]
+        );
     }
 }

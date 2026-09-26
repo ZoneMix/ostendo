@@ -10,7 +10,7 @@
 //! | `TERM_PROGRAM=WezTerm`                          | WezTerm (iTerm2 inline images)    |
 //! | `TMUX`                                          | tmux (Kitty vars may be stale)    |
 //!
-//! Any other terminal gets ASCII art, which renders everywhere; Sixel is
+//! Any other terminal gets colored half blocks, which render everywhere; Sixel is
 //! never auto-detected and must be chosen with `--image-mode sixel`.
 
 use std::env;
