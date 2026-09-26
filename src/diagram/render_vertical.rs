@@ -29,7 +29,11 @@ pub fn render(
         .iter()
         .flat_map(|row| {
             row.nodes.iter().enumerate().map(|(i, node)| {
-                let note = row.annotations.get(i).and_then(|a| a.as_deref()).filter(|a| !a.is_empty());
+                let note = row
+                    .annotations
+                    .get(i)
+                    .and_then(|a| a.as_deref())
+                    .filter(|a| !a.is_empty());
                 (node.label.as_str(), note)
             })
         })
@@ -42,9 +46,15 @@ pub fn render(
     }
     for (i, (label, note)) in steps.iter().enumerate() {
         if i > 0 {
-            lines.push(line(vec![StyledSpan::new("   "), StyledSpan::new("↓").with_fg(accent)]));
+            lines.push(line(vec![
+                StyledSpan::new("   "),
+                StyledSpan::new("↓").with_fg(accent),
+            ]));
         }
-        let mut spans = vec![StyledSpan::new("  "), StyledSpan::new(label).with_fg(text_color).bold()];
+        let mut spans = vec![
+            StyledSpan::new("  "),
+            StyledSpan::new(label).with_fg(text_color).bold(),
+        ];
         if let Some(note) = note {
             spans.push(StyledSpan::new(&" ".repeat(label_w - label.width() + 3)));
             spans.push(StyledSpan::new(note).with_fg(dim_color));
@@ -62,7 +72,14 @@ mod tests {
     fn texts(source: &str) -> Vec<String> {
         render(&parse(source), Color::Cyan, Color::White, Color::Grey, "")
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
             .collect()
     }
 
@@ -70,7 +87,13 @@ mod tests {
     fn every_node_gets_its_own_line_with_its_annotation() {
         assert_eq!(
             texts("A -> Longer B\n: first : second\nC"),
-            ["  A          first", "   ↓", "  Longer B   second", "   ↓", "  C"]
+            [
+                "  A          first",
+                "   ↓",
+                "  Longer B   second",
+                "   ↓",
+                "  C"
+            ]
         );
     }
 }

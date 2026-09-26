@@ -5,9 +5,3 @@ colors:
   accent: "#3B6EC2"
   text: "#1A1A1A"
   code_background: "#E0DCD4"
-fonts:
-  heading: "Inter"
-  body: "Fira Code"
-  code: "Fira Code"
-layout: "center"
-visual_style: "minimal"

@@ -1,9 +1,9 @@
-//! Markdown-to-slide parsing pipeline with directive support.
+//! Markdown presentation parsing.
 
-pub mod inline;
+mod inline;
 pub mod parser;
-pub mod regex_patterns;
+mod regex_patterns;
 mod split;
-pub mod tables;
+mod tables;
 
 pub use parser::parse_presentation;

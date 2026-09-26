@@ -1,333 +1,243 @@
-//! Inline Markdown formatting parser.
+//! Inline markdown (`**bold**`, `*italic*` / `_italic_`, `~~strike~~`, `` `code` ``) to styled
+//! spans, applied by the renderer to each wrapped line.
 //!
-//! Converts raw inline text (e.g., bullet or subtitle strings) into a sequence of
-//! `StyledSpan` values carrying bold, italic, code, and strikethrough flags. Called
-//! during **rendering**, not during slide parsing.
+//! Emphasis follows simplified CommonMark flanking rules: a delimiter run opens only before
+//! non-whitespace and closes only after non-whitespace, `_` never opens or closes inside a
+//! word, and a run without a matching closer is literal text. Styles nest, so code inside bold
+//! keeps the bold flag.
 
 use crate::render::text::StyledSpan;
+use crossterm::style::Color;
 
-/// Parses inline Markdown formatting into a vector of styled text spans.
-///
-/// # Supported formatting
-/// - `**bold**` — applies the `bold` flag. Supports nested `*italic*` inside bold.
-/// - `*italic*` or `_italic_` — applies the `italic` flag.
-/// - `` `inline code` `` — applies the `code_bg` background color and pads with spaces.
-/// - `~~strikethrough~~` — applies the `strikethrough` flag.
-///
-/// # Parameters
-/// - `text`: The raw inline text to parse (e.g., a bullet or subtitle string).
-/// - `base_fg`: The default foreground color for unstyled text.
-/// - `code_bg`: The background color used for inline code spans.
-///
-/// # Returns
-/// A `Vec<StyledSpan>` where each span covers a contiguous run of identically-formatted text.
-/// If the input contains no formatting markers, a single span wrapping the entire text is returned.
-///
-/// # Algorithm
-/// The function walks through the character array one position at a time, looking for opening
-/// markers (`**`, `~~`, `` ` ``, `*`, `_`). When it finds one, it flushes any accumulated
-/// plain text as a span, then scans forward for the matching closing marker. The text between
-/// the markers becomes a new span with the appropriate formatting flag set.
-pub fn parse_inline_formatting(
-    text: &str,
-    base_fg: crossterm::style::Color,
-    code_bg: crossterm::style::Color,
-) -> Vec<StyledSpan> {
-    let mut spans = Vec::new();
+#[derive(Clone, Copy, Default)]
+struct Style {
+    bold: bool,
+    italic: bool,
+    strike: bool,
+}
+
+impl Style {
+    /// The style inside a delimiter run of `len` copies of `ch`, if that run is a delimiter.
+    fn inside(self, ch: char, len: usize) -> Option<Style> {
+        match (ch, len) {
+            ('*' | '_', 1) => Some(Style {
+                italic: true,
+                ..self
+            }),
+            ('*' | '_', 2) => Some(Style { bold: true, ..self }),
+            ('*' | '_', 3) => Some(Style {
+                bold: true,
+                italic: true,
+                ..self
+            }),
+            ('~', 2) => Some(Style {
+                strike: true,
+                ..self
+            }),
+            _ => None,
+        }
+    }
+}
+
+struct Inline<'a> {
+    chars: &'a [char],
+    fg: Color,
+    code_bg: Color,
+    spans: Vec<StyledSpan>,
+}
+
+pub fn parse_inline_formatting(text: &str, base_fg: Color, code_bg: Color) -> Vec<StyledSpan> {
     let chars: Vec<char> = text.chars().collect();
-    let mut pos = 0;
-    let mut current = String::new();
+    let mut inline = Inline {
+        chars: &chars,
+        fg: base_fg,
+        code_bg,
+        spans: Vec::new(),
+    };
+    inline.parse(0, chars.len(), Style::default());
+    if inline.spans.is_empty() {
+        inline.spans.push(StyledSpan::new("").with_fg(base_fg));
+    }
+    inline.spans
+}
 
-    while pos < chars.len() {
-        // Check for ** (bold) — recursively handles *italic* inside bold
-        if pos + 1 < chars.len() && chars[pos] == '*' && chars[pos + 1] == '*' {
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
+fn is_delimiter(ch: char) -> bool {
+    matches!(ch, '*' | '_' | '~' | '`')
+}
+
+impl Inline<'_> {
+    fn parse(&mut self, start: usize, end: usize, style: Style) {
+        let mut plain = String::new();
+        let mut i = start;
+        while i < end {
+            let ch = self.chars[i];
+            if !is_delimiter(ch) {
+                plain.push(ch);
+                i += 1;
+                continue;
             }
-            pos += 2;
-            let mut inner = String::new();
-            while pos + 1 < chars.len() && !(chars[pos] == '*' && chars[pos + 1] == '*') {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos + 1 < chars.len() {
-                pos += 2;
-            } // skip closing **
-            if !inner.is_empty() {
-                // Parse inner content for nested italic (*...*) within bold
-                let inner_chars: Vec<char> = inner.chars().collect();
-                let mut ipos = 0;
-                let mut plain = String::new();
-                while ipos < inner_chars.len() {
-                    if inner_chars[ipos] == '*' {
-                        if !plain.is_empty() {
-                            spans.push(StyledSpan::new(&plain).with_fg(base_fg).bold());
-                            plain.clear();
-                        }
-                        ipos += 1;
-                        let mut italic_text = String::new();
-                        while ipos < inner_chars.len() && inner_chars[ipos] != '*' {
-                            italic_text.push(inner_chars[ipos]);
-                            ipos += 1;
-                        }
-                        if ipos < inner_chars.len() {
-                            ipos += 1;
-                        } // skip closing *
-                        if !italic_text.is_empty() {
-                            spans.push(
-                                StyledSpan::new(&italic_text)
-                                    .with_fg(base_fg)
-                                    .bold()
-                                    .italic(),
-                            );
-                        }
+            let len = self.run_len(i, end);
+            let inner = if ch == '`' {
+                Some(style)
+            } else {
+                style.inside(ch, len)
+            };
+            let close = inner.and_then(|_| self.find_close(i, len, end));
+            match (inner, close) {
+                (Some(inner), Some(close)) => {
+                    self.push(std::mem::take(&mut plain), style, false);
+                    if ch == '`' {
+                        let code: String = self.chars[i + len..close].iter().collect();
+                        self.push(format!(" {code} "), style, true);
                     } else {
-                        plain.push(inner_chars[ipos]);
-                        ipos += 1;
+                        self.parse(i + len, close, inner);
                     }
+                    i = close + len;
                 }
-                if !plain.is_empty() {
-                    spans.push(StyledSpan::new(&plain).with_fg(base_fg).bold());
+                _ => {
+                    plain.extend(&self.chars[i..i + len]);
+                    i += len;
                 }
             }
-            continue;
         }
-        // Check for ~~ (strikethrough)
-        if pos + 1 < chars.len() && chars[pos] == '~' && chars[pos + 1] == '~' {
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
-            }
-            pos += 2;
-            let mut inner = String::new();
-            while pos + 1 < chars.len() && !(chars[pos] == '~' && chars[pos + 1] == '~') {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos + 1 < chars.len() {
-                pos += 2;
-            }
-            if !inner.is_empty() {
-                spans.push(StyledSpan::new(&inner).with_fg(base_fg).strikethrough());
-            }
-            continue;
-        }
-        // Check for ` (inline code)
-        if chars[pos] == '`' {
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
-            }
-            pos += 1;
-            let mut inner = String::new();
-            while pos < chars.len() && chars[pos] != '`' {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos < chars.len() {
-                pos += 1;
-            } // skip closing `
-            if !inner.is_empty() {
-                spans.push(
-                    StyledSpan::new(&format!(" {} ", inner))
-                        .with_fg(base_fg)
-                        .with_bg(code_bg),
-                );
-            }
-            continue;
-        }
-        // Check for * or _ (italic) — single, not double
-        if (chars[pos] == '*' || chars[pos] == '_')
-            && (pos + 1 >= chars.len() || chars[pos + 1] != chars[pos])
-        {
-            let marker = chars[pos];
-            if !current.is_empty() {
-                spans.push(StyledSpan::new(&current).with_fg(base_fg));
-                current.clear();
-            }
-            pos += 1;
-            let mut inner = String::new();
-            while pos < chars.len() && chars[pos] != marker {
-                inner.push(chars[pos]);
-                pos += 1;
-            }
-            if pos < chars.len() {
-                pos += 1;
-            } // skip closing marker
-            if !inner.is_empty() {
-                spans.push(StyledSpan::new(&inner).with_fg(base_fg).italic());
-            }
-            continue;
-        }
-        current.push(chars[pos]);
-        pos += 1;
+        self.push(plain, style, false);
     }
 
-    if !current.is_empty() {
-        spans.push(StyledSpan::new(&current).with_fg(base_fg));
+    fn run_len(&self, i: usize, end: usize) -> usize {
+        self.chars[i..end]
+            .iter()
+            .take_while(|&&c| c == self.chars[i])
+            .count()
     }
 
-    // If no formatting was found, return a single span
-    if spans.is_empty() {
-        spans.push(StyledSpan::new(text).with_fg(base_fg));
+    /// Start of the run that closes the `len`-long run at `open`. Code spans close on the next
+    /// run of equal length; emphasis skips over code spans and needs flanking on both ends.
+    fn find_close(&self, open: usize, len: usize, end: usize) -> Option<usize> {
+        let ch = self.chars[open];
+        if ch != '`' && !self.can_open(open, len, end) {
+            return None;
+        }
+        let mut j = open + len;
+        while j < end {
+            let c = self.chars[j];
+            if !is_delimiter(c) {
+                j += 1;
+                continue;
+            }
+            let run = self.run_len(j, end);
+            if c == ch && run == len && (ch == '`' || self.can_close(j, len)) {
+                return Some(j);
+            }
+            let code_end = (c == '`' && ch != '`')
+                .then(|| self.find_close(j, run, end))
+                .flatten();
+            j = code_end.unwrap_or(j) + run;
+        }
+        None
     }
 
-    spans
+    fn can_open(&self, i: usize, len: usize, end: usize) -> bool {
+        let next = self.chars[i + len..end].first();
+        let prev = i.checked_sub(1).map(|p| self.chars[p]);
+        next.is_some_and(|c| !c.is_whitespace())
+            && (self.chars[i] != '_' || !prev.is_some_and(char::is_alphanumeric))
+    }
+
+    fn can_close(&self, i: usize, len: usize) -> bool {
+        let prev = i.checked_sub(1).map(|p| self.chars[p]);
+        let next = self.chars.get(i + len);
+        prev.is_some_and(|c| !c.is_whitespace())
+            && (self.chars[i] != '_' || !next.is_some_and(|c| c.is_alphanumeric()))
+    }
+
+    fn push(&mut self, text: String, style: Style, code: bool) {
+        if text.is_empty() {
+            return;
+        }
+        let mut span = StyledSpan::new(&text).with_fg(self.fg);
+        if style.bold {
+            span = span.bold();
+        }
+        if style.italic {
+            span = span.italic();
+        }
+        if style.strike {
+            span = span.strikethrough();
+        }
+        if code {
+            span = span.with_bg(self.code_bg);
+        }
+        self.spans.push(span);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::style::Color;
 
     const FG: Color = Color::White;
     const BG: Color = Color::DarkGrey;
 
-    // --- helpers ---
-
-    fn text_of(spans: &[StyledSpan]) -> String {
-        spans.iter().map(|s| s.text.as_str()).collect()
-    }
-
-    fn find_span<'a>(spans: &'a [StyledSpan], fragment: &str) -> Option<&'a StyledSpan> {
-        spans.iter().find(|s| s.text.contains(fragment))
-    }
-
-    // --- plain text ---
-
-    #[test]
-    fn plain_text_returns_single_span() {
-        let spans = parse_inline_formatting("plain text", FG, BG);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "plain text");
-        assert!(!spans[0].bold);
-        assert!(!spans[0].italic);
-        assert!(!spans[0].strikethrough);
-        assert!(spans[0].bg.is_none());
+    /// Each span as (text, flags) with b = bold, i = italic, s = strikethrough, c = code.
+    fn spans(input: &str) -> Vec<(String, String)> {
+        parse_inline_formatting(input, FG, BG)
+            .into_iter()
+            .map(|s| {
+                assert_eq!(s.fg, Some(FG), "{input}");
+                let flags = [
+                    (s.bold, 'b'),
+                    (s.italic, 'i'),
+                    (s.strikethrough, 's'),
+                    (s.bg == Some(BG), 'c'),
+                ];
+                (s.text, flags.iter().filter(|f| f.0).map(|f| f.1).collect())
+            })
+            .collect()
     }
 
     #[test]
-    fn empty_string_returns_single_empty_span() {
-        let spans = parse_inline_formatting("", FG, BG);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].text, "");
-    }
-
-    // --- bold ---
-
-    #[test]
-    fn bold_marker_produces_bold_span() {
-        let spans = parse_inline_formatting("**bold**", FG, BG);
-        let bold_span = find_span(&spans, "bold").expect("bold span not found");
-        assert!(bold_span.bold);
-        assert!(!bold_span.italic);
-    }
-
-    #[test]
-    fn bold_preserves_surrounding_text() {
-        let spans = parse_inline_formatting("pre **bold** post", FG, BG);
-        assert!(find_span(&spans, "pre ").is_some());
-        assert!(find_span(&spans, " post").is_some());
-        let bold = find_span(&spans, "bold").unwrap();
-        assert!(bold.bold);
-    }
-
-    // --- italic ---
-
-    #[test]
-    fn italic_star_produces_italic_span() {
-        let spans = parse_inline_formatting("*italic*", FG, BG);
-        let span = find_span(&spans, "italic").expect("italic span not found");
-        assert!(span.italic);
-        assert!(!span.bold);
-    }
-
-    #[test]
-    fn italic_underscore_produces_italic_span() {
-        let spans = parse_inline_formatting("_italic_", FG, BG);
-        let span = find_span(&spans, "italic").expect("italic span not found");
-        assert!(span.italic);
-    }
-
-    // --- code ---
-
-    #[test]
-    fn backtick_code_uses_code_bg_and_padding() {
-        let spans = parse_inline_formatting("`code`", FG, BG);
-        let code_span = spans
-            .iter()
-            .find(|s| s.bg.is_some())
-            .expect("code span with bg not found");
-        assert_eq!(code_span.bg, Some(BG));
-        // inline code is wrapped with a leading and trailing space
-        assert!(code_span.text.contains("code"));
-        assert!(code_span.text.starts_with(' '));
-        assert!(code_span.text.ends_with(' '));
-    }
-
-    #[test]
-    fn backtick_code_does_not_set_bold() {
-        let spans = parse_inline_formatting("`snippet`", FG, BG);
-        let code_span = spans.iter().find(|s| s.bg.is_some()).unwrap();
-        assert!(!code_span.bold);
-    }
-
-    // --- strikethrough ---
-
-    #[test]
-    fn strikethrough_marker_sets_flag() {
-        let spans = parse_inline_formatting("~~strike~~", FG, BG);
-        let span = find_span(&spans, "strike").expect("strikethrough span not found");
-        assert!(span.strikethrough);
-        assert!(!span.bold);
-        assert!(!span.italic);
-    }
-
-    // --- mixed ---
-
-    #[test]
-    fn mixed_bold_and_italic_produces_multiple_spans() {
-        let spans = parse_inline_formatting("**bold** and *italic*", FG, BG);
-        let bold = find_span(&spans, "bold").expect("bold span missing");
-        let italic = find_span(&spans, "italic").expect("italic span missing");
-        assert!(bold.bold);
-        assert!(italic.italic);
-        assert!(!italic.bold);
-    }
-
-    #[test]
-    fn full_text_is_preserved_across_spans() {
-        let input = "**bold** and *italic*";
-        let spans = parse_inline_formatting(input, FG, BG);
-        assert_eq!(text_of(&spans), input.replace("**", "").replace('*', ""));
-    }
-
-    // --- nested bold+italic ---
-
-    #[test]
-    fn italic_nested_inside_bold_sets_both_flags() {
-        let spans = parse_inline_formatting("**outer *inner* end**", FG, BG);
-        let nested = find_span(&spans, "inner").expect("nested italic not found");
-        assert!(nested.bold, "nested span should be bold");
-        assert!(nested.italic, "nested span should be italic");
-        let outer = find_span(&spans, "outer").or_else(|| find_span(&spans, "end"));
-        if let Some(o) = outer {
-            assert!(o.bold);
-            assert!(!o.italic);
-        }
-    }
-
-    // --- fg color propagation ---
-
-    #[test]
-    fn all_spans_use_base_fg() {
-        let spans = parse_inline_formatting("**a** b *c*", FG, BG);
-        for s in &spans {
-            if s.bg.is_none() {
-                // non-code spans use base_fg
-                assert_eq!(s.fg, Some(FG));
-            }
+    fn inline_spans() {
+        let cases: &[(&str, &[(&str, &str)])] = &[
+            ("plain text", &[("plain text", "")]),
+            ("", &[("", "")]),
+            ("hello **world**", &[("hello ", ""), ("world", "b")]),
+            (
+                "*one* and _two_",
+                &[("one", "i"), (" and ", ""), ("two", "i")],
+            ),
+            ("***both***", &[("both", "bi")]),
+            ("~~gone~~ now", &[("gone", "s"), (" now", "")]),
+            ("use `println!`", &[("use ", ""), (" println! ", "c")]),
+            ("`a *b* c`", &[(" a *b* c ", "c")]),
+            (
+                "**Bold *and italic* mixed**",
+                &[("Bold ", "b"), ("and italic", "bi"), (" mixed", "b")],
+            ),
+            ("*a **b** c*", &[("a ", "i"), ("b", "bi"), (" c", "i")]),
+            (
+                "**Bold with `code` inside**",
+                &[("Bold with ", "b"), (" code ", "bc"), (" inside", "b")],
+            ),
+            (
+                "*italic with ~~struck~~ words*",
+                &[("italic with ", "i"), ("struck", "is"), (" words", "i")],
+            ),
+            // Literal: intraword underscores, spaced or unmatched stars, unclosed runs.
+            (
+                "my_var_name in config_file.rs",
+                &[("my_var_name in config_file.rs", "")],
+            ),
+            ("a_b_c _ok_", &[("a_b_c ", ""), ("ok", "i")]),
+            ("5 * 3 = 15, see *.rs", &[("5 * 3 = 15, see *.rs", "")]),
+            ("**unclosed bold", &[("**unclosed bold", "")]),
+            ("`unclosed code", &[("`unclosed code", "")]),
+        ];
+        for (input, expected) in cases {
+            let expected: Vec<(String, String)> = expected
+                .iter()
+                .map(|(t, f)| (t.to_string(), f.to_string()))
+                .collect();
+            assert_eq!(spans(input), expected, "{input}");
         }
     }
 }

@@ -92,6 +92,52 @@ fn parse_loop_directive(value: &str) -> Option<(LoopAnimation, Option<String>)> 
     Some((parse_loop_animation(name)?, target))
 }
 
+/// Directives that only set a `Slide` field. Unknown names and invalid values are ignored.
+fn slide_directive(s: &mut Slide, name: &str, value: Option<&str>) {
+    let v = value.unwrap_or("");
+    let text = || (!v.is_empty()).then(|| v.to_string());
+    match name {
+        "section" if !v.is_empty() => s.section = v.to_string(),
+        "ascii_title" => s.ascii_title = true,
+        "font_size" => set(&mut s.font_size, parse_clamped(v, -20, 20).map(|n| n as i8)),
+        "font_transition" => set(&mut s.font_transition, text()),
+        "text_scale" => set(&mut s.text_scale, parse_clamped(v, 1, 7).map(|n| n as u8)),
+        "footer" => s.footer = Some(v.to_string()),
+        "footer_align" => match v {
+            "left" => s.footer_align = FooterAlign::Left,
+            "center" => s.footer_align = FooterAlign::Center,
+            "right" => s.footer_align = FooterAlign::Right,
+            _ => {}
+        },
+        "align" => set(&mut s.alignment, parse_alignment(v)),
+        "title_decoration" if matches!(v, "underline" | "box" | "banner" | "none") => {
+            s.title_decoration = text();
+        }
+        "transition" => set(&mut s.transition, parse_transition(v)),
+        "animation" => set(&mut s.entrance_animation, parse_entrance(v)),
+        "loop_animation" => s.loop_animations.extend(parse_loop_directive(v)),
+        "fullscreen" => set(&mut s.fullscreen, value.map_or(Some(true), parse_bool)),
+        "show_section" => set(&mut s.show_section, parse_bool(v)),
+        "theme" => set(&mut s.theme_override, text()),
+        _ => {}
+    }
+}
+
+/// Overwrites `field` only when the directive value parsed.
+fn set<T>(field: &mut Option<T>, value: Option<T>) {
+    if value.is_some() {
+        *field = value;
+    }
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
 /// `Path::join` keeps absolute paths as they are.
 fn resolve_path(base_dir: Option<&Path>, path: &str) -> PathBuf {
     base_dir.map_or_else(|| PathBuf::from(path), |base| base.join(path))
@@ -240,7 +286,7 @@ impl<'a> SlideBuilder<'a> {
     /// `<!-- notes:` starts multi-line notes (text may begin on the same line); any other
     /// unclosed `<!--` hides lines up to `-->`.
     fn open_comment(&mut self, line: &str) {
-        let body = line.trim_start().trim_start_matches("<!--").trim_start();
+        let body = line.trim_start()["<!--".len()..].trim_start();
         match body.strip_prefix("notes:") {
             Some(first) => {
                 self.notes.clear();
@@ -332,66 +378,12 @@ impl<'a> SlideBuilder<'a> {
 
     fn directive(&mut self, name: &str, value: Option<&str>) {
         let v = value.unwrap_or("");
-        let s = &mut self.slide;
         match name {
-            "section" if !v.is_empty() => s.section = v.to_string(),
-            "ascii_title" => s.ascii_title = true,
-            "font_size" => {
-                if let Some(n) = parse_clamped(v, -20, 20) {
-                    s.font_size = Some(n as i8);
-                }
-            }
-            "font_transition" if !v.is_empty() => s.font_transition = Some(v.to_string()),
-            "text_scale" => {
-                if let Some(n) = parse_clamped(v, 1, 7) {
-                    s.text_scale = Some(n as u8);
-                }
-            }
-            "footer" => s.footer = Some(v.to_string()),
-            "footer_align" => match v {
-                "left" => s.footer_align = FooterAlign::Left,
-                "center" => s.footer_align = FooterAlign::Center,
-                "right" => s.footer_align = FooterAlign::Right,
-                _ => {}
-            },
-            "align" => {
-                if let Some(a) = parse_alignment(v) {
-                    s.alignment = Some(a);
-                }
-            }
-            "title_decoration" if matches!(v, "underline" | "box" | "banner" | "none") => {
-                s.title_decoration = Some(v.to_string());
-            }
-            "transition" => {
-                if let Some(t) = parse_transition(v) {
-                    s.transition = Some(t);
-                }
-            }
-            "animation" => {
-                if let Some(a) = parse_entrance(v) {
-                    s.entrance_animation = Some(a);
-                }
-            }
-            "loop_animation" => {
-                if let Some(la) = parse_loop_directive(v) {
-                    s.loop_animations.push(la);
-                }
-            }
-            "fullscreen" => match value {
-                None | Some("true") => s.fullscreen = Some(true),
-                Some("false") => s.fullscreen = Some(false),
-                _ => {}
-            },
-            "show_section" => match v {
-                "true" => s.show_section = Some(true),
-                "false" => s.show_section = Some(false),
-                _ => {}
-            },
-            "theme" if !v.is_empty() => s.theme_override = Some(v.to_string()),
             "notes" => self.notes = vec![v.to_string()],
             "preamble_start" if !v.is_empty() => {
+                let lang = v.to_string();
                 self.open = Some(OpenBlock::Preamble {
-                    lang: v.to_string(),
+                    lang,
                     lines: Vec::new(),
                 });
             }
@@ -406,17 +398,12 @@ impl<'a> SlideBuilder<'a> {
             "column_layout" => self.column_layout(v),
             "column_separator" if v.eq_ignore_ascii_case("none") => self.columns.separator = false,
             "column_text_scale" => {
-                if let Some(n) = v.parse::<u8>().ok().filter(|n| (2..=7).contains(n)) {
-                    self.columns.text_scale = Some(n);
-                }
+                let scale = v.parse().ok().filter(|n| (2..=7).contains(n));
+                set(&mut self.columns.text_scale, scale);
             }
-            "column" => {
-                if let Ok(i) = v.parse() {
-                    self.column = Some(i);
-                }
-            }
+            "column" => set(&mut self.column, v.parse().ok()),
             "reset_layout" => self.column = None,
-            _ => {}
+            _ => slide_directive(&mut self.slide, name, value),
         }
     }
 
@@ -442,11 +429,7 @@ impl<'a> SlideBuilder<'a> {
                     _ => return,
                 };
             }
-            "image_scale" => {
-                if let Some(scale) = scale {
-                    self.image.scale = scale;
-                }
-            }
+            "image_scale" => self.image.scale = scale.unwrap_or(self.image.scale),
             _ => self.image.color_override = v.to_string(),
         }
     }
@@ -483,15 +466,31 @@ impl<'a> SlideBuilder<'a> {
             return;
         }
         self.flush_table();
+        if THEMATIC_BREAK_RE.is_match(line) {
+            return;
+        }
 
-        if let Some(caps) = TITLE_RE.captures(line).filter(|_| !self.title_found) {
-            self.slide.title = caps[1].trim().to_string();
-            self.title_found = true;
+        if let Some(caps) = HEADING_RE.captures(line) {
+            if &caps[1] == "#" && !self.title_found {
+                self.slide.title = caps[2].to_string();
+                self.title_found = true;
+            } else {
+                // Other headings stand alone: shown without markers, never merged with text.
+                self.text(&caps[2], false);
+                self.paragraph_open = false;
+            }
         } else if let Some(caps) = IMAGE_RE.captures(line) {
             self.image_line(&caps[1], &caps[2]);
-        } else if let Some(caps) = BULLET_RE.captures(line) {
-            let text = caps[2].trim();
-            if !text.is_empty() {
+        } else if let Some(caps) = LIST_ITEM_RE.captures(line) {
+            let rest = caps.get(3).map_or("", |m| m.as_str().trim());
+            if !rest.is_empty() {
+                let marker = &caps[2];
+                let ordered = marker.ends_with(['.', ')']);
+                let text = if ordered {
+                    format!("{marker} {rest}")
+                } else {
+                    rest.to_string()
+                };
                 self.bullet(caps[1].len(), text);
             }
         } else {
@@ -519,16 +518,13 @@ impl<'a> SlideBuilder<'a> {
         }
     }
 
-    fn bullet(&mut self, indent: usize, text: &str) {
+    fn bullet(&mut self, indent: usize, text: String) {
         let depth = match indent {
             0..=1 => 0,
             2..=3 => 1,
             _ => 2,
         };
-        let bullet = Bullet {
-            text: text.to_string(),
-            depth,
-        };
+        let bullet = Bullet { text, depth };
         if let Some(col) = self.column_mut() {
             col.bullets.push(bullet);
             return;
