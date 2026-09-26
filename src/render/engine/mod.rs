@@ -110,6 +110,17 @@ fn resolve_image_protocol(
     }
 }
 
+/// Executable code blocks on a slide, in Ctrl+E order: slide-level first, then columns.
+fn exec_blocks(slide: &Slide) -> Vec<&crate::presentation::CodeBlock> {
+    let columns = slide.columns.iter().flat_map(|c| &c.contents);
+    slide
+        .code_blocks
+        .iter()
+        .chain(columns.flat_map(|c| &c.code_blocks))
+        .filter(|cb| cb.exec_mode.is_some())
+        .collect()
+}
+
 /// Numeric key for image protocol (used in cache keys).
 fn protocol_cache_key(proto: ImageProtocol) -> u8 {
     match proto {
@@ -180,10 +191,8 @@ pub struct Presenter {
     highlighter: Highlighter,
     /// Accumulated stdout/stderr from the most recent code execution.
     exec_output: Option<String>,
-    /// Channel receiver for streaming code execution output. `None` means
-    /// no execution is in progress. Receives `Some(line)` for output and
-    /// `None` when the process exits.
-    exec_rx: Option<std::sync::mpsc::Receiver<Option<String>>>,
+    /// The run in progress; dropping it kills the process group.
+    exec: Option<crate::code::executor::Execution>,
     /// Index of the currently-executing code block within the slide
     /// (Ctrl+E cycles through executable blocks).
     exec_block_index: usize,
@@ -503,7 +512,7 @@ impl Presenter {
             height: h,
             highlighter: Highlighter::new(),
             exec_output: None,
-            exec_rx: None,
+            exec: None,
             exec_block_index: 0,
             state,
             image_protocol,
@@ -699,100 +708,73 @@ impl Presenter {
         result
     }
 
-    /// Execute the current slide's active code block.
-    ///
-    /// If a previous execution has completed, advances to the next executable
-    /// block (Ctrl+E cycles through blocks). Collects all executable code blocks
-    /// from both slide-level and column-level sources, prepends any preamble
-    /// code, then spawns a streaming execution process.
-    ///
-    /// Does nothing if `--no-exec` was passed or if the slide has no executable blocks.
-    fn execute_code(&mut self) -> Result<()> {
+    /// Runs the current executable block; after a run finishes, Ctrl+E moves to the next one.
+    fn execute_code(&mut self) {
         if !self.allow_exec {
-            return Ok(());
+            return;
         }
-
-        // If previous execution completed, advance to next block
-        if self.exec_output.is_some() && self.exec_rx.is_none() {
+        if self.exec_output.is_some() && self.exec.is_none() {
             self.exec_block_index += 1;
             self.exec_output = None;
         }
-
         let slide = &self.slides[self.current];
-        // Collect all executable code blocks: slide-level first, then columns
-        let exec_blocks: Vec<&crate::presentation::CodeBlock> = slide
-            .code_blocks
-            .iter()
-            .filter(|cb| cb.exec_mode.is_some())
-            .chain(
-                slide
-                    .columns
-                    .as_ref()
-                    .map(|cols| {
-                        cols.contents
-                            .iter()
-                            .flat_map(|c| c.code_blocks.iter())
-                            .filter(|cb| cb.exec_mode.is_some())
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default(),
-            )
-            .collect();
-        // Fallback: if no exec blocks, try first code block
-        let exec_blocks: Vec<&crate::presentation::CodeBlock> = if exec_blocks.is_empty() {
-            slide.code_blocks.first().into_iter().collect()
-        } else {
-            exec_blocks
-        };
-        // Wrap around if past the last block
-        if !exec_blocks.is_empty() && self.exec_block_index >= exec_blocks.len() {
+        let blocks = exec_blocks(slide);
+        if blocks.is_empty() {
+            return;
+        }
+        if self.exec_block_index >= blocks.len() {
             self.exec_block_index = 0;
         }
-        if let Some(cb) = exec_blocks.get(self.exec_block_index) {
-            // Prepend preamble if one exists for this language
-            let code = if let Some(preamble) = slide.code_preambles.get(&cb.language) {
-                format!("{}\n{}", preamble, cb.code)
-            } else {
-                cb.code.clone()
-            };
-            let pres_dir = self.presentation_path.parent();
-            let rx = crate::code::executor::execute_code_streaming(&cb.language, &code, pres_dir)?;
-            self.exec_output = Some(String::new());
-            self.exec_rx = Some(rx);
+        let cb = blocks[self.exec_block_index];
+        let code = match slide.code_preambles.get(&cb.language) {
+            Some(preamble) => format!("{}\n{}", preamble, cb.code),
+            None => cb.code.clone(),
+        };
+        let mode = cb.exec_mode.unwrap_or(ExecMode::Exec);
+        let cols = scaled_content_width(self.width as usize, self.global_scale).saturating_sub(4);
+        let started = crate::code::executor::spawn(
+            &cb.language,
+            &code,
+            mode,
+            self.presentation_path.parent(),
+            u16::try_from(cols).unwrap_or(u16::MAX),
+        );
+        match started {
+            Ok(exec) => {
+                self.exec_output = Some(String::new());
+                self.exec = Some(exec);
+            }
+            Err(e) => {
+                self.exec_output = Some(format!("\x1b[31m[error] {e}\x1b[39m"));
+                self.exec = None;
+            }
         }
-        Ok(())
+        self.needs_full_redraw = true;
     }
 
-    /// Poll for streaming code execution output.
-    ///
-    /// Drains all available lines from `exec_rx` into `exec_output`.
-    /// Returns `true` if any output was received (signals a needed redraw).
-    /// When the channel sends `None`, execution is complete and the receiver
-    /// is dropped.
+    /// Moves any new execution output into `exec_output`; returns whether it changed.
     fn poll_exec_output(&mut self) -> bool {
-        let mut got_output = false;
-        if let Some(ref rx) = self.exec_rx {
-            while let Ok(msg) = rx.try_recv() {
-                match msg {
-                    Some(line) => {
-                        if let Some(ref mut output) = self.exec_output {
-                            if !output.is_empty() {
-                                output.push('\n');
-                            }
-                            output.push_str(&line);
-                        }
-                        got_output = true;
+        let Some(exec) = &self.exec else {
+            return false;
+        };
+        let mut changed = false;
+        while let Ok(msg) = exec.try_recv() {
+            changed = true;
+            match msg {
+                Some(line) => {
+                    let output = self.exec_output.get_or_insert_with(String::new);
+                    if !output.is_empty() {
+                        output.push('\n');
                     }
-                    None => {
-                        // Execution complete — advance to next block
-                        self.exec_rx = None;
-                        got_output = true;
-                        break;
-                    }
+                    output.push_str(&line);
+                }
+                None => {
+                    self.exec = None;
+                    break;
                 }
             }
         }
-        got_output
+        changed
     }
 
     /// Reload the presentation from disk, preserving slide position.

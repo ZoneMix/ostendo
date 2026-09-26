@@ -5,3 +5,4 @@ tests/integration/results/
 
 # Private presentations
 presentations/dakotacon-2026/
+.claude/worktrees/

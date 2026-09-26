@@ -340,20 +340,10 @@ impl Presenter {
                 .iter()
                 .filter(|cb| cb.exec_mode.is_some())
                 .count();
-            let col_exec_blocks: Vec<&crate::presentation::CodeBlock> = cols
-                .contents
-                .iter()
-                .flat_map(|c| c.code_blocks.iter())
-                .filter(|cb| cb.exec_mode.is_some())
-                .collect();
-            if !col_exec_blocks.is_empty() {
-                // Column exec block index starts after slide-level exec blocks
-                let col_local_idx = self.exec_block_index.saturating_sub(slide_exec_count);
-                if self.exec_block_index >= slide_exec_count
-                    && col_local_idx < col_exec_blocks.len()
-                {
-                    self.render_exec_output(&pad, &mut lines);
-                }
+            if self.exec_block_index >= slide_exec_count
+                && self.exec_block_index < exec_blocks(&slide).len()
+            {
+                self.render_exec_output(&pad, &mut lines);
             }
             lines.push(StyledLine::empty());
         }

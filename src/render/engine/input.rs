@@ -223,8 +223,8 @@ impl Presenter {
                 crate::remote::RemoteCommand::FontDown => self.adjust_font_offset(-1),
                 crate::remote::RemoteCommand::FontReset => self.reset_font_offset(),
                 crate::remote::RemoteCommand::ExecuteCode => {
-                    if self.allow_remote_exec && self.allow_exec {
-                        let _ = self.execute_code();
+                    if self.allow_remote_exec {
+                        self.execute_code();
                     }
                 }
                 crate::remote::RemoteCommand::TimerStart => {
@@ -316,13 +316,7 @@ impl Presenter {
                     }
                 }
             }
-            let has_exec = self.allow_exec
-                && (slide.code_blocks.iter().any(|cb| cb.exec_mode.is_some())
-                    || slide.columns.as_ref().is_some_and(|cols| {
-                        cols.contents
-                            .iter()
-                            .any(|c| c.code_blocks.iter().any(|cb| cb.exec_mode.is_some()))
-                    }));
+            let has_exec = self.allow_exec && !exec_blocks(slide).is_empty();
             let font_offset = self
                 .slide_font_offsets
                 .get(&self.current)
@@ -446,7 +440,7 @@ impl Presenter {
                 self.scroll_up(self.height as usize / 2);
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.execute_code()?;
+                self.execute_code();
             }
             KeyCode::Char('g') => {
                 self.mode = Mode::Goto;

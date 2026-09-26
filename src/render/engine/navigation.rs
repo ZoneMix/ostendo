@@ -43,7 +43,7 @@ impl Presenter {
         self.scroll_offset = 0;
         self.notes_scroll = 0;
         self.exec_output = None;
-        self.exec_rx = None;
+        self.exec = None;
         self.exec_block_index = 0;
 
         // Kitty image cleanup is handled in render_frame() before emitting
