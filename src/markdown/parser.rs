@@ -483,15 +483,31 @@ impl<'a> SlideBuilder<'a> {
             return;
         }
         self.flush_table();
+        if THEMATIC_BREAK_RE.is_match(line) {
+            return;
+        }
 
-        if let Some(caps) = TITLE_RE.captures(line).filter(|_| !self.title_found) {
-            self.slide.title = caps[1].trim().to_string();
-            self.title_found = true;
+        if let Some(caps) = HEADING_RE.captures(line) {
+            if &caps[1] == "#" && !self.title_found {
+                self.slide.title = caps[2].to_string();
+                self.title_found = true;
+            } else {
+                // Other headings stand alone: shown without markers, never merged with text.
+                self.text(&caps[2], false);
+                self.paragraph_open = false;
+            }
         } else if let Some(caps) = IMAGE_RE.captures(line) {
             self.image_line(&caps[1], &caps[2]);
-        } else if let Some(caps) = BULLET_RE.captures(line) {
-            let text = caps[2].trim();
-            if !text.is_empty() {
+        } else if let Some(caps) = LIST_ITEM_RE.captures(line) {
+            let rest = caps.get(3).map_or("", |m| m.as_str().trim());
+            if !rest.is_empty() {
+                let marker = &caps[2];
+                let ordered = marker.ends_with(['.', ')']);
+                let text = if ordered {
+                    format!("{marker} {rest}")
+                } else {
+                    rest.to_string()
+                };
                 self.bullet(caps[1].len(), text);
             }
         } else {
@@ -519,16 +535,13 @@ impl<'a> SlideBuilder<'a> {
         }
     }
 
-    fn bullet(&mut self, indent: usize, text: &str) {
+    fn bullet(&mut self, indent: usize, text: String) {
         let depth = match indent {
             0..=1 => 0,
             2..=3 => 1,
             _ => 2,
         };
-        let bullet = Bullet {
-            text: text.to_string(),
-            depth,
-        };
+        let bullet = Bullet { text, depth };
         if let Some(col) = self.column_mut() {
             col.bullets.push(bullet);
             return;

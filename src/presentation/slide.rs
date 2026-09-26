@@ -55,7 +55,8 @@ pub struct Slide {
     pub blocks: Vec<Block>,
     /// Plain-text paragraphs other than the subtitle; consecutive lines are joined by a space.
     pub paragraphs: Vec<String>,
-    /// List items outside columns, flattened across groups.
+    /// `-`/`*`/`+` and ordered (`1.`, `1)`) items outside columns, flattened across groups.
+    /// Ordered items keep their number at the start of `text`.
     pub bullets: Vec<Bullet>,
     /// Ranges into `bullets`, one per run of list items not interrupted by another block.
     pub bullet_groups: Vec<Range<usize>>,

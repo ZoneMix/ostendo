@@ -19,14 +19,22 @@ pub(crate) static FRONT_MATTER_KV_RE: LazyLock<Regex> =
 pub(crate) static FENCE_LABEL_RE: LazyLock<Regex> =
     LazyLock::new(|| re(r#"\{label:\s*"([^"]*)"\s*\}"#));
 
-pub(crate) static TITLE_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^#\s+(.+)$"));
+/// ATX heading: (1) `#` markers, (2) text.
+pub(crate) static HEADING_RE: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^(#{1,6})\s+(.*?)\s*$"));
 
 /// `![alt](path)`: (1) alt, (2) path.
 pub(crate) static IMAGE_RE: LazyLock<Regex> =
     LazyLock::new(|| re(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$"));
 
-/// (1) indentation, (2) item text.
-pub(crate) static BULLET_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^(\s*)[-*]\s*(.*)$"));
+/// `-`, `*`, `+` or `1.`/`1)` followed by whitespace: (1) indentation, (2) marker, (3) text.
+/// The whitespace keeps `**bold**`, `*emphasis*` and `-5` out of lists.
+pub(crate) static LIST_ITEM_RE: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^(\s*)([-*+]|\d{1,9}[.)])(?:\s+(.*))?$"));
+
+/// `***`, `---`, `___` (optionally spaced) horizontal rules, which slides do not draw.
+pub(crate) static THEMATIC_BREAK_RE: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$"));
 
 pub(crate) static TABLE_ROW_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^\|(.+)\|\s*$"));
 

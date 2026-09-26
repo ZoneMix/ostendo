@@ -31,13 +31,43 @@ fn test_empty_slides_skipped() {
 }
 
 #[test]
-fn test_bullet_depths() {
-    let slides = parse("# Test\n- top\n  - mid\n    - deep");
-    assert_eq!(slides[0].bullets.len(), 3);
-    assert_eq!(slides[0].bullets[0].depth, 0);
-    assert_eq!(slides[0].bullets[0].text, "top");
-    assert_eq!(slides[0].bullets[1].depth, 1);
-    assert_eq!(slides[0].bullets[2].depth, 2);
+fn list_items_need_a_marker_and_whitespace() {
+    let cases = [
+        ("- dash", Some(("dash", 0))),
+        ("* star", Some(("star", 0))),
+        ("+ plus", Some(("plus", 0))),
+        ("  - nested", Some(("nested", 1))),
+        ("    - deep", Some(("deep", 2))),
+        ("1. first", Some(("1. first", 0))),
+        ("   12) twelfth", Some(("12) twelfth", 1))),
+        ("**Bold** text", None),
+        ("*Note:* x", None),
+        ("-5 degrees", None),
+    ];
+    for (line, bullet) in cases {
+        let slide = &parse(&format!("# T\n{line}"))[0];
+        let got: Vec<(&str, usize)> = slide
+            .bullets
+            .iter()
+            .map(|b| (b.text.as_str(), b.depth))
+            .collect();
+        match bullet {
+            Some(item) => assert_eq!(got, [item], "{line}"),
+            None => {
+                assert!(got.is_empty(), "{line}");
+                assert_eq!(slide.subtitle, line);
+            }
+        }
+    }
+}
+
+#[test]
+fn headings_and_rules() {
+    let slide = &parse("# T\n## Sub heading\ntext\n### Third\n***\n* * *\n___\n# Second")[0];
+    assert_eq!(slide.title, "T");
+    assert_eq!(slide.subtitle, "Sub heading");
+    assert_eq!(slide.paragraphs, ["text", "Third", "Second"]);
+    assert!(slide.bullets.is_empty());
 }
 
 #[test]
