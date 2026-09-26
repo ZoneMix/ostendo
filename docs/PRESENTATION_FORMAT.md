@@ -1,464 +1,184 @@
-> NOTE: The authoritative reference is now in `.claude/docs/DIRECTIVE_REFERENCE.md`.
+# Presentation Format
 
-# Ostendo Presentation Format
+An Ostendo presentation is one markdown file. Slides are separated by a line
+containing only `---`; directives are HTML comments, so the file still reads
+well anywhere markdown is rendered. Run `ostendo --validate talk.md` to check a
+deck before presenting.
 
-This document is the comprehensive human-readable reference for the Ostendo markdown presentation format.
+## Front matter
 
-## Front Matter
-
-Every presentation begins with YAML front matter enclosed in `---` delimiters:
-
-```markdown
----
-title: My Presentation Title
-theme: dracula
----
-```
-
-**Supported fields:**
-- `title` - Presentation title (shown in window title)
-- `theme` - Theme slug (see [THEME_GUIDE.md](THEME_GUIDE.md))
-
-The front matter block must be the very first thing in the file.
-
-## Slide Structure
-
-After the front matter, slides are separated by `---` on its own line:
+An optional first block between `---` lines holds `key: value` settings:
 
 ```markdown
 ---
-title: Demo
-theme: terminal_green
+title: Shipping Rust at Scale
+author: Ada Lovelace
+date: 2026-03-14
+theme: nord
+accent: "#88c0d0"
+transition: fade
+align: top
 ---
-
-# First Slide
-
-Content here
-
----
-
-# Second Slide
-
-More content
-
----
-
-# Third Slide
-
-Even more content
 ```
 
-Each slide can contain:
-- One title (`# Heading`)
-- One subtitle (first non-empty, non-directive line after the title)
-- Bullets
-- Code blocks (multiple allowed)
-- One image
-- Tables (multiple allowed)
-- Block quotes (multiple allowed)
-- Directives (HTML comments)
+| Key | Effect |
+|---|---|
+| `title` | Shown in the status bar and used as the exported document title |
+| `author` | Shown after the title in the status bar |
+| `date` | Shown with the title and author in the overview (`o`) |
+| `theme` | Theme slug (`ostendo --list-themes`); `--theme` overrides it |
+| `accent` | Hex accent color for the deck's theme; ignored if it would be unreadable (below 3:1 contrast) |
+| `transition` | Default transition for every slide: `fade`, `slide`, `dissolve` |
+| `align` | Default alignment: `top`, `center`, `vcenter`, `hcenter` |
 
-## Titles
+## Slide content
 
-Use a single `# Heading` per slide:
+Elements render in the order they appear in the file.
 
-```markdown
-# My Slide Title
-```
+- `# Title` — the slide title (first `#` heading). Other headings (`##`, `###`)
+  render as bold text.
+- The first line of text right after the title is the subtitle; later text
+  becomes paragraphs (consecutive lines join into one paragraph).
+- Lists: `-`, `*`, or `+` followed by a space; indent two spaces per level
+  (three levels). Ordered items (`1.`, `2)`) keep their numbers.
+- Inline: `**bold**`, `*italic*` or `_italic_`, `` `code` ``, `~~strike~~`,
+  nestable (`**bold with `code`**`). Underscores inside words (`snake_case`)
+  stay literal.
+- Tables: standard pipe tables; `:---`, `:---:`, `---:` set alignment. Wide
+  tables shrink their columns and wrap cells.
+- Block quotes: `> text`. A line starting with `— ` or `-- ` is shown as an
+  attribution.
+- Images: `![alt](path)`, relative to the markdown file. The alt text becomes a
+  caption in text-based rendering.
+- Code fences, diagrams, and Mermaid blocks (below).
 
-Only the first `#` heading in a slide is treated as the title. It renders in the theme's accent color with bold styling.
+`---` inside a code fence or an HTML comment does not end the slide.
 
-### ASCII Art Titles
-
-Add the `<!-- ascii_title -->` directive to render the title as FIGlet ASCII art:
-
-```markdown
-# HACK
-<!-- ascii_title -->
-```
-
-**Tips:**
-- Keep titles under 15 characters to avoid overflow
-- ALL CAPS often looks best with FIGlet
-- The FIGlet font used is "Slant"
-
-## Subtitles
-
-The first non-empty line after the title that is not a directive becomes the subtitle:
-
-```markdown
-# Main Title
-
-This line becomes the subtitle
-
-- This is a bullet (not a subtitle)
-```
-
-Subtitles render in the theme's text color, slightly dimmer than regular content. Inline formatting (`**bold**`, `*italic*`, etc.) is supported in subtitles.
-
-## Bullets
-
-Use `-` or `*` with indentation for depth:
-
-```markdown
-- Top level bullet (depth 0)
-  - Second level (depth 1, 2 spaces indent)
-    - Third level (depth 2, 4 spaces indent)
-- Another top level
-  - With a sub-point
-```
-
-**Depth rendering:**
-| Indent | Depth | Marker |
-|--------|-------|--------|
-| 0 spaces | 0 | `*` (accent color) |
-| 2 spaces | 1 | `-` |
-| 4 spaces | 2 | `>` |
-
-Bullets support inline formatting: `**bold**`, `*italic*`, `` `code` ``, `~~strikethrough~~`.
-
-Long bullets are automatically word-wrapped to fit the content width.
-
-## Code Blocks
-
-Standard fenced code blocks with optional modifiers:
+## Code blocks
 
 ````markdown
-```python
-def hello():
-    print("Hello, world!")
+```python +exec {label: "fib.py"}
+print([a for a in range(10)])
 ```
 ````
 
-### Language Tag
+The info string is the language, then optional flags in any order:
 
-The language tag after the opening fence controls syntax highlighting. Supported languages include all syntect defaults:
+| Flag | Effect |
+|---|---|
+| `+exec` | Ctrl+E runs the block; output streams underneath |
+| `+pty` | Like `+exec`, in a pseudo-terminal (programs see a TTY and keep colors) |
+| `{label: "name"}` | Label shown in the block's header |
 
-`python`, `rust`, `bash`/`sh`, `json`, `yaml`, `toml`, `javascript`, `typescript`, `go`, `c`, `cpp`, `java`, `ruby`, `sql`, `html`, `css`, `xml`, `lua`, `haskell`, `swift`, `kotlin`, `scala`, `php`, `dart`, `zig`, `r`, and more.
+Runnable languages: `python`, `bash`/`sh`, `javascript`/`node`, `ruby`, `rust`,
+`c`, `cpp`/`c++`, `go`. Rust, C, C++, and Go snippets without a `main` are
+wrapped in one (imports and helper functions are hoisted). Each run has a 30 s
+limit and a 1 MB output cap, cannot read the keyboard, and is killed along with
+its children when you leave the slide. Pressing Ctrl+E again after a run moves
+to the next executable block on the slide. `--no-exec` disables execution.
 
-### Executable Code Blocks
+Shared setup that should not appear on the slide goes in a preamble, prepended
+to every block of that language on the slide:
 
-Add `+exec` to make a code block executable with `Ctrl+E`:
+```markdown
+<!-- preamble_start: python -->
+import math, random
+<!-- preamble_end -->
+```
+
+## Diagrams
 
 ````markdown
-```python +exec
-print("This runs when you press Ctrl+E")
+```diagram style=bracket
+# CI pipeline
+Commit -> Build -> Test -> Deploy
+: git push : cargo build : cargo test : k8s rollout
 ```
 ````
 
-Add `+pty` for interactive programs that need a PTY:
+A `#` line is the title; each other line is a row of nodes joined by `->`; a
+line starting with `:` annotates the nodes of the row above, one `: ` segment
+per node. Styles: `box` (default), `bracket`, `vertical`. When a style does not
+fit, labels are shortened and then the next narrower style is used.
 
-````markdown
-```bash +pty
-htop
-```
-````
+A ```` ```mermaid ```` block is rendered to an image with
+[mermaid-cli](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) when it is
+installed, and shown as source otherwise.
 
-### Labels
+## Directives
 
-Add a label that appears as a comment header above the code:
+Directives apply to the slide they are on.
 
-````markdown
-```python +exec {label: "API request example"}
-import requests
-resp = requests.get("https://httpbin.org/get")
-print(resp.status_code)
-```
-````
+### Layout and text
 
-The label renders using the language's comment syntax (e.g., `# API request example` for Python, `// API request example` for Rust).
+| Directive | Values | Effect |
+|---|---|---|
+| `<!-- section: Name -->` | text | Section shown in the status bar; later slides inherit it |
+| `<!-- align: V -->` | `top`, `center`, `vcenter`, `hcenter` | Content alignment |
+| `<!-- title_decoration: V -->` | `underline`, `box`, `banner`, `none` | Title style (themes may set a default) |
+| `<!-- ascii_title -->` | | Title as FIGlet art, split across lines if needed |
+| `<!-- text_scale: N -->` | 2–7 | Title drawn N× larger (Kitty's text sizing; ignored elsewhere) |
+| `<!-- font_size: N -->` | -20–20 | Terminal font size for this slide; 1 is your normal size, each step is ±4 pt (Kitty remote control or Ghostty on macOS) |
+| `<!-- fullscreen -->` | or `: false` | Hide the status bar on this slide |
+| `<!-- show_section: V -->` | `true`, `false` | Show the section label above the title |
+| `<!-- footer: text -->` | text | Footer line |
+| `<!-- footer_align: V -->` | `left`, `center`, `right` | Footer alignment |
+| `<!-- theme: slug -->` | theme slug | Theme for this slide only |
 
-### Full Syntax
-
-````
-```<language> [+exec|+pty] [{label: "name"}]
-code here
-```
-````
-
-All three modifiers are optional and order matters: language first, then exec mode, then label.
-
-## Images
+### Speaker notes
 
 ```markdown
-![alt text](path/to/image.png)
-```
+<!-- notes: One line of notes -->
 
-- Path is relative to the presentation markdown file
-- Alt text is displayed as a caption below the image
-- Supported formats: PNG, JPEG, GIF, BMP, WebP (anything the `image` crate supports)
-
-### Image Directives
-
-Control image rendering with directives on the same slide:
-
-```markdown
-![Network Diagram](assets/network.png)
-<!-- image_render: ascii -->
-<!-- image_position: right -->
-<!-- image_scale: 60 -->
-```
-
-| Directive | Values | Default |
-|-----------|--------|---------|
-| `image_render` | `ascii`, `kitty`, `iterm`, `sixel` | CLI setting / auto |
-| `image_position` | `left`, `right` | `below` (centered) |
-| `image_scale` | `1` - `100` | `100` |
-
-## Tables
-
-Standard markdown pipe tables:
-
-```markdown
-| Name    | Role      | Status   |
-|---------|-----------|----------|
-| Alice   | Engineer  | Active   |
-| Bob     | Designer  | On Leave |
-```
-
-### Column Alignment
-
-Use colons in the separator row:
-
-```markdown
-| Left    | Center  | Right   |
-|:--------|:-------:|--------:|
-| data    | data    | data    |
-```
-
-- `:---` = left-aligned (default)
-- `:---:` = center-aligned
-- `---:` = right-aligned
-
-## Block Quotes
-
-```markdown
-> This is a quoted block
-> It can span multiple lines
-```
-
-Block quotes render with a vertical bar (`|`) in the accent color, and the text is italicized.
-
-Multiple block quotes per slide are supported, each separated by a blank line.
-
-## Inline Formatting
-
-Supported within bullets, subtitles, block quotes, and table cells:
-
-| Syntax | Result |
-|--------|--------|
-| `**bold**` | **bold** |
-| `*italic*` | *italic* |
-| `` `code` `` | inline code (with code background color) |
-| `~~strikethrough~~` | ~~strikethrough~~ |
-
-## Column Layouts
-
-Create side-by-side content with column directives:
-
-```markdown
-<!-- column_layout: [1, 1] -->
-<!-- column: 0 -->
-
-- Left column content
-- More left content
-
-<!-- column: 1 -->
-
-- Right column content
-- More right content
-
-<!-- reset_layout -->
-```
-
-### Ratio Weights
-
-The array in `column_layout` defines relative widths:
-
-- `[1, 1]` = two equal columns (50/50)
-- `[2, 1]` = left column is twice as wide (66/33)
-- `[1, 1, 1]` = three equal columns (33/33/33)
-- `[3, 1]` = left column is 75%, right is 25%
-
-### Column Content
-
-Each column can contain:
-- Bullets
-- Code blocks
-
-Switch between columns with `<!-- column: N -->` (0-indexed).
-
-Always end with `<!-- reset_layout -->` to return to normal flow.
-
-## Directives Reference
-
-All directives are HTML comments that Ostendo parses:
-
-### Section
-
-```markdown
-<!-- section: Introduction -->
-```
-
-Sets a section label displayed in the status bar. Inherits to subsequent slides until a new `<!-- section: -->` is set.
-
-### Timing
-
-```markdown
-<!-- timing: 2.5 -->
-```
-
-Sets expected timing in minutes for pace tracking. The timer in the status bar shows elapsed time.
-
-### ASCII Title
-
-```markdown
-<!-- ascii_title -->
-```
-
-Renders the slide's `# Title` as FIGlet ASCII art using the Slant font. Place this directive anywhere on the slide.
-
-### Font Size
-
-```markdown
-<!-- font_size: 3 -->
-```
-
-Sets font size for the slide (1-7). Uses Kitty remote control protocol, supported by kitty terminal. Can also be adjusted at runtime with `]` and `[` keys.
-
-### Column Layout
-
-See the [Column Layouts](#column-layouts) section above.
-
-### Image Rendering
-
-```markdown
-<!-- image_render: ascii -->
-```
-
-Overrides the image rendering protocol for this slide. Useful when the global protocol doesn't work well for a specific image.
-
-Values: `ascii`, `kitty`, `iterm`, `sixel`
-
-### Image Position
-
-```markdown
-<!-- image_position: right -->
-```
-
-Places the image to the left or right of the content instead of below it.
-
-Values: `left`, `right`
-
-### Image Scale
-
-```markdown
-<!-- image_scale: 50 -->
-```
-
-Scales the image to a percentage of the available space.
-
-Values: `1` to `100`
-
-## Speaker Notes
-
-### Single Line
-
-```markdown
-<!-- notes: Remember to demo the live API call here -->
-```
-
-### Multi-Line
-
-```markdown
 <!-- notes:
-Key talking points:
-- Explain the architecture decision
-- Show the performance benchmarks
-- Mention the team contributions
+Several lines
+of notes
 -->
 ```
 
-Notes are toggled with `n` key or `:notes` command during presentation.
+Press `n` to show notes under the slide; `N` / `P` scroll them.
 
-## Complete Example
+### Images
 
-````markdown
----
-title: Quarterly Review
-theme: frost_glass
----
+These follow the image line they apply to.
 
-# Q4 Review
-<!-- section: overview -->
-<!-- timing: 2.0 -->
-<!-- ascii_title -->
+| Directive | Values | Effect |
+|---|---|---|
+| `<!-- image_position: right -->` | `right` | Pin the image to the right; text wraps beside it |
+| `<!-- image_scale: N -->` | 1–100 | Percentage of the available width |
+| `<!-- image_render: V -->` | `kitty`, `iterm`, `sixel`, `ascii` | Force a protocol (`ascii` is character art) |
+| `<!-- image_color: #hex -->` | hex color | Tint character-art images |
 
-Engineering team quarterly review
+Images use the terminal's graphics protocol when available (Kitty, Ghostty,
+iTerm2, WezTerm) and true-color half blocks everywhere else. Animated GIFs play.
 
-<!-- notes: Open with team accomplishments -->
+### Columns
 
----
-
-# Key Metrics
-<!-- timing: 3.0 -->
-
-<!-- column_layout: [1, 1] -->
+```markdown
+<!-- column_layout: [2, 1] -->
 <!-- column: 0 -->
-
-- Uptime: **99.97%**
-- Deployments: 142
-- Incidents: 3
-  - 2 resolved < 1hr
-  - 1 resolved < 4hr
-
+**Left**
+- takes two thirds
 <!-- column: 1 -->
-
-- PRs merged: 487
-- Test coverage: 89%
-- Tech debt: -12%
-  - Removed 3 legacy services
-
+**Right**
+- one third
 <!-- reset_layout -->
-
-<!-- notes: Highlight the improvement in tech debt -->
-
----
-
-# Architecture
-<!-- section: technical -->
-<!-- timing: 2.0 -->
-
-![System Architecture](assets/architecture.png)
-<!-- image_scale: 70 -->
-
-> The new microservice boundary reduced cross-team dependencies by 40%
-
----
-
-# Demo
-<!-- timing: 1.5 -->
-
-```python +exec {label: "health check"}
-import json
-status = {"api": "healthy", "db": "healthy", "cache": "healthy"}
-print(json.dumps(status, indent=2))
 ```
 
----
+Columns hold text, bullets, code, and one image each, in source order.
+`<!-- column_separator: none -->` hides the divider;
+`<!-- column_text_scale: N -->` (2–7) enlarges column text on Kitty.
 
-# Summary
+### Animations
 
-| Area       | Q3    | Q4    | Change |
-|:-----------|:-----:|:-----:|-------:|
-| Uptime     | 99.9% | 99.97%| +0.07% |
-| Deploys    | 98    | 142   | +45%   |
-| Coverage   | 82%   | 89%   | +7%    |
+| Directive | Values |
+|---|---|
+| `<!-- transition: V -->` | `fade` (400 ms), `slide` (300 ms), `dissolve` (600 ms) |
+| `<!-- animation: V -->` | `typewriter`, `fade_in`, `slide_down` (500 ms entrance) |
+| `<!-- loop_animation: V -->` | `matrix`, `bounce`, `pulse`, `sparkle`, `spin` |
 
-**Next steps:**
-- Complete migration to new auth service
-- Launch performance monitoring dashboard
-- Hire 2 additional SREs
-
-<!-- notes: End with concrete next steps and timeline -->
-````
+Transitions play when arriving at the slide; if the slide also has an entrance
+animation, the transition only clears the previous slide and the entrance
+reveals the new one. Loop animations run while the slide is shown and can be
+limited to part of it: `sparkle(figlet)` affects only an `ascii_title`, and
+`spin(image)` only character-art images. Repeat the directive to combine loops.

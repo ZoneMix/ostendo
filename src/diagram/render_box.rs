@@ -1,33 +1,30 @@
-//! Box-drawing style diagram renderer using Unicode border characters.
+//! Box-drawing diagram style:
+//!
+//! ```text
+//! ┌─────────┐    ┌──────┐
+//! │ Request │───→│ Auth │
+//! └─────────┘    └──────┘
+//!  incoming       JWT
+//!                verify
+//! ```
+//!
+//! Annotations wrap under their box, so a box is only as wide as its label or
+//! the longest annotation word.
 
-/// Box-drawing style renderer.
-///
-/// Produces Unicode box-drawing diagrams:
-/// ```text
-/// ┌──────────┐    ┌──────────┐    ┌──────────┐
-/// │ Node A   │───→│ Node B   │───→│ Node C   │
-/// └──────────┘    └──────────┘    └──────────┘
-///   annotation     annotation      annotation
-/// ```
 use crossterm::style::Color;
 
 use crate::diagram::parser::{DiagramGraph, DiagramRow};
-use crate::render::text::{LineContentType, StyledLine, StyledSpan};
+use crate::render::text::{wrap_text, LineContentType, StyledLine, StyledSpan};
 
-/// Horizontal arrow connector between boxes.
 const ARROW: &str = "───→";
-/// Arrow display width.
 const ARROW_WIDTH: usize = 4;
-/// Minimum padding inside box on each side of the label.
+/// Spaces between each side of the box and its label.
 const BOX_PAD: usize = 1;
 
-/// Render a `DiagramGraph` as box-drawing styled lines.
-///
-/// `accent` colors box borders and arrows. `text_color` colors labels.
-/// `dim_color` colors annotations and titles.
+/// `accent` colors borders and arrows, `text_color` labels, and `dim_color`
+/// annotations and the title.
 pub fn render(
     graph: &DiagramGraph,
-    content_width: usize,
     accent: Color,
     text_color: Color,
     dim_color: Color,
@@ -35,7 +32,6 @@ pub fn render(
 ) -> Vec<StyledLine> {
     let mut lines: Vec<StyledLine> = Vec::new();
 
-    // Title
     if let Some(ref title) = graph.title {
         lines.push(StyledLine::empty());
         let mut line = StyledLine::empty();
@@ -47,8 +43,16 @@ pub fn render(
     }
 
     for (row_idx, row) in graph.rows.iter().enumerate() {
-        let col_widths = compute_column_widths(row, content_width);
-        render_row(&mut lines, row, &col_widths, accent, text_color, dim_color, pad);
+        let col_widths = compute_column_widths(row);
+        render_row(
+            &mut lines,
+            row,
+            &col_widths,
+            accent,
+            text_color,
+            dim_color,
+            pad,
+        );
 
         // Vertical connector to next row if rows share a node
         if row_idx + 1 < graph.rows.len() {
@@ -66,23 +70,20 @@ pub fn render(
     lines
 }
 
-/// Compute the display width for each column in a row.
-///
-/// Each column width = max(label_len, annotation_len) + 2 * BOX_PAD + 2 (for box border chars `│ │`).
-fn compute_column_widths(row: &DiagramRow, _content_width: usize) -> Vec<usize> {
+/// Box width per node: its label or its annotation's longest word.
+fn compute_column_widths(row: &DiagramRow) -> Vec<usize> {
     row.nodes
         .iter()
         .enumerate()
         .map(|(i, node)| {
             let label_w = node.label.chars().count();
-            let ann_w = row
+            let word_w = row
                 .annotations
                 .get(i)
-                .and_then(|a| a.as_ref())
-                .map(|a| a.chars().count())
+                .and_then(|a| a.as_deref())
+                .and_then(|a| a.split_whitespace().map(|w| w.chars().count()).max())
                 .unwrap_or(0);
-            let inner = label_w.max(ann_w);
-            inner + 2 * BOX_PAD + 2 // +2 for `│` on each side
+            label_w.max(word_w) + 2 * BOX_PAD + 2 // +2 for `│` on each side
         })
         .collect()
 }
@@ -151,24 +152,29 @@ fn render_row(
     }
     lines.push(bot);
 
-    // Annotations (if any non-None)
-    let has_annotations = row.annotations.iter().any(|a| a.is_some());
-    if has_annotations {
+    let wrapped: Vec<Vec<String>> = col_widths
+        .iter()
+        .enumerate()
+        .map(
+            |(i, &w)| match row.annotations.get(i).and_then(|a| a.as_deref()) {
+                Some(text) => wrap_text(text, w),
+                None => Vec::new(),
+            },
+        )
+        .collect();
+    let depth = wrapped.iter().map(Vec::len).max().unwrap_or(0);
+    for k in 0..depth {
         let mut ann_line = StyledLine::empty();
         ann_line.content_type = LineContentType::Diagram;
         ann_line.push(StyledSpan::new(pad));
-        for (i, ann) in row.annotations.iter().take(col_widths.len()).enumerate() {
-            let col_w = col_widths[i];
-            let text = ann.as_deref().unwrap_or("");
-            let text_chars: usize = text.chars().count();
-            // Center annotation under the box
-            let total_pad = col_w.saturating_sub(text_chars);
+        for (i, lines) in wrapped.iter().enumerate() {
+            let text = lines.get(k).map_or("", String::as_str);
+            let total_pad = col_widths[i].saturating_sub(text.chars().count());
             let left = total_pad / 2;
-            let right = total_pad - left;
             ann_line.push(StyledSpan::new(&" ".repeat(left)));
             ann_line.push(StyledSpan::new(text).with_fg(dim_color));
-            ann_line.push(StyledSpan::new(&" ".repeat(right)));
-            if i + 1 < row.nodes.len() {
+            ann_line.push(StyledSpan::new(&" ".repeat(total_pad - left)));
+            if i + 1 < node_count {
                 ann_line.push(StyledSpan::new(&" ".repeat(ARROW_WIDTH)));
             }
         }
@@ -201,22 +207,15 @@ fn compute_connector_offset(col_widths: &[usize], col_idx: usize) -> usize {
 }
 
 /// Render vertical connector lines (│ and ▼) between two rows.
-fn render_vertical_connector(
-    lines: &mut Vec<StyledLine>,
-    offset: usize,
-    accent: Color,
-    pad: &str,
-) {
+fn render_vertical_connector(lines: &mut Vec<StyledLine>, offset: usize, accent: Color, pad: &str) {
     let pad_len = pad.len();
 
-    // Pipe line
     let mut pipe = StyledLine::empty();
     pipe.content_type = LineContentType::Diagram;
     pipe.push(StyledSpan::new(&" ".repeat(pad_len + offset)));
     pipe.push(StyledSpan::new("│").with_fg(accent));
     lines.push(pipe);
 
-    // Arrow down
     let mut arrow = StyledLine::empty();
     arrow.content_type = LineContentType::Diagram;
     arrow.push(StyledSpan::new(&" ".repeat(pad_len + offset)));
@@ -230,53 +229,46 @@ mod tests {
     use crate::diagram::parser::parse;
 
     fn test_accent() -> Color {
-        Color::Rgb { r: 189, g: 147, b: 249 }
+        Color::Rgb {
+            r: 189,
+            g: 147,
+            b: 249,
+        }
     }
     fn test_text() -> Color {
-        Color::Rgb { r: 248, g: 248, b: 242 }
+        Color::Rgb {
+            r: 248,
+            g: 248,
+            b: 242,
+        }
     }
     fn test_dim() -> Color {
-        Color::Rgb { r: 98, g: 114, b: 164 }
-    }
-
-    #[test]
-    fn test_simple_render() {
-        let graph = parse("A -> B -> C");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
-        // Should have: empty + top + label + bottom + empty = 5 lines minimum
-        assert!(lines.len() >= 4);
-        // All lines should be Diagram content type (except empties)
-        for line in &lines {
-            if !line.spans.is_empty() {
-                assert_eq!(line.content_type, LineContentType::Diagram);
-            }
+        Color::Rgb {
+            r: 98,
+            g: 114,
+            b: 164,
         }
     }
 
     #[test]
-    fn test_with_title() {
-        let graph = parse("# My Title\nA -> B");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
-        // Should contain the title text
-        let all_text: String = lines
+    fn annotations_wrap_under_their_box() {
+        let graph = parse("Request -> Auth\n: incoming : JWT token verify");
+        let rows: Vec<String> = render(&graph, test_accent(), test_text(), test_dim(), "")
             .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>())
+            .map(|row| row.trim_end().to_string())
             .collect();
-        assert!(all_text.contains("My Title"));
-    }
-
-    #[test]
-    fn test_with_annotations() {
-        let graph = parse("A -> B\n: note1  : note2");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
-        let all_text: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(all_text.contains("note1"));
-        assert!(all_text.contains("note2"));
+        assert_eq!(
+            rows,
+            [
+                "┌──────────┐    ┌────────┐",
+                "│ Request  │───→│ Auth   │",
+                "└──────────┘    └────────┘",
+                "  incoming      JWT token",
+                "                  verify",
+                "",
+            ]
+        );
     }
 
     #[test]
@@ -286,20 +278,21 @@ mod tests {
         let mut graph = parse("A -> B -> C\nC -> D\n: x : y : z");
         // Parser already clamps, but manually force extra annotation to test renderer defense
         graph.rows[1].annotations.push(Some("extra".into()));
-        // Should not panic
-        render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
+        render(&graph, test_accent(), test_text(), test_dim(), "  ");
     }
 
     #[test]
     fn test_multi_row_with_connector() {
         let graph = parse("A -> B\nB -> C");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
+        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.text.as_str())
             .collect();
-        // Should have vertical connectors
-        assert!(all_text.contains("│") || all_text.contains("▼"));
+        assert!(
+            all_text.contains('▼'),
+            "rows sharing a node must be connected"
+        );
     }
 }

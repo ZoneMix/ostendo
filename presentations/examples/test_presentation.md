@@ -33,7 +33,6 @@ VERIFY: FIGlet renders in accent color, sparkle stars twinkle across slide, fron
 <!-- section: showcase -->
 <!-- font_size: 4 -->
 <!-- loop_animation: matrix -->
-<!-- font_transition: none -->
 
 The Matrix has you...
 
@@ -54,7 +53,6 @@ VERIFY: Matrix rain animates continuously, content still readable beneath
 <!-- section: showcase -->
 <!-- font_size: 4 -->
 <!-- loop_animation: spin -->
-<!-- font_transition: none -->
 
 ASCII character cycling on every cell
 
@@ -73,7 +71,6 @@ VERIFY: Spin animation runs continuously on all characters
 # Protocol Image Rendering
 <!-- section: showcase -->
 <!-- font_size: -2 -->
-<!-- font_transition: none -->
 <!-- image_render: ascii -->
 <!-- fullscreen -->
 <!-- align: center -->
@@ -96,7 +93,6 @@ VERIFY: Image displays correctly as ASCII, fullscreen and centered
 <!-- section: showcase -->
 <!-- font_size: 4 -->
 <!-- align: center -->
-<!-- font_transition: none -->
 
 ![Cat](../../images/cat.gif)
 
@@ -134,7 +130,6 @@ VERIFY: Image recognizable as ASCII art, font_size: -3 makes characters very sma
 <!-- font_size: -2 -->
 <!-- image_render: ascii -->
 <!-- loop_animation: sparkle(image) -->
-<!-- font_transition: none -->
 <!-- fullscreen -->
 <!-- align: center -->
 
@@ -155,7 +150,6 @@ VERIFY: Stars animate on top of the ASCII art image, fullscreen and centered
 <!-- font_size: 1 -->
 <!-- image_render: ascii -->
 <!-- loop_animation: spin -->
-<!-- font_transition: none -->
 
 ![Spin Opus](../../images/opus.png)
 
@@ -172,7 +166,6 @@ VERIFY: Spin animation runs on ASCII image characters
 # SVG Rendering
 <!-- section: showcase -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ![DakotaCon Logo](../../images/dakotacon.svg)
 
@@ -193,7 +186,6 @@ VERIFY: SVG displays correctly with proper scaling
 <!-- image_render: ascii -->
 <!-- image_scale: 60 -->
 <!-- loop_animation: sparkle(image) -->
-<!-- font_transition: none -->
 
 ![DakotaCon Sparkle](../../images/dakotacon.svg)
 
@@ -212,7 +204,6 @@ VERIFY: SVG renders as ASCII, sparkle animation overlays, image scaled to 60%
 <!-- font_size: 1 -->
 <!-- image_render: ascii -->
 <!-- image_color: #FF5500 -->
-<!-- font_transition: none -->
 
 ![Orange Opus](../../images/opus.png)
 
@@ -230,7 +221,6 @@ VERIFY: All ASCII art characters use the overridden color
 <!-- section: showcase -->
 <!-- font_size: 4 -->
 <!-- image_scale: 30 -->
-<!-- font_transition: none -->
 
 ![Small Opus](../../images/opus.png)
 
@@ -248,7 +238,6 @@ VERIFY: Image visibly smaller than full-width default
 # Live Code Execution
 <!-- section: showcase -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```python +exec {label: "fibonacci.py"}
 def fibonacci(n):
@@ -277,7 +266,6 @@ VERIFY: Code has syntax highlighting, Ctrl+E produces Fibonacci output
 # Auto-Wrap Execution
 <!-- section: showcase -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```rust +exec {label: "no_main.rs"}
 let mut fib = vec![0u64, 1];
@@ -309,7 +297,6 @@ VERIFY: Ctrl+E runs successfully, helper function extracted properly
 # Side-by-Side Columns
 <!-- section: showcase -->
 <!-- font_size: 3 -->
-<!-- font_transition: none -->
 
 <!-- column: 0 -->
 
@@ -347,7 +334,6 @@ VERIFY: Columns render evenly, both code blocks have +exec badges
 <!-- section: showcase -->
 <!-- font_size: 4 -->
 <!-- loop_animation: bounce -->
-<!-- font_transition: none -->
 
 A bouncing ball traverses the screen
 
@@ -368,7 +354,6 @@ VERIFY: Ball bounces continuously, content readable beneath
 <!-- section: showcase -->
 <!-- font_size: 4 -->
 <!-- loop_animation: pulse -->
-<!-- font_transition: none -->
 
 Content fades in and out rhythmically
 
@@ -387,7 +372,6 @@ VERIFY: Text brightness pulses continuously
 <!-- section: animations -->
 <!-- font_size: 4 -->
 <!-- animation: typewriter -->
-<!-- font_transition: none -->
 
 - Characters appear one at a time
 - Creates a typing effect
@@ -405,7 +389,6 @@ VERIFY: Typing animation visible on slide entry
 <!-- section: animations -->
 <!-- font_size: 4 -->
 <!-- animation: fade_in -->
-<!-- font_transition: none -->
 
 - Content fades from dim to full brightness
 - Smooth opacity transition
@@ -423,7 +406,6 @@ VERIFY: Fade animation visible on slide entry
 <!-- section: animations -->
 <!-- font_size: 4 -->
 <!-- animation: slide_down -->
-<!-- font_transition: none -->
 
 - Content slides in from the top
 - Row by row reveal
@@ -441,7 +423,6 @@ VERIFY: Slide-down animation visible on slide entry
 <!-- section: animations -->
 <!-- font_size: 4 -->
 <!-- transition: dissolve -->
-<!-- font_transition: none -->
 
 - Per-character scatter reveal
 - Random dissolve pattern
@@ -461,7 +442,6 @@ VERIFY: Dissolve animation plays when navigating away
 <!-- section: animations -->
 <!-- font_size: 4 -->
 <!-- transition: slide -->
-<!-- font_transition: none -->
 
 - Content slides off to the left
 - New content slides in from right
@@ -481,7 +461,6 @@ VERIFY: Slide animation plays when navigating away
 <!-- transition: dissolve -->
 <!-- animation: typewriter -->
 <!-- loop_animation: sparkle -->
-<!-- font_transition: none -->
 
 - Dissolve transition IN
 - Typewriter entrance reveals content
@@ -515,41 +494,38 @@ VERIFY: Dissolve-out, font steps, dissolve-in animation plays
 
 ---
 
-# No Font Transition
+# Font Size Below Normal
 <!-- section: animations -->
-<!-- font_size: 2 -->
-<!-- font_transition: none -->
+<!-- font_size: 0 -->
 
-This slide uses `font_size: 2` with `font_transition: none`.
+This slide uses `font_size: 0`, one step (4 pt) below your normal size.
 
-- Font changes instantly
-- No dissolve animation
-- Faster slide transitions
-- Useful for slides with many small details
+- The font changes in the same frame as the slide
+- `]` / `[` adjust it, and the adjustment is remembered
+- `0` resets to the size the directive asks for
 
 <!-- notes:
-FEATURE: Font transition: none directive
-EXPECTED: Font size changes without dissolve animation
-VERIFY: Instant font change, no dissolve effect
+FEATURE: font_size below 1
+EXPECTED: Kitty/Ghostty font 4 pt below the base size; other terminals unchanged
+VERIFY: No blank frame during the change; ] then [ returns to the same size
 -->
 
 ---
 
-# Font Transition: Dissolve
+# Large Font Size
 <!-- section: animations -->
 <!-- font_size: 5 -->
-<!-- font_transition: dissolve -->
 
-This slide explicitly sets `font_transition: dissolve`.
+This slide uses `font_size: 5`, 16 pt above your normal size.
 
-- Same as the default behavior
-- Dissolve-out + font stepping + dissolve-in
-- Smooth cinematic feel
+- Coming from the previous slide, the font grows in one step
+- Help (`?`) and the overview (`o`) use your normal size
+- Leaving them restores this slide's size
 
 <!-- notes:
-FEATURE: Font transition: dissolve directive (explicit)
-EXPECTED: Font zoom dissolve animation (same as default)
-VERIFY: Dissolve animation plays on font size change
+FEATURE: Large font_size and font restore around overlays
+EXPECTED: Font 16 pt above base; ? and o show at base size, then return
+VERIFY: No flicker or blank frame on any of the changes
 -->
 
 ---
@@ -557,7 +533,6 @@ VERIFY: Dissolve animation plays on font size change
 # Mermaid Diagram: Flowchart
 <!-- section: diagrams -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```mermaid
 graph TD
@@ -582,7 +557,6 @@ VERIFY: Diagram displays as rendered image, not raw text
 # Mermaid: Sequence Diagram
 <!-- section: diagrams -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```mermaid
 sequenceDiagram
@@ -607,7 +581,6 @@ VERIFY: Diagram displays correctly with participants and messages
 <!-- section: decorations -->
 <!-- font_size: 4 -->
 <!-- title_decoration: box -->
-<!-- font_transition: none -->
 
 - Title is enclosed in a box
 - Set via `title_decoration: box`
@@ -625,7 +598,6 @@ VERIFY: Box border visible around title text
 <!-- section: decorations -->
 <!-- font_size: 4 -->
 <!-- title_decoration: banner -->
-<!-- font_transition: none -->
 
 - Title has a full-width accent background
 - Set via `title_decoration: banner`
@@ -643,7 +615,6 @@ VERIFY: Banner background visible behind title
 <!-- section: decorations -->
 <!-- font_size: 4 -->
 <!-- title_decoration: underline -->
-<!-- font_transition: none -->
 
 - Title has an accent-colored underline
 - Set via `title_decoration: underline`
@@ -661,7 +632,6 @@ VERIFY: Underline visible below title text
 <!-- section: decorations -->
 <!-- font_size: 4 -->
 <!-- title_decoration: none -->
-<!-- font_transition: none -->
 
 - No decoration on the title
 - Set via `title_decoration: none`
@@ -679,7 +649,6 @@ VERIFY: No underline, box, or banner around title
 <!-- section: layout -->
 <!-- font_size: 4 -->
 <!-- align: center -->
-<!-- font_transition: none -->
 
 This content is vertically and horizontally centered.
 
@@ -698,7 +667,6 @@ VERIFY: Content appears in the middle of the screen
 <!-- section: layout -->
 <!-- font_size: 4 -->
 <!-- footer: Conference Presentation - Page 34 -->
-<!-- font_transition: none -->
 
 - Footer appears at the bottom of the screen
 - Set via `footer:` directive per slide
@@ -717,7 +685,6 @@ VERIFY: Footer shows "Conference Presentation - Page 34" at bottom
 <!-- font_size: 4 -->
 <!-- footer: Centered Footer Text -->
 <!-- footer_align: center -->
-<!-- font_transition: none -->
 
 Footer text centered at the bottom.
 
@@ -734,7 +701,6 @@ VERIFY: Footer text appears centered horizontally
 <!-- font_size: 4 -->
 <!-- footer: Right-Aligned Footer -->
 <!-- footer_align: right -->
-<!-- font_transition: none -->
 
 Footer text right-aligned at the bottom.
 
@@ -749,7 +715,6 @@ VERIFY: Footer text appears on the right side
 # Bullet Depths
 <!-- section: formatting -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Top level bullet (depth 0, accent marker)
 - Another top level
@@ -770,7 +735,6 @@ VERIFY: Level 0 (*), level 1 (-), level 2 (>) at increasing indents
 # Inline Formatting
 <!-- section: formatting -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - **Bold text** renders heavier
 - *Italic text* renders slanted
@@ -790,7 +754,6 @@ VERIFY: Each format type renders correctly without bleeding into others
 # Subtitle Display
 <!-- section: formatting -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 This line is the subtitle — slightly dimmer than regular content
 
@@ -808,7 +771,6 @@ VERIFY: Subtitle text visible between title and bullets
 # Code Execution: Python
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```python +exec {label: "hello.py"}
 import sys
@@ -830,7 +792,6 @@ VERIFY: +exec badge visible, output shows Python version
 # Code Execution: Bash
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```bash +exec {label: "system_info.sh"}
 echo "User: $(whoami)"
@@ -850,7 +811,6 @@ VERIFY: Output displays user, shell, date, working directory
 # Code Execution: Ruby
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```ruby +exec {label: "ruby_demo.rb"}
 puts "Hello from Ruby!"
@@ -869,7 +829,6 @@ VERIFY: Ruby output visible with version and count loop
 # Code Execution: Rust
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```rust +exec {label: "example.rs"}
 fn main() {
@@ -891,7 +850,6 @@ VERIFY: Syntax highlighting correct for fn, let, Vec, println!
 # Code Execution: Go
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```go +exec {label: "main.go"}
 package main
@@ -917,7 +875,6 @@ VERIFY: Go keywords colored correctly
 # Go Auto-Wrap
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```go +exec {label: "auto_wrap.go"}
 for i := 1; i <= 20; i++ {
@@ -947,7 +904,6 @@ VERIFY: Ctrl+E shows FizzBuzz sequence
 # Code Execution: C
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```c +exec {label: "hello.c"}
 #include <stdio.h>
@@ -974,7 +930,6 @@ VERIFY: Output shows sum of array
 # C Auto-Wrap
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```c +exec {label: "auto_wrap.c"}
 int factorial(int n) {
@@ -1001,7 +956,6 @@ VERIFY: Ctrl+E shows factorials 1-10
 # Code Execution: C++
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```cpp +exec {label: "demo.cpp"}
 #include <iostream>
@@ -1031,7 +985,6 @@ VERIFY: Output shows sorted vector
 # Code Execution: JavaScript
 <!-- section: code -->
 <!-- font_size: 3 -->
-<!-- font_transition: none -->
 
 <!-- column: 0 -->
 
@@ -1062,7 +1015,6 @@ VERIFY: Both code blocks executable via Ctrl+E, columns render correctly
 # Multiple Executable Blocks
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```rust +exec {label: "example.rs"}
 fn main() {
@@ -1089,7 +1041,6 @@ VERIFY: Both blocks have +exec badges, Ctrl+E cycles
 # Code Preamble
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 <!-- preamble_start: python -->
 import math
@@ -1116,7 +1067,6 @@ VERIFY: math module available without visible import in code block
 # PTY Mode
 <!-- section: code -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```bash +pty {label: "interactive.sh"}
 echo "Hello from PTY mode"
@@ -1139,7 +1089,6 @@ VERIFY: +pty badge visible, PTY execution works
 # Basic Table
 <!-- section: tables -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 | Feature | Status | Version |
 |---------|--------|---------|
@@ -1161,7 +1110,6 @@ VERIFY: Table renders with proper borders and column alignment
 # Table Alignment
 <!-- section: tables -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 | Left | Center | Right |
 |:-----|:------:|------:|
@@ -1183,7 +1131,6 @@ VERIFY: Text alignment matches the header separator markers
 # Blockquotes
 <!-- section: formatting -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 > "The best way to predict the future is to invent it."
 > — Alan Kay
@@ -1206,7 +1153,6 @@ VERIFY: Left border visible, inline formatting works within quotes
 # Two Equal Columns
 <!-- section: columns -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 <!-- column: 0 -->
 
@@ -1238,7 +1184,6 @@ VERIFY: Columns render side-by-side with equal width
 # Asymmetric Columns
 <!-- section: columns -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 <!-- column: 0 -->
 
@@ -1269,7 +1214,6 @@ VERIFY: Columns render with correct width ratio
 # Three Columns
 <!-- section: columns -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 <!-- column: 0 -->
 
@@ -1306,7 +1250,6 @@ VERIFY: Three columns render side-by-side
 # Columns with Code
 <!-- section: columns -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 <!-- column: 0 -->
 
@@ -1338,7 +1281,6 @@ VERIFY: Code renders with syntax highlighting inside column
 # Speaker Notes
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Press **n** to toggle the notes panel
 - Press **Shift+N** to scroll notes down
@@ -1362,20 +1304,18 @@ TALKING POINTS:
 
 ---
 
-# Timing Directive
+# Presentation Timer
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- timing: 2.0 -->
-<!-- font_transition: none -->
 
-- This slide has a 2-minute timing directive
-- Timer visible in the status bar
-- Start with **t**, reset with **T**
+- The timer starts on your first slide change
+- It shows as `◷ m:ss` in the status bar
+- **t** stops it; press again to restart from 0:00
 
 <!-- notes:
-FEATURE: Timing directive
-EXPECTED: 2.0 minute timing shown in status bar
-VERIFY: Timing indicator visible, timer starts with 't' key
+FEATURE: Presentation timer
+EXPECTED: ◷ m:ss in the status bar, counting since the first slide change
+VERIFY: t stops and hides it; t again restarts from 0:00; :timer reset also resets
 -->
 
 ---
@@ -1383,7 +1323,6 @@ VERIFY: Timing indicator visible, timer starts with 't' key
 # Theme Switching
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - 29 built-in themes available
 - Switch via `:theme slug` command
@@ -1402,7 +1341,6 @@ VERIFY: K cycles themes, D toggles dark/light, colors change
 # Scale & Font Controls
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - **+/-** — Adjust global scale (zoom)
 - **]** — Increase font size (Kitty/Ghostty)
@@ -1421,7 +1359,6 @@ VERIFY: +/- changes scale, ]/[ changes font, >/< changes images
 # Fullscreen Mode
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Press **f** to toggle fullscreen
 - Hides status bar and progress bar
@@ -1440,7 +1377,6 @@ VERIFY: 'f' toggles fullscreen, status bar hides/shows
 <!-- section: features -->
 <!-- font_size: 4 -->
 <!-- fullscreen: true -->
-<!-- font_transition: none -->
 
 This slide uses `fullscreen: true` — no status bar.
 
@@ -1458,7 +1394,6 @@ VERIFY: No status bar visible, 'f' can override
 # Overview Mode
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Press **o** to enter overview mode
 - Shows slide titles in a list
@@ -1476,7 +1411,6 @@ VERIFY: 'o' enters overview, arrows navigate, Enter selects
 # Help Screen
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Press **?** to toggle the help screen
 - Shows all keybindings organized by category
@@ -1493,7 +1427,6 @@ VERIFY: '?' toggles help, keybindings visible
 # Hot Reload
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Edit the markdown file while presenting
 - Changes reload automatically (500ms poll)
@@ -1511,11 +1444,10 @@ VERIFY: Edit file externally, presentation updates
 # Remote Control
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Start with `--remote` flag
-- Opens WebSocket server on port 9090
-- Web UI at `http://127.0.0.1:9090`
+- Opens WebSocket server on port 8765
+- Web UI at `http://127.0.0.1:8765`
 - Full control: navigation, themes, toggles
 - Dynamic theme color adaptation
 
@@ -1530,7 +1462,6 @@ VERIFY: Browser shows remote control with all features
 # Light/Dark Toggle
 <!-- section: features -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Press **D** to toggle between dark and light variants
 - Not all themes have light variants
@@ -1548,17 +1479,16 @@ VERIFY: Colors switch between dark and light mode
 <!-- section: navigation -->
 <!-- show_section: true -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
-- Press **Shift+Right** for next section
-- Press **Shift+Left** for previous section
-- Section name visible in status bar
-- Toggle section display with **s**
+- Press **J** for the next section
+- Press **K** for the previous section
+- Section name visible in the status bar
+- **S** shows section labels above titles
 
 <!-- notes:
 FEATURE: Section navigation and display
 EXPECTED: Section jumps work, section name in status bar
-VERIFY: Shift+arrows jump sections, section visible
+VERIFY: J/K jump sections; S toggles the label above titles
 -->
 
 ---
@@ -1566,7 +1496,6 @@ VERIFY: Shift+arrows jump sections, section visible
 # Mouse & Scroll
 <!-- section: navigation -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Mouse click advances slides
 - Scroll wheel scrolls long content
@@ -1584,7 +1513,6 @@ VERIFY: Click advances, scroll works, right-click goes back
 # Goto Slide
 <!-- section: navigation -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Press **g** then type slide number
 - Press **Enter** to jump
@@ -1602,7 +1530,6 @@ VERIFY: 'g' enters goto mode, number + Enter jumps
 # Command Mode
 <!-- section: navigation -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Press **:** to enter command mode
 - Available commands:
@@ -1625,7 +1552,6 @@ VERIFY: Commands work as documented
 # HTML Export
 <!-- section: export -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Export with `--export output.html`
 - Self-contained single HTML file
@@ -1647,7 +1573,6 @@ VERIFY: --export flag produces valid HTML
 # PDF Export
 <!-- section: export -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Export with `--export output.pdf`
 - Uses headless Chrome or wkhtmltopdf
@@ -1670,7 +1595,6 @@ VERIFY: --export flag produces valid PDF
 <!-- section: layout -->
 <!-- font_size: 4 -->
 <!-- align: hcenter -->
-<!-- font_transition: none -->
 
 This content is horizontally centered only.
 
@@ -1689,7 +1613,6 @@ VERIFY: Content centered horizontally but at top of slide
 <!-- section: layout -->
 <!-- font_size: 4 -->
 <!-- align: vcenter -->
-<!-- font_transition: none -->
 
 This content is vertically centered only.
 
@@ -1708,7 +1631,6 @@ VERIFY: Content centered vertically but left-aligned
 <!-- section: scaling -->
 <!-- font_size: 4 -->
 <!-- title_scale: 3 -->
-<!-- font_transition: none -->
 
 This slide uses `title_scale: 3` for a large title.
 
@@ -1728,7 +1650,6 @@ VERIFY: Title appears much larger than body text
 <!-- section: scaling -->
 <!-- font_size: 4 -->
 <!-- text_scale: 2 -->
-<!-- font_transition: none -->
 
 This slide uses `text_scale: 2` for title and subtitle scaling.
 
@@ -1765,7 +1686,6 @@ VERIFY: Font transition plays, then title appears at 3x scale
 # Scroll Test
 <!-- section: edge-cases -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - Item 1: This is a bullet point
 - Item 2: Testing vertical scroll
@@ -1799,7 +1719,6 @@ VERIFY: j/k or scroll wheel scrolls content up/down
 # Mixed Scroll Test
 <!-- section: edge-cases -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ```python {label: "scroll_test.py"}
 # This code block adds height
@@ -1832,7 +1751,6 @@ VERIFY: Scroll works across different content types
 # Empty Title Slide
 <!-- section: edge-cases -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 - This slide has no decorative title styling
 - Just plain content with bullets
@@ -1849,23 +1767,21 @@ VERIFY: No ASCII art, no decoration, just plain title
 # All Directives
 <!-- section: edge-cases -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 Every directive available in Ostendo:
 
-- `section`, `timing`, `font_size`, `font_transition`
+- `section`, `font_size`, `text_scale`, `theme`
 - `ascii_title`, `align`, `fullscreen`, `show_section`
 - `title_decoration`, `footer`, `footer_align`
 - `transition`, `animation`, `loop_animation`
-- `column_layout`, `column`, `reset_layout`
-- `image_render`, `image_scale`, `image_color`
-- `text_scale`, `title_scale`
-- `preamble_start`, `preamble_end`
+- `column_layout`, `column`, `reset_layout`, `column_separator`, `column_text_scale`
+- `image_position`, `image_render`, `image_scale`, `image_color`
+- `notes`, `preamble_start`, `preamble_end`
 
 <!-- notes:
 FEATURE: Directive reference
 EXPECTED: All directives listed for reference
-VERIFY: All directive names match parser regex patterns
+VERIFY: Names match docs/PRESENTATION_FORMAT.md
 -->
 
 ---
@@ -1873,7 +1789,6 @@ VERIFY: All directive names match parser regex patterns
 # CLI Flags
 <!-- section: reference -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 | Flag | Description |
 |------|-------------|
@@ -1881,9 +1796,10 @@ VERIFY: All directive names match parser regex patterns
 | `--theme slug` | Set theme (default: terminal_green) |
 | `--slide N` | Start at slide N |
 | `--image-mode` | Force image protocol |
+| `--no-exec` | Never run code blocks |
 | `--remote` | Enable remote control |
-| `--remote-port N` | Set remote port (default: 9090) |
-| `--export file` | Export to HTML or PDF |
+| `--remote-port N` | Set remote port (default: 8765) |
+| `--export html\|pdf` | Export to HTML or PDF |
 | `--validate` | Validate presentation |
 | `--list-themes` | List available themes |
 | `--detect-protocol` | Show detected image protocol |
@@ -1899,21 +1815,20 @@ VERIFY: All flags documented and current
 # Keybindings
 <!-- section: reference -->
 <!-- font_size: 3 -->
-<!-- font_transition: none -->
 
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
 | Right/l | Next slide | Left/h | Previous slide |
-| Shift+Right | Next section | Shift+Left | Previous section |
+| J | Next section | K | Previous section |
 | g + N | Goto slide N | : | Command mode |
 | j/Down | Scroll down | k/Up | Scroll up |
 | +/= | Scale up | - | Scale down |
 | ] | Font size up | [ | Font size down |
 | > | Image scale up | < | Image scale down |
 | f | Toggle fullscreen | n | Toggle notes |
-| t | Start timer | T | Reset timer |
-| D | Dark/light toggle | K | Cycle themes |
-| s | Toggle sections | i | Toggle theme name |
+| t | Start/reset timer | T | Toggle theme name |
+| D | Dark/light toggle | S | Section labels |
+| Home | First slide | End | Last slide |
 | o | Overview mode | ? | Help screen |
 | Ctrl+E | Execute code | q | Quit |
 
@@ -1928,19 +1843,17 @@ VERIFY: All keybindings documented and current
 # Theme Gallery
 <!-- section: reference -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
-29 themes — press **K** to cycle through them all:
+Every built-in theme; `:theme <slug>` switches, `D` flips dark/light pairs:
 
-- **Solid:** terminal_green, dracula, nord, solarized, monokai, gruvbox, tokyo_night, catppuccin, rose_pine, one_dark, cyber_red, minimal_mono, arctic_blue, outrun, amber_warning
-- **Light:** clean_light, dracula_light, terminal_green_light
-- **Gradient:** aurora, copper_rose, ember, midnight, ocean_deep, twilight
-- **Additional:** matrix, synthwave, everforest, kanagawa, material
+- **Dark:** amber_warning, arctic_blue, blueprint, catppuccin, dracula, frost_glass, matrix, military_green, nord, solarized, terminal_green
+- **Gradient:** aurora, blood_moon, copper_rose, cyber_red, ember, midnight, neon_purple, ocean_deep, outrun, sunset_warm, twilight, vaporwave
+- **Light:** clean_light, dracula_light, minimal_mono, nord_light, paper, terminal_green_light
 
 <!-- notes:
 FEATURE: Theme gallery reference
-EXPECTED: All 29 themes listed
-VERIFY: Count matches, all themes loadable
+EXPECTED: Every theme from `ostendo --list-themes` listed once
+VERIFY: :theme <slug> works for each name
 -->
 
 ---

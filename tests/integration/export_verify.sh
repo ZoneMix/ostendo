@@ -157,7 +157,7 @@ if [ -f "$SMALL_PRES" ]; then
     THEME_PASS=0
     THEME_FAIL=0
     while IFS= read -r theme; do
-        theme=$(echo "$theme" | tr -d ' ')
+        theme=${theme%% *}
         [ -z "$theme" ] && continue
         OUT="$TMPDIR/theme_${theme}.html"
         if "$BINARY" --export html -o "$OUT" -t "$theme" "$SMALL_PRES" 2>/dev/null; then

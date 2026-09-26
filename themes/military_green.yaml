@@ -5,9 +5,3 @@ colors:
   accent: "#4A7C3F"
   text: "#FFFFFF"
   code_background: "#2E352A"
-fonts:
-  heading: "IBM Plex Mono"
-  body: "IBM Plex Mono"
-  code: "IBM Plex Mono"
-layout: "left"
-visual_style: "minimal"

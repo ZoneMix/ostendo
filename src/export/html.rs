@@ -1,36 +1,23 @@
 //! Self-contained HTML export.
 //!
-//! Generates a single HTML file with embedded CSS and JavaScript that reproduces
-//! the presentation with theme colors, syntax highlighting, and slide navigation.
-//! All assets (images, styles, scripts) are inlined so the exported file can be
-//! opened in any browser without a server or external dependencies.
-//!
-//! The exported HTML supports:
-//! - Keyboard navigation (arrow keys, space, `h`/`l` for vim-style)
-//! - Speaker notes toggle (`N` key)
-//! - Progress bar and slide counter
-//! - Print/PDF via the browser's built-in print dialog (`@media print` rules)
-//! - Images embedded as base64 data URIs
+//! Produces one HTML file with inline CSS, JavaScript and base64 images that
+//! opens in any browser without a server. Slide bodies follow source order,
+//! like the terminal renderer. Code blocks are emitted as plain
+//! `<pre><code class="language-…">` without highlighting. Arrow keys, space
+//! and `h`/`l` navigate, `N` toggles speaker notes, and `@media print` rules
+//! lay out one slide per page for printing and PDF export.
 
 use anyhow::Result;
+use base64::Engine;
+use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::presentation::Slide;
+use crate::presentation::{Block, Bullet, ColumnContent, ColumnItem, Slide, Table};
 use crate::theme::Theme;
 
-/// Export a presentation to a self-contained HTML file.
-///
-/// The HTML includes:
-/// - Embedded CSS derived from theme colors
-/// - Syntax-highlighted code blocks via syntect
-/// - Base64-encoded images as data URIs
-/// - Keyboard navigation (arrow keys, space)
-/// - Hidden speaker notes (toggled with 'N' key)
-pub fn export_html(
-    slides: &[Slide],
-    theme: &Theme,
-    output_path: &Path,
-) -> Result<()> {
+/// Write `slides` styled with `theme` to `output_path` as a single HTML file
+/// titled `title`.
+pub fn export_html(slides: &[Slide], theme: &Theme, title: &str, output_path: &Path) -> Result<()> {
     let bg = &theme.colors.background;
     let text = &theme.colors.text;
     let accent = &theme.colors.accent;
@@ -40,9 +27,8 @@ pub fn export_html(
     html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
     html.push_str("<meta charset=\"UTF-8\">\n");
     html.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
-    html.push_str("<title>Presentation</title>\n");
+    let _ = writeln!(html, "<title>{}</title>", escape_html(title));
 
-    // Embedded CSS
     html.push_str("<style>\n");
     html.push_str(&format!(r#"
 :root {{
@@ -65,7 +51,15 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
 .slide .subtitle {{ color: var(--text); font-size: 1.2em; margin-bottom: 1em; opacity: 0.8; }}
 .slide ul {{ list-style: none; padding-left: 1em; }}
 .slide li {{ margin: 0.3em 0; }}
-.slide li::before {{ content: "* "; color: var(--accent); }}
+.slide li::before {{ content: "• "; color: var(--accent); }}
+.slide li.d1 {{ padding-left: 1.5em; }}
+.slide li.d1::before {{ content: "◦ "; }}
+.slide li.d2 {{ padding-left: 3em; }}
+.slide li.d2::before {{ content: "▪ "; }}
+.slide li.ordered::before {{ content: none; }}
+.slide p {{ margin: 0.4em 0; }}
+.slide :not(pre) > code {{ background: var(--code-bg); padding: 0 0.3em; border-radius: 3px; }}
+.slide .columns {{ display: grid; gap: 2em; margin: 0.5em 0; }}
 .slide pre {{
     background: var(--code-bg);
     padding: 1em;
@@ -129,101 +123,31 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
 "#));
     html.push_str("</style>\n</head>\n<body>\n");
 
-    // Slides
     for (i, slide) in slides.iter().enumerate() {
         let active = if i == 0 { " active" } else { "" };
-        html.push_str(&format!("<div class=\"slide{}\" data-slide=\"{}\">\n", active, i));
+        html.push_str(&format!(
+            "<div class=\"slide{}\" data-slide=\"{}\">\n",
+            active, i
+        ));
 
-        // Title
-        if !slide.title.is_empty() {
-            html.push_str(&format!("<h1>{}</h1>\n", escape_html(&slide.title)));
-        }
+        html.push_str(&slide_body(slide));
 
-        // Subtitle
-        if !slide.subtitle.is_empty() {
-            html.push_str(&format!("<div class=\"subtitle\">{}</div>\n", escape_html(&slide.subtitle)));
-        }
-
-        // Bullets
-        if !slide.bullets.is_empty() {
-            html.push_str("<ul>\n");
-            for bullet in &slide.bullets {
-                let indent = "  ".repeat(bullet.depth);
-                html.push_str(&format!("{}<li>{}</li>\n", indent, escape_html(&bullet.text)));
-            }
-            html.push_str("</ul>\n");
-        }
-
-        // Code blocks
-        for cb in &slide.code_blocks {
-            html.push_str(&format!("<pre><code class=\"language-{}\">{}</code></pre>\n",
-                escape_html(&cb.language), escape_html(&cb.code)));
-        }
-
-        // Block quotes
-        for bq in &slide.block_quotes {
-            html.push_str("<blockquote>\n");
-            for line in &bq.lines {
-                html.push_str(&format!("<p>{}</p>\n", escape_html(line)));
-            }
-            html.push_str("</blockquote>\n");
-        }
-
-        // Tables
-        for table in &slide.tables {
-            html.push_str("<table>\n<thead><tr>\n");
-            for header in &table.headers {
-                html.push_str(&format!("<th>{}</th>", escape_html(header)));
-            }
-            html.push_str("\n</tr></thead>\n<tbody>\n");
-            for row in &table.rows {
-                html.push_str("<tr>");
-                for cell in row {
-                    html.push_str(&format!("<td>{}</td>", escape_html(cell)));
-                }
-                html.push_str("</tr>\n");
-            }
-            html.push_str("</tbody></table>\n");
-        }
-
-        // Image (base64 data URI)
-        if let Some(ref img) = slide.image {
-            if img.path.exists() {
-                if let Ok(data) = std::fs::read(&img.path) {
-                    let ext = img.path.extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("png")
-                        .to_lowercase();
-                    let mime = match ext.as_str() {
-                        "jpg" | "jpeg" => "image/jpeg",
-                        "gif" => "image/gif",
-                        "svg" => "image/svg+xml",
-                        "webp" => "image/webp",
-                        _ => "image/png",
-                    };
-                    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-                    html.push_str(&format!("<img src=\"data:{};base64,{}\" alt=\"{}\">\n",
-                        mime, b64, escape_html(&img.alt_text)));
-                }
-            }
-        }
-
-        // Speaker notes (hidden by default)
         if !slide.notes.is_empty() {
-            html.push_str(&format!("<div class=\"notes\">{}</div>\n",
-                escape_html(&slide.notes).replace('\n', "<br>")));
+            html.push_str(&format!(
+                "<div class=\"notes\">{}</div>\n",
+                escape_html(&slide.notes).replace('\n', "<br>")
+            ));
         }
 
         html.push_str("</div>\n");
     }
 
-    // Progress bar
     html.push_str("<div class=\"progress\" id=\"progress\"></div>\n");
     html.push_str("<div class=\"slide-counter\" id=\"counter\"></div>\n");
 
-    // Navigation JavaScript
     html.push_str("<script>\n");
-    html.push_str(r#"
+    html.push_str(
+        r#"
 let current = 0;
 const slides = document.querySelectorAll('.slide');
 const total = slides.length;
@@ -248,7 +172,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 showSlide(0);
-"#);
+"#,
+    );
     html.push_str("</script>\n");
     html.push_str("</body>\n</html>\n");
 
@@ -256,59 +181,278 @@ showSlide(0);
     Ok(())
 }
 
-/// Escape special HTML characters to prevent XSS in exported content.
-///
-/// Replaces `&`, `<`, `>`, and `"` with their HTML entity equivalents.
-/// This must be applied to all user-provided text (slide titles, bullets, code)
-/// before embedding in the HTML output.
+fn slide_body(slide: &Slide) -> String {
+    let mut out = String::new();
+    if !slide.title.is_empty() {
+        let _ = writeln!(out, "<h1>{}</h1>", inline(&slide.title));
+    }
+    if !slide.subtitle.is_empty() {
+        let _ = writeln!(
+            out,
+            "<div class=\"subtitle\">{}</div>",
+            inline(&slide.subtitle)
+        );
+    }
+    for block in &slide.blocks {
+        match *block {
+            Block::Paragraph(i) => {
+                let _ = writeln!(out, "<p>{}</p>", inline(&slide.paragraphs[i]));
+            }
+            Block::Bullets(i) => {
+                out.push_str(&list(&slide.bullets[slide.bullet_groups[i].clone()]))
+            }
+            Block::Code(i) => out.push_str(&code(&slide.code_blocks[i])),
+            Block::Table(i) => out.push_str(&table(&slide.tables[i])),
+            Block::Quote(i) => {
+                out.push_str("<blockquote>\n");
+                for line in &slide.block_quotes[i].lines {
+                    let _ = writeln!(out, "<p>{}</p>", inline(line));
+                }
+                out.push_str("</blockquote>\n");
+            }
+            Block::Diagram(i) => {
+                let d = &slide.diagram_blocks[i];
+                let graph = crate::diagram::parser::parse(&d.source);
+                let c = crossterm::style::Color::Reset;
+                let text: Vec<String> =
+                    crate::diagram::render_adaptive(&graph, d.style, 200, c, c, c, "")
+                        .iter()
+                        .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect())
+                        .collect();
+                let _ = writeln!(
+                    out,
+                    "<pre class=\"diagram\">{}</pre>",
+                    escape_html(&text.join("\n"))
+                );
+            }
+            Block::Mermaid(i) => {
+                let source = escape_html(&slide.mermaid_blocks[i].source);
+                let _ = writeln!(out, "<pre class=\"mermaid\">{source}</pre>");
+            }
+            Block::Image => {
+                if let Some(img) = &slide.image {
+                    out.push_str(&image(&img.path, &img.alt_text));
+                }
+            }
+            Block::Columns => {
+                let Some(cols) = &slide.columns else { continue };
+                let template: Vec<String> = cols.ratios.iter().map(|r| format!("{r}fr")).collect();
+                let _ = writeln!(
+                    out,
+                    "<div class=\"columns\" style=\"grid-template-columns: {}\">",
+                    template.join(" ")
+                );
+                for content in &cols.contents {
+                    let _ = writeln!(out, "<div>{}</div>", column(content));
+                }
+                out.push_str("</div>\n");
+            }
+        }
+    }
+    out
+}
+
+fn column(content: &ColumnContent) -> String {
+    let mut out = String::new();
+    let mut items = content.items.iter().peekable();
+    while let Some(item) = items.next() {
+        match *item {
+            ColumnItem::Text(i) => {
+                let _ = writeln!(out, "<p>{}</p>", inline(&content.text_lines[i]));
+            }
+            ColumnItem::Bullet(first) => {
+                let mut last = first;
+                while let Some(ColumnItem::Bullet(next)) = items.peek() {
+                    last = *next;
+                    items.next();
+                }
+                out.push_str(&list(&content.bullets[first..=last]));
+            }
+            ColumnItem::Code(i) => out.push_str(&code(&content.code_blocks[i])),
+            ColumnItem::Image => {
+                if let Some(img) = &content.image {
+                    out.push_str(&image(Path::new(&img.path), ""));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn list(items: &[Bullet]) -> String {
+    let ordered = regex::Regex::new(r"^\d+[.)]\s").ok();
+    let mut out = String::from("<ul>\n");
+    for b in items {
+        let mut class = format!("d{}", b.depth.min(2));
+        if ordered.as_ref().is_some_and(|re| re.is_match(&b.text)) {
+            class.push_str(" ordered");
+        }
+        let _ = writeln!(out, "<li class=\"{class}\">{}</li>", inline(&b.text));
+    }
+    out.push_str("</ul>\n");
+    out
+}
+
+fn code(cb: &crate::presentation::CodeBlock) -> String {
+    format!(
+        "<pre><code class=\"language-{}\">{}</code></pre>\n",
+        escape_html(&cb.language),
+        escape_html(&cb.code)
+    )
+}
+
+fn table(t: &Table) -> String {
+    let mut out = String::from("<table>\n<thead><tr>");
+    for header in &t.headers {
+        let _ = write!(out, "<th>{}</th>", inline(header));
+    }
+    out.push_str("</tr></thead>\n<tbody>\n");
+    for row in &t.rows {
+        out.push_str("<tr>");
+        for cell in row {
+            let _ = write!(out, "<td>{}</td>", inline(cell));
+        }
+        out.push_str("</tr>\n");
+    }
+    out.push_str("</tbody></table>\n");
+    out
+}
+
+fn image(path: &Path, alt: &str) -> String {
+    image_data_uri(path)
+        .map(|uri| format!("<img src=\"{uri}\" alt=\"{}\">\n", escape_html(alt)))
+        .unwrap_or_default()
+}
+
+/// Inline markdown (bold, italic, code, strikethrough) as HTML.
+fn inline(text: &str) -> String {
+    let marker = crossterm::style::Color::AnsiValue(1);
+    crate::markdown::parser::parse_inline_formatting(text, crossterm::style::Color::Reset, marker)
+        .iter()
+        .map(|span| {
+            let is_code = span.bg == Some(marker);
+            // The terminal pads code spans with a space on each side.
+            let text = match is_code {
+                true => span
+                    .text
+                    .strip_prefix(' ')
+                    .and_then(|t| t.strip_suffix(' '))
+                    .unwrap_or(&span.text),
+                false => &span.text,
+            };
+            let mut html = escape_html(text);
+            for (on, tag) in [
+                (is_code, "code"),
+                (span.strikethrough, "del"),
+                (span.italic, "em"),
+                (span.bold, "strong"),
+            ] {
+                if on {
+                    html = format!("<{tag}>{html}</{tag}>");
+                }
+            }
+            html
+        })
+        .collect()
+}
+
+/// Inline an image file as a data URI. Anything that is not recognizably an
+/// image is skipped: markdown can point `![](…)` at any path, and embedding
+/// e.g. `~/.aws/credentials` would leak it into a file meant for sharing.
+fn image_data_uri(path: &Path) -> Option<String> {
+    let data = std::fs::read(path).ok()?;
+    let is_svg = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
+        && std::str::from_utf8(&data).is_ok_and(|text| text.contains("<svg"));
+    let mime = if is_svg {
+        "image/svg+xml"
+    } else {
+        image::guess_format(&data).ok()?.to_mime_type()
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    Some(format!("data:{mime};base64,{encoded}"))
+}
+
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::{ImagePosition, ImageRenderMode, SlideImage};
 
-    #[test]
-    fn test_escape_html() {
-        assert_eq!(escape_html("<script>"), "&lt;script&gt;");
-        assert_eq!(escape_html("a & b"), "a &amp; b");
+    fn export(slides: &[Slide]) -> String {
+        let theme = crate::theme::ThemeRegistry::load()
+            .get("terminal_green")
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.html");
+        export_html(slides, &theme, "Deck", &path).unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    }
+
+    fn slide_with_image(path: &Path) -> Slide {
+        Slide {
+            image: Some(SlideImage {
+                path: path.to_path_buf(),
+                alt_text: String::new(),
+                position: ImagePosition::Below,
+                render_mode: ImageRenderMode::Auto,
+                scale: 100,
+                color_override: String::new(),
+            }),
+            blocks: vec![Block::Image],
+            ..Slide::default()
+        }
     }
 
     #[test]
     fn test_export_html_basic() {
-        let slides = vec![
-            Slide {
-                number: 1,
-                title: "Test Slide".to_string(),
-                ..Slide::default()
-            },
-        ];
-        let theme = Theme {
-            name: "test".to_string(),
-            slug: "test".to_string(),
-            colors: crate::theme::schema::ThemeColors {
-                background: "#000000".to_string(),
-                accent: "#00ff00".to_string(),
-                text: "#ffffff".to_string(),
-                code_background: "#1a1a1a".to_string(),
-            },
-            fonts: Default::default(),
-            layout: "left".to_string(),
-            visual_style: "bold".to_string(),
-            gradient: None,
-            title_decoration: None,
-            dark_variant: None,
-            light_variant: None,
+        let content = export(&[Slide {
+            number: 1,
+            title: "Test <script>alert(1)</script> & Slide".to_string(),
+            ..Slide::default()
+        }]);
+        assert!(content.starts_with("<!DOCTYPE html>"));
+        assert!(content.contains("Test &lt;script&gt;alert(1)&lt;/script&gt; &amp; Slide"));
+        assert!(!content.contains("<script>alert(1)"));
+    }
+
+    #[test]
+    fn bodies_follow_source_order_with_inline_markup() {
+        let md = "# T\n\nIntro **bold** and `code`\n\n> quote\n\n- item ~~old~~\n";
+        let (_, slides) = crate::markdown::parse_presentation(md, None).unwrap();
+        let html = export(&slides);
+        let at = |needle: &str| {
+            html.find(needle)
+                .unwrap_or_else(|| panic!("missing {needle}"))
         };
+        assert!(at("<strong>bold</strong>") < at("<blockquote>"));
+        assert!(at("<blockquote>") < at("<del>old</del>"));
+        assert!(html.contains("<code>code</code>") && html.contains("<title>Deck</title>"));
+    }
+
+    #[test]
+    fn embeds_images_but_not_arbitrary_files() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.html");
-        export_html(&slides, &theme, &path).unwrap();
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("Test Slide"));
-        assert!(content.contains("<!DOCTYPE html>"));
+        let png = dir.path().join("pixel.png");
+        image::RgbaImage::new(1, 1).save(&png).unwrap();
+        let secret = dir.path().join("credentials");
+        std::fs::write(&secret, "aws_secret_access_key=hunter2").unwrap();
+        let renamed = dir.path().join("credentials.svg");
+        std::fs::write(&renamed, "aws_secret_access_key=hunter2").unwrap();
+
+        let content = export(&[
+            slide_with_image(&png),
+            slide_with_image(&secret),
+            slide_with_image(&renamed),
+        ]);
+        assert_eq!(content.matches("<img ").count(), 1);
+        assert!(content.contains("<img src=\"data:image/png;base64,"));
     }
 }

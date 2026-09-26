@@ -1,267 +1,267 @@
 //! WebSocket server for remote presentation control.
 //!
-//! Listens on a configurable port (default 8765) and supports optional token-based
-//! authentication. The server handles two kinds of incoming TCP connections:
-//!
-//! 1. **Plain HTTP requests** — served the embedded remote control HTML page
-//!    (from [`super::html::REMOTE_HTML`]) with security headers.
-//! 2. **WebSocket upgrade requests** — upgraded to a persistent WebSocket
-//!    connection that carries JSON commands inbound and state broadcasts outbound.
-//!
-//! The server runs on a dedicated background thread with its own Tokio async
-//! runtime, so it does not block the main TUI render loop. Communication with the
-//! main thread uses two channels:
-//! - `mpsc::Receiver<RemoteCommand>` — commands flow from WebSocket clients to the presenter.
-//! - `broadcast::Sender<String>` — state JSON flows from the presenter to all clients.
+//! Listens on `127.0.0.1` only. A plain HTTP request gets the embedded control
+//! page; a WebSocket upgrade is checked (Origin, optional `--remote-token`) and
+//! then carries JSON commands inbound and state broadcasts outbound. The server
+//! runs its own Tokio runtime on a background thread so it never blocks the
+//! render loop.
 
+use std::net::Ipv4Addr;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
+use anyhow::{ensure, Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Semaphore};
+use tokio_tungstenite::tungstenite::handshake::server::{
+    Callback, ErrorResponse, Request, Response,
+};
+use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, ORIGIN, SEC_WEBSOCKET_PROTOCOL};
+use tokio_tungstenite::tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::WebSocketStream;
 
 use super::html::REMOTE_HTML;
 use super::{RemoteCommand, RemoteCommandMsg};
 
-/// Maximum concurrent WebSocket connections to prevent resource exhaustion.
 const MAX_CONNECTIONS: usize = 8;
 
-/// Entry point for launching the WebSocket remote control server.
+/// Every connection holds a slot from the moment it is accepted, so an idle
+/// socket that never finishes its request must be dropped or a handful of
+/// them would lock the remote out for good.
+const PRE_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+
+const MAX_COMMAND_BYTES: usize = 4096;
+
+/// Bind `127.0.0.1:port` and serve remote control on a background thread.
 ///
-/// This is a zero-sized struct used as a namespace — all functionality lives in
-/// the [`RemoteServer::start`] associated function.
-pub struct RemoteServer;
-
-impl RemoteServer {
-    /// Start the WebSocket remote control server in a background thread.
-    pub fn start(port: u16, token: Option<String>) -> (mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>) {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (state_tx, _) = broadcast::channel(64);
-        let state_tx_clone = state_tx.clone();
-
-        thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-            rt.block_on(async move {
-                let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-                    .await
-                    .expect("failed to bind remote control server");
-
-                // Rate-limit concurrent connections to prevent resource exhaustion
-                let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
-
-                loop {
-                    if let Ok((stream, _)) = listener.accept().await {
-                        let permit = match semaphore.clone().try_acquire_owned() {
-                            Ok(p) => p,
-                            Err(_) => continue, // Drop connection if at capacity
-                        };
-                        let cmd_tx = cmd_tx.clone();
-                        let state_rx = state_tx_clone.subscribe();
-                        let token = token.clone();
-
-                        tokio::spawn(async move {
-                            handle_connection(stream, cmd_tx, state_rx, token).await;
-                            drop(permit); // Release slot when connection closes
-                        });
-                    }
-                }
-            });
-        });
-
-        (cmd_rx, state_tx)
+/// Returns the command receiver for the presenter and the sender it uses to
+/// broadcast state JSON to all clients.
+///
+/// # Errors
+///
+/// Fails when the port cannot be bound or `token` is empty or contains
+/// characters outside `[A-Za-z0-9._~-]`. The browser page sends the token as a
+/// WebSocket subprotocol, which must be an HTTP token, and reads it back from
+/// the URL fragment, where `+` decodes to a space.
+pub fn start(
+    port: u16,
+    token: Option<String>,
+) -> Result<(mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>)> {
+    if let Some(token) = &token {
+        ensure!(
+            !token.is_empty()
+                && token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._~-".contains(&b)),
+            "--remote-token may only contain A-Z a-z 0-9 . _ ~ -"
+        );
     }
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        .with_context(|| format!("cannot start remote control on 127.0.0.1:{port}"))?;
+    spawn(listener, token)
 }
 
-/// Handle a single incoming TCP connection.
-///
-/// Peeks at the first bytes of the request to decide whether it is a WebSocket
-/// upgrade or a plain HTTP GET. For WebSocket connections, it performs:
-/// 1. **Origin validation** — only allows `127.0.0.1`, `localhost`, or `file://` origins
-///    to prevent cross-site WebSocket hijacking (CSRF).
-/// 2. **Token authentication** — if a `--remote-token` was configured, checks for a
-///    matching `Authorization: Bearer <token>` header or `Sec-WebSocket-Protocol` value.
-/// 3. **WebSocket handshake** — upgrades the connection and enters the message loop.
-///
-/// For plain HTTP requests, it serves the remote control HTML page with security headers.
-async fn handle_connection(
-    mut stream: tokio::net::TcpStream,
+fn spawn(
+    listener: std::net::TcpListener,
+    token: Option<String>,
+) -> Result<(mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>)> {
+    listener.set_nonblocking(true)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let listener = {
+        let _guard = runtime.enter();
+        TcpListener::from_std(listener)?
+    };
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (state_tx, _) = broadcast::channel(64);
+    let states = state_tx.clone();
+    thread::spawn(move || runtime.block_on(accept_loop(listener, cmd_tx, states, token)));
+    Ok((cmd_rx, state_tx))
+}
+
+async fn accept_loop(
+    listener: TcpListener,
     cmd_tx: mpsc::Sender<RemoteCommand>,
-    state_rx: broadcast::Receiver<String>,
+    states: broadcast::Sender<String>,
     token: Option<String>,
 ) {
-    // Peek at first bytes to determine if this is a WebSocket upgrade or plain HTTP
-    let mut buf = [0u8; 4096];
-    let n = match stream.peek(&mut buf).await {
-        Ok(n) => n,
-        Err(_) => return,
-    };
-
-    let request = String::from_utf8_lossy(&buf[..n]);
-
-    // Check if this is a WebSocket upgrade request
-    if request.contains("Upgrade: websocket") || request.contains("upgrade: websocket") {
-        // Validate Origin header for WebSocket connections (CSRF protection)
-        let origin_ok = if let Some(origin_line) = request.lines()
-            .find(|l| l.to_lowercase().starts_with("origin:"))
-        {
-            let origin = origin_line.split_once(':').map(|x| x.1).unwrap_or("").trim();
-            if origin.is_empty() || origin.starts_with("file://") {
-                true
-            } else if let Ok(url) = url::Url::parse(origin) {
-                matches!(url.host_str(), Some("127.0.0.1") | Some("localhost"))
-            } else {
-                false
-            }
-        } else {
-            true // No Origin header = non-browser client, allow
+    let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            continue;
         };
-
-        if !origin_ok {
-            let response = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            let mut request_data = vec![0u8; n];
-            let _ = stream.read(&mut request_data).await;
-            let _ = stream.write_all(response).await;
-            return;
-        }
-
-        // Token authentication: check Authorization header and Sec-WebSocket-Protocol
-        if let Some(ref expected_token) = token {
-            let auth_ok = check_bearer_token(&request, expected_token)
-                || check_ws_protocol_token(&request, expected_token);
-            if !auth_ok {
-                let response = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                let mut request_data = vec![0u8; n];
-                let _ = stream.read(&mut request_data).await;
-                let _ = stream.write_all(response).await;
-                return;
-            }
-        }
-
-        // Use accept_hdr_async to echo Sec-WebSocket-Protocol when token auth is used
-        let matched_token = token.clone();
-        let ws_stream = match tokio_tungstenite::accept_hdr_async(stream, move |_req: &tokio_tungstenite::tungstenite::http::Request<()>, mut resp: tokio_tungstenite::tungstenite::http::Response<()>| {
-            if let Some(ref tok) = matched_token {
-                resp.headers_mut().insert(
-                    "Sec-WebSocket-Protocol",
-                    tokio_tungstenite::tungstenite::http::HeaderValue::from_str(tok).unwrap_or_else(|_| tokio_tungstenite::tungstenite::http::HeaderValue::from_static("")),
-                );
-            }
-            Ok(resp)
-        }).await {
-            Ok(ws) => ws,
-            Err(_) => return,
+        let Ok(permit) = slots.clone().try_acquire_owned() else {
+            continue;
         };
-        handle_websocket(ws_stream, cmd_tx, state_rx).await;
-    } else {
-        // Serve HTML page with security headers
-        let mut request_data = vec![0u8; n];
-        let _ = stream.read(&mut request_data).await;
-
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-             Content-Type: text/html; charset=utf-8\r\n\
-             Content-Length: {}\r\n\
-             Connection: close\r\n\
-             X-Content-Type-Options: nosniff\r\n\
-             X-Frame-Options: DENY\r\n\
-             Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; connect-src ws://127.0.0.1:* ws://localhost:*; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:\r\n\
-             \r\n{}",
-            REMOTE_HTML.len(),
-            REMOTE_HTML
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
+        let cmd_tx = cmd_tx.clone();
+        let state_rx = states.subscribe();
+        let token = token.clone();
+        tokio::spawn(async move {
+            if let Ok(Some(ws)) =
+                tokio::time::timeout(PRE_AUTH_TIMEOUT, accept(stream, token)).await
+            {
+                handle_websocket(ws, cmd_tx, state_rx).await;
+            }
+            drop(permit);
+        });
     }
 }
 
-/// Run the bidirectional WebSocket message loop for a single client.
-///
-/// Spawns two async tasks:
-/// - **Broadcast forwarder**: Receives state updates from the `broadcast` channel
-///   and forwards them to the WebSocket sink.
-/// - **Sink writer**: Takes forwarded messages and writes them to the WebSocket.
-///
-/// The main body reads incoming WebSocket text messages, deserializes them as
-/// [`RemoteCommandMsg`], maps the action string to a [`RemoteCommand`] enum,
-/// and sends it to the presenter via the `mpsc` channel. Messages larger than
-/// 4 KiB are silently dropped to prevent memory exhaustion from malicious clients.
+/// Serve the control page, or complete an authorized WebSocket handshake.
+async fn accept(stream: TcpStream, token: Option<String>) -> Option<WebSocketStream<TcpStream>> {
+    if !requests_websocket(&stream).await {
+        serve_control_page(stream).await;
+        return None;
+    }
+    tokio_tungstenite::accept_hdr_async(stream, Authorize { token })
+        .await
+        .ok()
+}
+
+/// Routing only: the peeked bytes stay in the socket for tungstenite, which
+/// parses the full request and enforces auth in [`Authorize`].
+async fn requests_websocket(stream: &TcpStream) -> bool {
+    let mut buf = [0u8; 4096];
+    let Ok(n) = stream.peek(&mut buf).await else {
+        return false;
+    };
+    String::from_utf8_lossy(&buf[..n]).lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("upgrade")
+                && value.to_ascii_lowercase().contains("websocket")
+        })
+    })
+}
+
+async fn serve_control_page(mut stream: TcpStream) {
+    // Drain the request first: closing a socket with unread input sends a
+    // reset, which can discard the response before the browser reads it.
+    let mut request = [0u8; 4096];
+    let _ = stream.read(&mut request).await;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         X-Frame-Options: DENY\r\n\
+         Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; connect-src ws://127.0.0.1:* ws://localhost:*; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:\r\n\
+         \r\n{}",
+        REMOTE_HTML.len(),
+        REMOTE_HTML
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+}
+
+/// Handshake gate: rejects foreign browser origins (403) and, when a token is
+/// configured, requests that carry it neither as `Authorization: Bearer` nor
+/// as an offered subprotocol (401).
+struct Authorize {
+    token: Option<String>,
+}
+
+impl Callback for Authorize {
+    fn on_request(
+        self,
+        request: &Request,
+        mut response: Response,
+    ) -> Result<Response, ErrorResponse> {
+        let headers = request.headers();
+        if !origin_allowed(headers) {
+            return Err(reject(StatusCode::FORBIDDEN));
+        }
+        let Some(token) = self.token else {
+            return Ok(response);
+        };
+        if offered_subprotocols(headers).any(|p| secure_eq(p, &token)) {
+            // Browsers can only send the token as a subprotocol and fail the
+            // connection unless the server selects one of those offered.
+            let selected =
+                HeaderValue::from_str(&token).map_err(|_| reject(StatusCode::UNAUTHORIZED))?;
+            response
+                .headers_mut()
+                .insert(SEC_WEBSOCKET_PROTOCOL, selected);
+            return Ok(response);
+        }
+        if bearer_token(headers).is_some_and(|t| secure_eq(t, &token)) {
+            return Ok(response);
+        }
+        Err(reject(StatusCode::UNAUTHORIZED))
+    }
+}
+
+fn reject(status: StatusCode) -> ErrorResponse {
+    let mut response = ErrorResponse::new(None);
+    *response.status_mut() = status;
+    response
+}
+
+/// Blocks cross-site WebSocket hijacking from browser pages. Clients that send
+/// no Origin are not browsers and are left to token auth.
+fn origin_allowed(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(ORIGIN) else {
+        return true;
+    };
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    origin.starts_with("file://")
+        || url::Url::parse(origin)
+            .is_ok_and(|url| matches!(url.host_str(), Some("127.0.0.1" | "localhost")))
+}
+
+fn offered_subprotocols(headers: &HeaderMap) -> impl Iterator<Item = &str> {
+    headers
+        .get_all(SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(',').map(str::trim))
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let (scheme, token) = headers.get(AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
+}
+
+fn secure_eq(a: &str, b: &str) -> bool {
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+/// Pump state broadcasts out and commands in until the client disconnects.
 async fn handle_websocket(
-    ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ws: WebSocketStream<TcpStream>,
     cmd_tx: mpsc::Sender<RemoteCommand>,
     mut state_rx: broadcast::Receiver<String>,
 ) {
-    let (mut ws_sink, mut ws_stream_rx) = ws_stream.split();
+    let (mut sink, mut incoming) = ws.split();
 
-    // Channel to forward state broadcasts to the ws_sink task
-    let (fwd_tx, mut fwd_rx) = tokio::sync::mpsc::channel::<String>(64);
-
-    // Task: forward broadcast state to this client
-    let broadcast_task = tokio::spawn(async move {
+    let forward = tokio::spawn(async move {
         loop {
             match state_rx.recv().await {
-                Ok(msg) => {
-                    if fwd_tx.send(msg).await.is_err() {
+                Ok(state) => {
+                    if sink.send(Message::Text(state.into())).await.is_err() {
                         break;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(_) => break,
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     });
 
-    // Task: write forwarded messages to WebSocket sink
-    let sink_task = tokio::spawn(async move {
-        while let Some(msg) = fwd_rx.recv().await {
-            if ws_sink.send(Message::Text(msg.into())).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // Process incoming WebSocket messages
-    while let Some(Ok(msg)) = ws_stream_rx.next().await {
+    while let Some(Ok(msg)) = incoming.next().await {
         match msg {
-            Message::Text(text) => {
-                // Drop oversized messages to prevent OOM from malicious clients
-                if text.len() > 4096 {
-                    continue;
-                }
-                if let Ok(cmd_msg) = serde_json::from_str::<RemoteCommandMsg>(&text) {
-                    if cmd_msg.msg_type == "command" {
-                        let command = match cmd_msg.action.as_str() {
-                            "next" => Some(RemoteCommand::Next),
-                            "prev" => Some(RemoteCommand::Prev),
-                            "goto" => cmd_msg.slide.map(RemoteCommand::Goto),
-                            "next_section" => Some(RemoteCommand::NextSection),
-                            "prev_section" => Some(RemoteCommand::PrevSection),
-                            "scroll_up" => Some(RemoteCommand::ScrollUp),
-                            "scroll_down" => Some(RemoteCommand::ScrollDown),
-                            "toggle_fullscreen" => Some(RemoteCommand::ToggleFullscreen),
-                            "toggle_notes" => Some(RemoteCommand::ToggleNotes),
-                            "toggle_theme_name" => Some(RemoteCommand::ToggleThemeName),
-                            "toggle_sections" => Some(RemoteCommand::ToggleSections),
-                            "toggle_dark_mode" => Some(RemoteCommand::ToggleDarkMode),
-                            "scale_up" => Some(RemoteCommand::ScaleUp),
-                            "scale_down" => Some(RemoteCommand::ScaleDown),
-                            "image_scale_up" => Some(RemoteCommand::ImageScaleUp),
-                            "image_scale_down" => Some(RemoteCommand::ImageScaleDown),
-                            "font_up" => Some(RemoteCommand::FontUp),
-                            "font_down" => Some(RemoteCommand::FontDown),
-                            "font_reset" => Some(RemoteCommand::FontReset),
-                            "execute_code" => Some(RemoteCommand::ExecuteCode),
-                            "timer_start" => Some(RemoteCommand::TimerStart),
-                            "timer_reset" => Some(RemoteCommand::TimerReset),
-                            "set_theme" => cmd_msg.theme.map(RemoteCommand::SetTheme),
-                            _ => None,
-                        };
-                        if let Some(cmd) = command {
-                            let _ = cmd_tx.send(cmd);
-                        }
-                    }
+            Message::Text(text) if text.len() <= MAX_COMMAND_BYTES => {
+                let command = serde_json::from_str::<RemoteCommandMsg>(&text)
+                    .ok()
+                    .and_then(RemoteCommandMsg::into_command);
+                if let Some(command) = command {
+                    let _ = cmd_tx.send(command);
                 }
             }
             Message::Close(_) => break,
@@ -269,49 +269,146 @@ async fn handle_websocket(
         }
     }
 
-    broadcast_task.abort();
-    sink_task.abort();
+    forward.abort();
 }
 
-/// Constant-time string comparison using the `subtle` crate.
-/// Resistant to both timing attacks and compiler dead-store elimination.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    use subtle::ConstantTimeEq;
-    a.as_bytes().ct_eq(b.as_bytes()).into()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::handshake::client::Response as ClientResponse;
+    use tokio_tungstenite::tungstenite::Error as WsError;
+    use tokio_tungstenite::MaybeTlsStream;
 
-/// Check for `Authorization: Bearer <token>` header in the HTTP request.
-/// Uses constant-time comparison to prevent timing attacks.
-fn check_bearer_token(request: &str, expected: &str) -> bool {
-    for line in request.lines() {
-        let lower = line.to_lowercase();
-        if lower.starts_with("authorization:") {
-            let value = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
-            // RFC 7235: auth scheme is case-insensitive
-            let value_lower = value.to_lowercase();
-            if value_lower.starts_with("bearer ") {
-                let token = value[7..].trim(); // "bearer " is 7 chars
-                return constant_time_eq(token, expected);
-            }
+    const TOKEN: &str = "s3cret-token";
+
+    fn serve(token: Option<&str>) -> (u16, mpsc::Receiver<RemoteCommand>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (commands, _states) = spawn(listener, token.map(String::from)).unwrap();
+        (port, commands)
+    }
+
+    async fn connect(
+        port: u16,
+        headers: &[(&'static str, &str)],
+    ) -> Result<(WebSocketStream<MaybeTlsStream<TcpStream>>, ClientResponse), WsError> {
+        let mut request = format!("ws://127.0.0.1:{port}/")
+            .into_client_request()
+            .unwrap();
+        for (name, value) in headers {
+            request.headers_mut().insert(*name, value.parse().unwrap());
+        }
+        tokio_tungstenite::connect_async(request).await
+    }
+
+    fn status(result: Result<impl Sized, WsError>) -> Option<StatusCode> {
+        match result {
+            Err(WsError::Http(response)) => Some(response.status()),
+            _ => None,
         }
     }
-    false
-}
 
-/// Check for token in `Sec-WebSocket-Protocol` header (browser WebSocket token carrier).
-/// Uses constant-time comparison to prevent timing attacks.
-fn check_ws_protocol_token(request: &str, expected: &str) -> bool {
-    for line in request.lines() {
-        let lower = line.to_lowercase();
-        if lower.starts_with("sec-websocket-protocol:") {
-            let value = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
-            // The protocol field may contain multiple values separated by commas
-            for proto in value.split(',') {
-                if constant_time_eq(proto.trim(), expected) {
-                    return true;
-                }
-            }
+    #[test]
+    fn start_rejects_tokens_the_browser_page_cannot_send() {
+        for token in ["", "a+b", "a/b=", "a b"] {
+            assert!(
+                start(0, Some(token.to_string())).is_err(),
+                "{token:?} accepted"
+            );
         }
     }
-    false
+
+    #[test]
+    fn start_reports_a_port_that_is_in_use() {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        assert!(start(port, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn serves_control_page_over_plain_http() {
+        let (port, _commands) = serve(Some(TOKEN));
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut body = String::new();
+        stream.read_to_string(&mut body).await.unwrap();
+        assert!(body.starts_with("HTTP/1.1 200 OK"));
+        assert!(body.contains("<title>Ostendo Remote</title>"));
+    }
+
+    #[tokio::test]
+    async fn token_is_required_when_configured() {
+        let (port, _commands) = serve(Some(TOKEN));
+        assert_eq!(
+            status(connect(port, &[]).await),
+            Some(StatusCode::UNAUTHORIZED)
+        );
+        let wrong = [("authorization", "Bearer wrong")];
+        assert_eq!(
+            status(connect(port, &wrong).await),
+            Some(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[tokio::test]
+    async fn bearer_token_connects_without_selecting_a_subprotocol() {
+        let (port, commands) = serve(Some(TOKEN));
+        let bearer = format!("bearer {TOKEN}");
+        let (mut ws, response) = connect(port, &[("authorization", &bearer)]).await.unwrap();
+        assert!(response.headers().get(SEC_WEBSOCKET_PROTOCOL).is_none());
+
+        let goto = r#"{"type":"command","action":"goto","slide":5}"#;
+        ws.send(Message::Text(goto.into())).await.unwrap();
+        let command =
+            tokio::task::spawn_blocking(move || commands.recv_timeout(Duration::from_secs(5)))
+                .await
+                .unwrap();
+        assert!(matches!(command, Ok(RemoteCommand::Goto(5))), "{command:?}");
+    }
+
+    #[tokio::test]
+    async fn subprotocol_token_is_selected_for_browsers() {
+        let (port, _commands) = serve(Some(TOKEN));
+        let offered = format!("other, {TOKEN}");
+        let (_ws, response) = connect(port, &[("sec-websocket-protocol", &offered)])
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[SEC_WEBSOCKET_PROTOCOL], TOKEN);
+    }
+
+    #[tokio::test]
+    async fn rejects_foreign_browser_origin() {
+        let (port, _commands) = serve(None);
+        let foreign = [("origin", "http://evil.example")];
+        assert_eq!(
+            status(connect(port, &foreign).await),
+            Some(StatusCode::FORBIDDEN)
+        );
+        assert!(connect(port, &[("origin", "http://localhost:8765")])
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn idle_connections_cannot_hold_the_connection_cap() {
+        let (port, _commands) = serve(None);
+        let mut idle = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            idle.push(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+        assert!(
+            connect(port, &[]).await.is_err(),
+            "connection cap not enforced"
+        );
+
+        tokio::time::sleep(PRE_AUTH_TIMEOUT + Duration::from_millis(500)).await;
+        assert!(
+            connect(port, &[]).await.is_ok(),
+            "idle sockets still hold every slot"
+        );
+    }
 }

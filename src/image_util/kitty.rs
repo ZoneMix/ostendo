@@ -1,52 +1,36 @@
-//! Kitty graphics protocol: transmit/display split architecture.
+//! Kitty graphics protocol escapes.
 //!
-//! Instead of `a=T` (transmit+display combined), this module implements:
-//! - `a=t` (transmit once, assign stable image ID)
-//! - `a=p` (display by ID at cursor position — ~50 bytes)
-//! - `a=f` (add animation frames to an image ID)
-//! - `a=a` (start/stop animation playback)
-//! - `a=d` (delete images by ID or all)
-//!
-//! This architecture fixes two critical issues:
-//! 1. **Image centering**: cursor position controls placement, not embedded padding
-//! 2. **Timer jitter during GIF**: placement commands are instant (~50 bytes),
-//!    while transmissions happen once during prerender
-//!
-//! # Protocol Reference
-//!
-//! All commands use APC format: `\x1b_G<keys>;<payload>\x1b\\`
-//! - `q=2` suppresses error responses (prevents input stream pollution)
-//! - `C=1` prevents cursor movement after placement
-//! - `m=0/1` controls chunked transmission (4096-byte chunks)
+//! Images are transmitted once under a numeric ID (`a=t`) and then shown with
+//! small placement commands (`a=p`), so redrawing a slide never re-sends pixel
+//! data. Every command carries `q=2` so the terminal sends no replies that
+//! would pollute the input stream.
 
 use base64::Engine;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Global image ID counter. Each transmitted image gets a unique ID.
-/// IDs are never reused within a session to avoid stale placement references.
+/// IDs are never reused within a session so a stale placement can never show
+/// a different image.
 static NEXT_IMAGE_ID: AtomicU32 = AtomicU32::new(1);
 
-/// Allocate a new unique Kitty image ID.
+/// The protocol caps each escape's base64 payload at 4096 bytes.
+const CHUNK_SIZE: usize = 4096;
+
+/// Remove every placement and free all transmitted image data.
+pub const DELETE_ALL_IMAGES: &str = "\x1b_Ga=d,d=A,q=2;AAAA\x1b\\";
+
 pub fn next_image_id() -> u32 {
     NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Transmit image data to Kitty without displaying it.
-///
-/// Returns the escape sequence string that, when written to stdout,
-/// sends the image data with `a=t` (transmit only, no display).
-/// The image is assigned the given `id` and can later be placed with
-/// [`placement_escape`].
-///
-/// The image is PNG-encoded before base64 encoding and chunked at 4096 bytes.
+/// PNG-encode `img` and transmit it under `id` without displaying it.
+/// Returns `None` for an empty image or if encoding fails.
 pub fn transmit_escape(id: u32, img: &image::RgbaImage) -> Option<String> {
     let (sw, sh) = img.dimensions();
     if sw == 0 || sh == 0 {
         return None;
     }
 
-    // PNG encode
     let mut png_bytes = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(Cursor::new(&mut png_bytes));
     image::ImageEncoder::write_image(
@@ -59,187 +43,101 @@ pub fn transmit_escape(id: u32, img: &image::RgbaImage) -> Option<String> {
     .ok()?;
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
-
-    // Build chunked escape sequence
-    let chunk_size = 4096;
-    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(chunk_size).collect();
+    let chunks: Vec<&str> = encoded
+        .as_bytes()
+        .chunks(CHUNK_SIZE)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+        .collect();
     let mut escape = String::with_capacity(encoded.len() + chunks.len() * 40);
-
     for (i, chunk) in chunks.iter().enumerate() {
-        let m = if i == chunks.len() - 1 { 0 } else { 1 };
-        let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
+        // m=1 announces that more chunks follow; only the first carries keys.
+        let more = u8::from(i + 1 < chunks.len());
         if i == 0 {
-            // First chunk: full metadata
-            // a=t: transmit only (no display)
-            // i=<id>: image ID for later reference
-            // f=100: PNG format
-            // t=d: direct (inline) data
-            // q=2: suppress error responses
             escape.push_str(&format!(
-                "\x1b_Ga=t,i={},f=100,t=d,q=2,m={};{}\x1b\\",
-                id, m, chunk_str
+                "\x1b_Ga=t,i={id},f=100,t=d,q=2,m={more};{chunk}\x1b\\"
             ));
         } else {
-            escape.push_str(&format!("\x1b_Gm={};{}\x1b\\", m, chunk_str));
+            escape.push_str(&format!("\x1b_Gm={more};{chunk}\x1b\\"));
         }
     }
-
     Some(escape)
 }
 
-/// Generate a placement escape to display a previously transmitted image.
-///
-/// This is the fast path (~50 bytes) used on every render_frame() instead
-/// of re-transmitting the full image data.
-///
-/// - `id`: the image ID from [`transmit_escape`]
-/// - `cols`: number of terminal columns to span
-/// - `rows`: number of terminal rows to span
-///
-/// The image is placed at the current cursor position. Use
-/// `cursor::MoveTo(col, row)` before writing this escape.
-/// `C=1` prevents cursor movement after placement.
-pub fn placement_escape(id: u32, cols: usize, rows: usize) -> String {
-    format!(
-        "\x1b_Ga=p,i={},c={},r={},C=1,q=2;AAAA\x1b\\",
-        id, cols, rows
-    )
+/// Show image `id` at the cursor, scaled to `cols` x `rows` cells. Reusing
+/// `placement_id` moves the existing placement instead of stacking another;
+/// `C=1` keeps the cursor where it was.
+pub fn placement_escape(id: u32, placement_id: u32, cols: usize, rows: usize) -> String {
+    format!("\x1b_Ga=p,i={id},p={placement_id},c={cols},r={rows},C=1,q=2;AAAA\x1b\\")
 }
 
-/// Delete ALL visible image placements. Use on slide change or exit.
-/// Uses `d=a` which deletes all visible placements. For full cleanup
-/// including image data, use per-ID `d=I` deletes first.
-pub fn delete_all_escape() -> String {
-    "\x1b_Ga=d,d=a,q=2\x1b\\".to_string()
+/// Remove the placements of image `id` but keep its data for re-placement.
+pub fn delete_placements(id: u32) -> String {
+    format!("\x1b_Ga=d,d=i,i={id},q=2;AAAA\x1b\\")
+}
+
+/// Remove the placements of image `id` and free its data.
+pub fn delete_image(id: u32) -> String {
+    format!("\x1b_Ga=d,d=I,i={id},q=2;AAAA\x1b\\")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine;
-    use std::io::Cursor;
 
-    /// Generate an escape to add an animation frame to an existing image.
-    fn animation_frame_escape(
-        id: u32,
-        frame_img: &image::RgbaImage,
-        gap_ms: u32,
-    ) -> Option<String> {
-        let (sw, sh) = frame_img.dimensions();
-        if sw == 0 || sh == 0 {
-            return None;
+    #[test]
+    fn test_placement_and_delete_escapes() {
+        let cases = [
+            (
+                placement_escape(42, 7, 80, 20),
+                "\x1b_Ga=p,i=42,p=7,c=80,r=20,C=1,q=2;AAAA\x1b\\",
+            ),
+            (delete_placements(42), "\x1b_Ga=d,d=i,i=42,q=2;AAAA\x1b\\"),
+            (delete_image(42), "\x1b_Ga=d,d=I,i=42,q=2;AAAA\x1b\\"),
+        ];
+        for (actual, expected) in cases {
+            assert_eq!(actual, expected);
         }
+    }
 
-        let mut png_bytes = Vec::new();
-        let encoder = image::codecs::png::PngEncoder::new(Cursor::new(&mut png_bytes));
-        image::ImageEncoder::write_image(
-            encoder,
-            frame_img.as_raw(),
-            sw,
-            sh,
-            image::ExtendedColorType::Rgba8,
-        )
-        .ok()?;
+    #[test]
+    fn test_transmit_escape_chunks_payload() {
+        // Pseudo-random pixels so the PNG cannot compress below one chunk.
+        let mut seed = 1u32;
+        let noise = image::RgbaImage::from_fn(64, 64, |_, _| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            image::Rgba(seed.to_le_bytes())
+        });
+        let pixel = image::RgbaImage::new(1, 1);
 
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
-        let chunk_size = 4096;
-        let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(chunk_size).collect();
-        let mut escape = String::with_capacity(encoded.len() + chunks.len() * 40);
+        for (img, expect_multi) in [(pixel, false), (noise, true)] {
+            let esc = transmit_escape(99, &img).unwrap();
+            let chunks: Vec<&str> = esc
+                .strip_suffix("\x1b\\")
+                .unwrap()
+                .split("\x1b\\")
+                .map(|c| c.strip_prefix("\x1b_G").unwrap())
+                .collect();
+            assert_eq!(chunks.len() > 1, expect_multi);
 
-        for (i, chunk) in chunks.iter().enumerate() {
-            let m = if i == chunks.len() - 1 { 0 } else { 1 };
-            let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
-            if i == 0 {
-                escape.push_str(&format!(
-                    "\x1b_Ga=f,i={},z={},f=100,t=d,q=2,m={};{}\x1b\\",
-                    id, gap_ms, m, chunk_str
-                ));
-            } else {
-                escape.push_str(&format!("\x1b_Ga=f,m={};{}\x1b\\", m, chunk_str));
+            let mut payload = String::new();
+            for (i, chunk) in chunks.iter().enumerate() {
+                let (keys, data) = chunk.split_once(';').unwrap();
+                let more = if i + 1 < chunks.len() { "m=1" } else { "m=0" };
+                let expected_keys = if i == 0 {
+                    format!("a=t,i=99,f=100,t=d,q=2,{more}")
+                } else {
+                    more.to_string()
+                };
+                assert_eq!(keys, expected_keys);
+                assert!(data.len() <= CHUNK_SIZE);
+                payload.push_str(data);
             }
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .unwrap();
+            let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert_eq!(decoded, img);
         }
-
-        Some(escape)
-    }
-
-    /// Start animation loop playback for a transmitted image with frames.
-    fn animation_start_escape(id: u32) -> String {
-        format!("\x1b_Ga=a,i={},s=3,v=1,q=2;AAAA\x1b\\", id)
-    }
-
-    /// Stop animation playback.
-    fn animation_stop_escape(id: u32) -> String {
-        format!("\x1b_Ga=a,i={},s=1,q=2;AAAA\x1b\\", id)
-    }
-
-    /// Delete all placements and free data for a specific image ID.
-    fn delete_image_escape(id: u32) -> String {
-        format!("\x1b_Ga=d,d=I,i={},q=2;AAAA\x1b\\", id)
-    }
-
-    #[test]
-    fn test_next_image_id_increments() {
-        let a = next_image_id();
-        let b = next_image_id();
-        assert_eq!(b, a + 1);
-    }
-
-    #[test]
-    fn test_placement_escape_format() {
-        let esc = placement_escape(42, 80, 20);
-        assert!(esc.contains("a=p"));
-        assert!(esc.contains("i=42"));
-        assert!(esc.contains("c=80"));
-        assert!(esc.contains("r=20"));
-        assert!(esc.contains("C=1"));
-        assert!(esc.contains("q=2"));
-    }
-
-    #[test]
-    fn test_delete_image_escape() {
-        let esc = delete_image_escape(42);
-        assert!(esc.contains("a=d"));
-        assert!(esc.contains("d=I"));
-        assert!(esc.contains("i=42"));
-    }
-
-    #[test]
-    fn test_delete_all_escape() {
-        let esc = delete_all_escape();
-        assert!(esc.contains("a=d"));
-        assert!(esc.contains("d=a"));
-    }
-
-    #[test]
-    fn test_animation_start_escape() {
-        let esc = animation_start_escape(42);
-        assert!(esc.contains("a=a"));
-        assert!(esc.contains("i=42"));
-        assert!(esc.contains("s=3"));
-        assert!(esc.contains("v=1"));
-    }
-
-    #[test]
-    fn test_animation_stop_escape() {
-        let esc = animation_stop_escape(42);
-        assert!(esc.contains("a=a"));
-        assert!(esc.contains("s=1"));
-    }
-
-    #[test]
-    fn test_transmit_escape_small_image() {
-        // Create a tiny 2x2 RGBA image
-        let img = image::RgbaImage::from_raw(2, 2, vec![
-            255, 0, 0, 255,  0, 255, 0, 255,
-            0, 0, 255, 255,  255, 255, 255, 255,
-        ]).unwrap();
-
-        let esc = transmit_escape(99, &img).unwrap();
-        assert!(esc.contains("a=t"));
-        assert!(esc.contains("i=99"));
-        assert!(esc.contains("f=100"));
-        assert!(esc.contains("t=d"));
-        assert!(esc.contains("m=0")); // Small image = single chunk
     }
 
     #[test]
@@ -247,18 +145,4 @@ mod tests {
         let img = image::RgbaImage::new(0, 0);
         assert!(transmit_escape(1, &img).is_none());
     }
-
-    #[test]
-    fn test_animation_frame_escape_format() {
-        let img = image::RgbaImage::from_raw(2, 2, vec![
-            255, 0, 0, 255,  0, 255, 0, 255,
-            0, 0, 255, 255,  255, 255, 255, 255,
-        ]).unwrap();
-
-        let esc = animation_frame_escape(42, &img, 100).unwrap();
-        assert!(esc.contains("a=f"));
-        assert!(esc.contains("i=42"));
-        assert!(esc.contains("z=100"));
-    }
-
 }

@@ -5,13 +5,6 @@ colors:
   accent: "#ff2975"
   text: "#e0d0ff"
   code_background: "#302242"
-fonts:
-  heading: "Space Mono"
-  body: "Fira Code"
-  code: "Fira Code"
-layout: "center"
-visual_style: "gradient"
 gradient:
   from: "#2D1B69"
   to: "#11001C"
-  direction: "vertical"

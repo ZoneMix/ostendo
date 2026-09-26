@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-TMUX_BIN=/opt/homebrew/bin/tmux
+TMUX_BIN=${TMUX_BIN:-tmux}
 TMUX_SOCKET=ostendo_test
 tmx() { "$TMUX_BIN" -L "$TMUX_SOCKET" "$@"; }
 PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -141,13 +141,13 @@ section "Launch"
 tmx new-session -d -s "$SESSION" -x 120 -y 40
 
 # Launch ostendo with safe flags (no code exec, ASCII images for tmux compat)
-tmx send-keys -t "$SESSION" "$BINARY --no-exec --image-mode ascii '$PRESENTATION'" Enter
+tmx send-keys -t "$SESSION" "$BINARY --no-exec --slide 1 --image-mode ascii '$PRESENTATION'" Enter
 sleep 2.5  # Wait for startup + first render + possible font change
 
 assert_alive "Ostendo started"
 
-# Check status bar has slide counter — use "Slide" which is in the status bar format
-assert_contains "Status bar shows slide 1" "Slide"
+# Status bar ends with the "n / total" counter
+assert_contains "Status bar shows slide 1" "1 / "
 
 # ============================================================
 # Navigation tests
@@ -155,52 +155,26 @@ assert_contains "Status bar shows slide 1" "Slide"
 
 section "Navigation"
 
-# First, go to a known slide to reset any intro animation state
-send g
-sleep 0.2
-send 3
-sleep 0.2
-send Enter
-sleep 1.0
-assert_contains "Start navigation from slide 3" "Slide 3/"
-
-# Next slide (Right arrow)
+# Slides 1-3 show the status bar in every example deck (fullscreen hides it).
 send Right
-assert_contains "Navigate to slide 4" "Slide 4/"
+assert_contains "Navigate to slide 2" "2 / "
 
-# Next slide (l key)
 send l
-assert_contains "Navigate to slide 5 via 'l'" "Slide 5/"
+assert_contains "Navigate to slide 3 via 'l'" "3 / "
 
-# Previous slide (Left arrow)
 send Left
-assert_contains "Back to slide 4 via Left" "Slide 4/"
+assert_contains "Back to slide 2 via Left" "2 / "
 
-# Previous slide (h key)
 send h
-assert_contains "Back to slide 3 via 'h'" "Slide 3/"
+assert_contains "Back to slide 1 via 'h'" "1 / "
 
-# Go to last slide — 'G' may be intercepted by tmux in some configs
-send G
-sleep 1.5
-content=$(capture)
-if echo "$content" | grep -qF "Slide $SLIDE_COUNT/"; then
-    pass "Jump to last slide via 'G'"
-else
-    skip "Jump to last slide via 'G' (tmux may intercept Shift+G)"
-fi
+send End
+sleep 1.0
+assert_contains "Jump to last slide via End" "$SLIDE_COUNT / $SLIDE_COUNT"
 
-# Go to first slide — 'gg' requires two keystrokes
-send g
-sleep 0.2
-send g
-sleep 1.5
-content=$(capture)
-if echo "$content" | grep -qF "Slide 1/"; then
-    pass "Jump to first slide via 'gg'"
-else
-    skip "Jump to first slide via 'gg' (tmux may intercept g key)"
-fi
+send Home
+sleep 1.0
+assert_contains "Jump to first slide via Home" "1 / $SLIDE_COUNT"
 
 # Goto mode: jump to slide 5
 if [ "$SLIDE_COUNT" -ge 5 ]; then
@@ -210,7 +184,7 @@ if [ "$SLIDE_COUNT" -ge 5 ]; then
     sleep 0.2
     send Enter
     sleep 0.3
-    assert_contains "Goto slide 5" "Slide 5/"
+    assert_contains "Goto slide 5" "5 / "
 else
     skip "Goto slide 5 (only $SLIDE_COUNT slides)"
 fi
@@ -218,7 +192,7 @@ fi
 # Navigate through all slides without crashing
 section "Full traversal ($SLIDE_COUNT slides)"
 
-send g g
+send Home
 sleep 0.3
 
 CRASH_DETECTED=0
@@ -238,7 +212,7 @@ else
 fi
 
 # Navigate back to start
-send g g
+send Home
 sleep 0.3
 
 # ============================================================
@@ -339,18 +313,25 @@ assert_alive "Scale down — alive"
 
 section "Timer"
 
-send t
-sleep 1.5
+# The timer starts with the first slide change; t resets it.
 content=$(capture)
-if echo "$content" | grep -qE "[0-9]+:[0-9]+:[0-9]+"; then
-    pass "Timer visible"
+if echo "$content" | grep -qE "◷ [0-9]+:[0-9]{2}"; then
+    pass "Timer running"
 else
-    skip "Timer not visible in pane capture (may be in status bar)"
+    fail "Timer running (expected '◷ m:ss' in the status bar)"
+fi
+
+send t
+sleep 0.3
+if capture | grep -qE "◷ [0-9]+:[0-9]{2}"; then
+    fail "t stops the timer"
+else
+    pass "t stops the timer"
 fi
 
 send T
 sleep 0.3
-assert_alive "Timer reset — alive"
+assert_alive "Theme name toggle — alive"
 
 # ============================================================
 # Clean exit

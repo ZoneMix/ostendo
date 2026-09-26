@@ -1,102 +1,104 @@
-//! Syntax highlighting wrapper using the `syntect` library.
-//!
-//! Highlights code blocks for 200+ languages using TextMate-compatible grammars
-//! bundled inside the `syntect` crate.  The highlighter converts source code into
-//! a grid of [`HighlightedSpan`]s (text + foreground color) that the rendering
-//! engine maps to [`StyledSpan`](crate::render::text::StyledSpan)s for display.
-//!
-//! # Theme selection
-//!
-//! The default theme is `base16-eighties.dark`.
-//!
-//! # Color brightening
-//!
-//! Foreground colors from `syntect` are slightly brightened (shifted toward white
-//! by ~12%) to improve readability on the dark terminal backgrounds that most
-//! Ostendo themes use.
+//! Syntax highlighting for code blocks via syntect's bundled grammars.
 
 use crossterm::style::Color;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{Theme, ThemeSet};
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 
-/// Stateful syntax highlighter that holds loaded grammar and theme sets.
-///
-/// Create once with [`Highlighter::new`] and reuse across slides -- loading
-/// the syntax and theme sets is expensive, so this avoids repeated work.
 pub struct Highlighter {
-    /// The collection of language grammars (loaded from syntect's built-in defaults).
-    syntax_set: SyntaxSet,
-    /// The collection of color themes (loaded from syntect's built-in defaults).
-    theme_set: ThemeSet,
-    /// The currently active theme name (must be a key in `theme_set.themes`).
-    theme_name: String,
+    syntaxes: SyntaxSet,
+    dark: Theme,
+    light: Theme,
 }
 
-/// A single piece of syntax-highlighted text with its foreground color.
-///
-/// The rendering engine converts these into [`StyledSpan`](crate::render::text::StyledSpan)s
-/// when building the virtual buffer for a code block.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HighlightedSpan {
-    /// The text content (may include trailing newline from the source line).
     pub text: String,
-    /// The foreground color determined by the syntax theme.
     pub fg: Color,
 }
 
 impl Highlighter {
-    /// Create a new highlighter with default grammars and the `base16-eighties.dark` theme.
     pub fn new() -> Self {
+        let mut themes = ThemeSet::load_defaults().themes;
         Self {
-            syntax_set: SyntaxSet::load_defaults_newlines(),
-            theme_set: ThemeSet::load_defaults(),
-            theme_name: "base16-eighties.dark".to_string(),
+            syntaxes: SyntaxSet::load_defaults_newlines(),
+            dark: themes.remove("base16-eighties.dark").unwrap_or_default(),
+            light: themes.remove("InspiredGitHub").unwrap_or_default(),
         }
     }
 
-    /// Highlight a block of source code, returning one `Vec<HighlightedSpan>` per line.
-    ///
-    /// # Parameters
-    ///
-    /// - `code` -- the full source code string (may contain multiple lines).
-    /// - `language` -- the language token used to select the grammar (e.g. `"rust"`,
-    ///   `"python"`, `"js"`).  Falls back to plain text if the language is unknown.
-    pub fn highlight(&self, code: &str, language: &str) -> Vec<Vec<HighlightedSpan>> {
-        let syntax = self
-            .syntax_set
-            .find_syntax_by_token(language)
-            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+    /// Highlights `code` line by line (without line endings). `dark` selects
+    /// colors readable on a dark code background.
+    pub fn highlight(&self, code: &str, language: &str, dark: bool) -> Vec<Vec<HighlightedSpan>> {
+        let theme = if dark { &self.dark } else { &self.light };
+        let mut h = HighlightLines::new(self.syntax(language), theme);
+        LinesWithEndings::from(code)
+            .map(|line| {
+                let ranges = h.highlight_line(line, &self.syntaxes).unwrap_or_default();
+                ranges
+                    .into_iter()
+                    .map(|(style, text)| HighlightedSpan {
+                        text: text.trim_end_matches(['\n', '\r']).replace('\t', "    "),
+                        fg: adjust(style.foreground, dark),
+                    })
+                    .filter(|span| !span.text.is_empty())
+                    .collect()
+            })
+            .collect()
+    }
 
-        let theme = &self.theme_set.themes[&self.theme_name];
-        let mut h = HighlightLines::new(syntax, theme);
+    fn syntax(&self, language: &str) -> &SyntaxReference {
+        // Info strings like `rust,ignore` name the language first.
+        let language = language.split([',', ' ']).next().unwrap_or_default();
+        let token = match language.to_lowercase().as_str() {
+            "c++" | "cxx" => "cpp".to_string(),
+            "shell" | "zsh" | "console" | "shell-session" => "bash".to_string(),
+            "golang" => "go".to_string(),
+            other => other.to_string(),
+        };
+        self.syntaxes
+            .find_syntax_by_token(&token)
+            .unwrap_or_else(|| self.syntaxes.find_syntax_plain_text())
+    }
+}
 
-        let mut lines = Vec::new();
-        for line in LinesWithEndings::from(code) {
-            let ranges: Vec<(Style, &str)> = h
-                .highlight_line(line, &self.syntax_set)
-                .unwrap_or_default();
-            let spans: Vec<HighlightedSpan> = ranges
-                .into_iter()
-                .map(|(style, text)| {
-                    // Brighten colors slightly for better visibility on dark backgrounds
-                    let r = style.foreground.r;
-                    let g = style.foreground.g;
-                    let b = style.foreground.b;
-                    let fg = Color::Rgb {
-                        r: r.saturating_add((255 - r) / 8),
-                        g: g.saturating_add((255 - g) / 8),
-                        b: b.saturating_add((255 - b) / 8),
-                    };
-                    HighlightedSpan {
-                        text: text.to_string(),
-                        fg,
-                    }
-                })
-                .collect();
-            lines.push(spans);
+/// Nudges dark-theme colors brighter so they read on projected backgrounds.
+fn adjust(c: syntect::highlighting::Color, dark: bool) -> Color {
+    let lift = |v: u8| {
+        if dark {
+            v.saturating_add((255 - v) / 8)
+        } else {
+            v
         }
-        lines
+    };
+    Color::Rgb {
+        r: lift(c.r),
+        g: lift(c.g),
+        b: lift(c.b),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tabs_expand_and_line_endings_are_stripped() {
+        let h = Highlighter::new();
+        let lines = h.highlight("\tx = 1\r\ny\n", "python", true);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.iter().map(|s| s.text.as_str()).collect())
+            .collect();
+        assert_eq!(text, ["    x = 1", "y"]);
+    }
+
+    #[test]
+    fn light_pages_get_a_light_syntax_theme() {
+        let h = Highlighter::new();
+        let dark = h.highlight("fn main() {}", "rust", true);
+        let light = h.highlight("fn main() {}", "rust", false);
+        assert_ne!(dark, light);
     }
 }

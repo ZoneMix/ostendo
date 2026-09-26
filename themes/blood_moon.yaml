@@ -5,13 +5,6 @@ colors:
   accent: "#cc0000"
   text: "#FFFFFF"
   code_background: "#331C1C"
-fonts:
-  heading: "Inter"
-  body: "Fira Code"
-  code: "Fira Code"
-layout: "left"
-visual_style: "bold"
 gradient:
   from: "#1A0505"
   to: "#0A0000"
-  direction: "vertical"

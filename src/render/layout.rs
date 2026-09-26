@@ -47,47 +47,31 @@ impl WindowSize {
         Self {
             columns: cols,
             rows,
-            pixel_width: cols * 8,   // heuristic: 8px per column
-            pixel_height: rows * 16, // heuristic: 16px per row
+            pixel_width: cols.saturating_mul(8), // heuristic: 8px per column
+            pixel_height: rows.saturating_mul(16), // heuristic: 16px per row
         }
     }
 
     /// Pixels per terminal column.
     pub fn pixels_per_column(&self) -> f64 {
-        if self.columns == 0 { return 8.0; }
+        if self.columns == 0 {
+            return 8.0;
+        }
         self.pixel_width as f64 / self.columns as f64
     }
 
     /// Pixels per terminal row.
     pub fn pixels_per_row(&self) -> f64 {
-        if self.rows == 0 { return 16.0; }
+        if self.rows == 0 {
+            return 16.0;
+        }
         self.pixel_height as f64 / self.rows as f64
-    }
-
-    /// Aspect ratio correction factor: (pixels_per_row / pixels_per_column).
-    /// Used to convert image aspect ratio to terminal cell aspect ratio.
-    #[cfg(test)]
-    pub fn aspect_ratio(&self) -> f64 {
-        self.pixels_per_column() / self.pixels_per_row()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_window_size_aspect_ratio() {
-        let ws = WindowSize {
-            columns: 80,
-            rows: 24,
-            pixel_width: 640,
-            pixel_height: 384,
-        };
-        assert_eq!(ws.pixels_per_column(), 8.0);
-        assert_eq!(ws.pixels_per_row(), 16.0);
-        assert!((ws.aspect_ratio() - 0.5).abs() < 0.01);
-    }
 
     #[test]
     fn test_window_size_zero_safe() {

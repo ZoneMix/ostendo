@@ -1,21 +1,17 @@
-//! Compact bracket-style diagram renderer.
+//! Compact bracket diagram style:
+//!
+//! ```text
+//! [Node A] → [Node B] → [Node C]
+//!  note A     note B     note C
+//! ```
 
-/// Bracket-style renderer.
-///
-/// Produces compact bracket diagrams:
-/// ```text
-/// [Node A] → [Node B] → [Node C]
-///  note A     note B     note C
-/// ```
 use crossterm::style::Color;
 
 use crate::diagram::parser::DiagramGraph;
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 
-/// Render a `DiagramGraph` as bracket-style lines.
 pub fn render(
     graph: &DiagramGraph,
-    _content_width: usize,
     accent: Color,
     text_color: Color,
     dim_color: Color,
@@ -23,7 +19,6 @@ pub fn render(
 ) -> Vec<StyledLine> {
     let mut lines: Vec<StyledLine> = Vec::new();
 
-    // Title
     if let Some(ref title) = graph.title {
         lines.push(StyledLine::empty());
         let mut line = StyledLine::empty();
@@ -35,7 +30,6 @@ pub fn render(
     }
 
     for (row_idx, row) in graph.rows.iter().enumerate() {
-        // Compute column widths for alignment (bracket width = label + 2 for [])
         let col_widths: Vec<usize> = row
             .nodes
             .iter()
@@ -65,15 +59,16 @@ pub fn render(
             node_line.push(StyledSpan::new("[").with_fg(accent));
             node_line.push(StyledSpan::new(&node.label).with_fg(text_color).bold());
             node_line.push(StyledSpan::new("]").with_fg(accent));
-            node_line.push(StyledSpan::new(&" ".repeat(right_pad)));
-
             if i + 1 < row.nodes.len() {
-                node_line.push(StyledSpan::new(" → ").with_fg(accent));
+                // The arrow stretches across the room a long annotation needs.
+                let arrow = format!(" {}→ ", "─".repeat(right_pad));
+                node_line.push(StyledSpan::new(&arrow).with_fg(accent));
+            } else {
+                node_line.push(StyledSpan::new(&" ".repeat(right_pad)));
             }
         }
         lines.push(node_line);
 
-        // Annotation line (if any)
         let has_annotations = row.annotations.iter().any(|a| a.is_some());
         if has_annotations {
             let mut ann_line = StyledLine::empty();
@@ -98,7 +93,6 @@ pub fn render(
             lines.push(ann_line);
         }
 
-        // Vertical connector between rows
         if row_idx + 1 < graph.rows.len() {
             let mut connector = StyledLine::empty();
             connector.content_type = LineContentType::Diagram;
@@ -113,7 +107,6 @@ pub fn render(
             let mut found = false;
             for (i, node) in row.nodes.iter().enumerate() {
                 if node.label == next_first {
-                    // Center under this column
                     let center = offset + col_widths[i] / 2;
                     connector.push(StyledSpan::new(&" ".repeat(center)));
                     connector.push(StyledSpan::new("↓").with_fg(accent));
@@ -140,50 +133,36 @@ mod tests {
 
     fn test_colors() -> (Color, Color, Color) {
         (
-            Color::Rgb { r: 189, g: 147, b: 249 },
-            Color::Rgb { r: 248, g: 248, b: 242 },
-            Color::Rgb { r: 98, g: 114, b: 164 },
+            Color::Rgb {
+                r: 189,
+                g: 147,
+                b: 249,
+            },
+            Color::Rgb {
+                r: 248,
+                g: 248,
+                b: 242,
+            },
+            Color::Rgb {
+                r: 98,
+                g: 114,
+                b: 164,
+            },
         )
     }
 
     #[test]
-    fn test_simple_bracket() {
+    fn arrows_stretch_so_annotations_sit_under_their_nodes() {
         let (accent, text, dim) = test_colors();
-        let graph = parse("A -> B -> C");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
-        let all_text: String = lines
+        let graph = parse("# Flow\nA -> Build\n: long note : x");
+        let rows: Vec<String> = render(&graph, accent, text, dim, "")
             .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>())
+            .map(|row| row.trim_end().to_string())
             .collect();
-        assert!(all_text.contains("["));
-        assert!(all_text.contains("]"));
-        assert!(all_text.contains("→"));
-        assert!(all_text.contains("A"));
-        assert!(all_text.contains("B"));
-        assert!(all_text.contains("C"));
-    }
-
-    #[test]
-    fn test_bracket_with_title() {
-        let (accent, text, dim) = test_colors();
-        let graph = parse("# Test\nX -> Y");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
-        let all_text: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(all_text.contains("Test"));
-    }
-
-    #[test]
-    fn test_bracket_compact() {
-        let (accent, text, dim) = test_colors();
-        let graph = parse("A -> B");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
-        // Bracket style should be compact: fewer lines than box style
-        // At minimum: node_line + trailing_empty = 2
-        assert!(lines.len() >= 2);
+        assert_eq!(
+            rows,
+            ["", "Flow", "", "[A] ──────→ [Build]", " long note   x", ""]
+        );
     }
 }

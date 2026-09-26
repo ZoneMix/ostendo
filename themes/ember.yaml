@@ -5,13 +5,6 @@ colors:
   accent: "#E8944C"
   text: "#E4D8CC"
   code_background: "#302420"
-fonts:
-  heading: "Source Code Pro"
-  body: "Source Code Pro"
-  code: "Source Code Pro"
-layout: "left"
-visual_style: "bold"
 gradient:
   from: "#1E1408"
   to: "#0C0804"
-  direction: "vertical"

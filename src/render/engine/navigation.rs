@@ -1,156 +1,89 @@
-//! Slide navigation, scrolling, and animation trigger logic.
+//! Moving between slides and scrolling within one.
 
-use super::*;
+use std::time::Instant;
+
+use crate::render::animation::{parse_transition, AnimationState};
+
+use super::Presenter;
 
 impl Presenter {
-    /// Initialize transition, entrance, and loop animations for the current slide.
-    pub(crate) fn start_slide_animations(&mut self) {
-        let slide = &self.slides[self.current];
-        let old_buffer = self.last_rendered_buffer.clone();
-
-        // Determine transition: per-slide directive overrides global meta
-        let transition_type = slide.transition
-            .or_else(|| if self.meta.transition.is_empty() { None } else { parse_transition(&self.meta.transition) });
-
-        if let Some(tt) = transition_type {
-            let has_entrance = slide.entrance_animation.is_some();
-            let mut anim = AnimationState::new_transition(tt, old_buffer);
-            // When an entrance animation follows, the transition only fades out
-            // old content — the entrance handles revealing new content.
-            anim.exit_only = has_entrance;
-            self.active_animation = Some(anim);
-        } else if let Some(ea) = slide.entrance_animation {
-            self.active_animation = Some(AnimationState::new_entrance(ea));
-        }
-
-        // Set up loop animation (runs independently after transition/entrance complete)
-        self.active_loop = slide.loop_animations.iter().map(|(la, _)| (*la, 0)).collect();
-
-        self.needs_full_redraw = true;
-    }
-
-    /// Reset transient state after changing slides.
-    pub(crate) fn on_slide_changed(&mut self) {
-        self.scroll_offset = 0;
-        self.notes_scroll = 0;
-        self.exec_output = None;
-        self.exec_rx = None;
-        self.exec_block_index = 0;
-
-        // Kitty image cleanup is handled in render_frame() before emitting
-        // new placements — NOT here, because the font fade-out animation needs
-        // the old image to remain visible until the fade completes.
-
-        // Reset GIF animation to first frame on slide change
-        self.gif_current_frame = 0;
-        self.gif_last_advance = std::time::Instant::now();
-        // Font transition animation: parse per-slide directive
-        self.font_change_is_slide_transition = match self.slides[self.current].font_transition.as_deref() {
-            Some("none") => FontTransitionMode::None,
-            Some("fade") => FontTransitionMode::Fade,
-            Some("dissolve") => FontTransitionMode::Dissolve,
-            _ => FontTransitionMode::Fade, // Default: smooth fade
-        };
-        // Apply per-slide theme override (or restore base theme)
-        self.apply_slide_theme();
-        // Apply per-slide fullscreen directive. User toggle (f key) is sticky
-        // until the next slide change, then directives take control again.
-        self.user_fullscreen_override = None;
-        if let Some(fs) = self.slides[self.current].fullscreen {
-            self.show_fullscreen = fs;
-            self.needs_full_redraw = true;
-        } else {
-            // No directive: revert to non-fullscreen (default)
-            if self.show_fullscreen {
-                self.show_fullscreen = false;
-                self.needs_full_redraw = true;
-            }
-        }
-        self.apply_slide_font();
-        self.start_slide_animations();
-    }
-
-    /// Apply per-slide theme override or restore the base theme.
-    pub(crate) fn apply_slide_theme(&mut self) {
-        let desired_slug = self.slides[self.current]
-            .theme_override
-            .as_deref()
-            .unwrap_or(&self.base_theme.slug);
-        if self.theme.slug != desired_slug {
-            if desired_slug == self.base_theme.slug {
-                self.apply_theme(self.base_theme.clone());
-            } else {
-                let registry = crate::theme::ThemeRegistry::load();
-                if let Some(override_theme) = registry.get(desired_slug) {
-                    self.apply_theme(override_theme);
-                }
-            }
-        }
-    }
-
-    /// Advance to the next slide, starting the timer on first navigation.
-    pub(crate) fn next_slide(&mut self) {
-        if self.timer_start.is_none() {
-            self.start_timer();
-        }
-        if self.current < self.slides.len() - 1 {
-            self.current += 1;
-            self.on_slide_changed();
-        }
-    }
-
-    /// Move back to the previous slide.
-    pub(crate) fn prev_slide(&mut self) {
-        if self.current > 0 {
-            self.current -= 1;
-            self.on_slide_changed();
-        }
-    }
-
-    /// Jump directly to the slide at the given zero-based index.
+    /// Shows slide `idx` (clamped), resetting per-slide state and starting its animations.
     pub(crate) fn goto_slide(&mut self, idx: usize) {
-        if idx < self.slides.len() {
-            self.current = idx;
-            self.on_slide_changed();
+        let idx = idx.min(self.slides.len() - 1);
+        if idx == self.current {
+            return;
         }
-    }
-
-    /// Jump forward to the first slide of the next section.
-    pub(crate) fn next_section(&mut self) {
-        let current_section = &self.slides[self.current].section;
-        for i in (self.current + 1)..self.slides.len() {
-            if self.slides[i].section != *current_section {
-                self.current = i;
-                self.on_slide_changed();
-                return;
+        if self.timer_start.is_none() {
+            self.timer_start = Some(Instant::now());
+        }
+        let old = std::mem::take(&mut self.last_lines);
+        self.current = idx;
+        self.scroll = 0;
+        self.notes_scroll = 0;
+        self.exec = None;
+        self.exec_output = None;
+        self.exec_block = 0;
+        self.images.reset_gif();
+        self.loop_started = Instant::now();
+        let slide = &self.slides[idx];
+        self.fullscreen = slide.fullscreen.unwrap_or(self.fullscreen_default);
+        let transition = slide
+            .transition
+            .or_else(|| parse_transition(&self.meta.transition));
+        let entrance = slide.entrance_animation;
+        self.animation = match (transition, entrance) {
+            (Some(t), e) => {
+                let mut anim = AnimationState::new_transition(t, old);
+                // The entrance that follows reveals the new slide.
+                anim.exit_only = e.is_some();
+                Some(anim)
             }
+            (None, Some(e)) => Some(AnimationState::new_entrance(e)),
+            (None, None) => None,
+        };
+        self.apply_slide_theme();
+        self.font.request(Some(idx));
+    }
+
+    pub(crate) fn next_slide(&mut self) {
+        self.goto_slide(self.current + 1);
+    }
+
+    pub(crate) fn prev_slide(&mut self) {
+        self.goto_slide(self.current.saturating_sub(1));
+    }
+
+    /// First slide of the next section.
+    pub(crate) fn next_section(&mut self) {
+        let section = &self.slides[self.current].section;
+        if let Some(i) =
+            (self.current + 1..self.slides.len()).find(|&i| self.slides[i].section != *section)
+        {
+            self.goto_slide(i);
         }
     }
 
-    /// Jump backward to the first slide of the previous section.
+    /// First slide of the current section, or of the previous one when already there.
     pub(crate) fn prev_section(&mut self) {
-        let current_section = &self.slides[self.current].section;
-        let mut section_start = self.current;
-        while section_start > 0 && self.slides[section_start - 1].section == *current_section {
-            section_start -= 1;
-        }
-        if section_start == 0 { return; }
-        let prev_section = &self.slides[section_start - 1].section;
-        let mut target = section_start - 1;
-        while target > 0 && self.slides[target - 1].section == *prev_section {
-            target -= 1;
-        }
-        self.current = target;
-        self.on_slide_changed();
+        let start_of = |mut i: usize| {
+            while i > 0 && self.slides[i - 1].section == self.slides[i].section {
+                i -= 1;
+            }
+            i
+        };
+        let start = start_of(self.current);
+        let target = if start < self.current {
+            start
+        } else {
+            start_of(start.saturating_sub(1))
+        };
+        self.goto_slide(target);
     }
 
-    /// Scroll the current slide's content down by `n` lines.
-    pub(crate) fn scroll_down(&mut self, n: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_add(n);
-    }
-
-    /// Scroll the current slide's content up by `n` lines.
-    pub(crate) fn scroll_up(&mut self, n: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(n);
+    pub(crate) fn scroll_by(&mut self, delta: isize) {
+        self.scroll = self
+            .scroll
+            .saturating_add_signed(delta)
+            .min(self.max_scroll);
     }
 }

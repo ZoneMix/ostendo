@@ -1,636 +1,739 @@
-//! Code execution sandbox for live coding slides.
+//! Runs `+exec` / `+pty` code blocks for live demos.
 //!
-//! Supports 8 languages: Python, Bash, JavaScript, Ruby, Rust, C, C++, and Go.
-//! Code blocks marked with `+exec` in a presentation can be executed by the
-//! presenter at runtime (Ctrl+E), with output displayed inline on the slide.
+//! Every run is bounded: its own process group (so children die with it), a
+//! 30 s deadline, and a 1 MB output cap. Output streams back line by line, and
+//! dropping the [`Execution`] kills whatever is still running.
 //!
-//! # Security limits
-//!
-//! Every execution is subject to hard limits to prevent runaway processes from
-//! hanging the presentation or consuming excessive resources:
-//!
-//! - **Code size**: 64 KB maximum (`MAX_CODE_LENGTH`)
-//!
-//! # Auto-wrapping
-//!
-//! Compiled languages (Rust, C, C++, Go) support *auto-wrapping*: if the code
-//! snippet does not contain a `main` function, the executor wraps it in one
-//! automatically, adding common imports/includes.  This lets presenters show
-//! concise snippets like `println!("hello")` without boilerplate.
-//!
-//! # Streaming output
-//!
-//! [`execute_code_streaming`] runs code in a background thread and sends output
-//! lines through an `mpsc` channel as they become available, enabling real-time
-//! output display during execution.
+//! Compiled languages (Rust, C, C++, Go) are built in a temp dir first; bare
+//! snippets without a `main` are wrapped in one.
 
+use crate::presentation::ExecMode;
 use anyhow::{bail, Result};
 use regex::Regex;
-use std::process::Command;
-use std::sync::{mpsc, LazyLock};
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::{Arc, LazyLock};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
-/// Regex for detecting C function definitions (used by auto-wrap heuristic).
-static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool)\s+\w+\s*\(").unwrap()
-);
-
-/// Regex for detecting C++ function definitions (extended type set).
-static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector)\s+\w+\s*\(").unwrap()
-);
-
-/// Maximum code length allowed for execution (64 KB).
-/// Prevents accidentally pasting enormous files into a code block.
 const MAX_CODE_LENGTH: usize = 64 * 1024;
+const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+const TIMEOUT: Duration = Duration::from_secs(30);
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Lines waiting for the presenter, which drains them once per frame. Short
+/// lines from a chatty program would otherwise be throttled to this many per
+/// frame; memory stays bounded by `MAX_OUTPUT_BYTES`, charged before queuing.
+const OUTPUT_LINES_QUEUED: usize = 8192;
+/// How long to keep draining pipes after the process group is gone.
+const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
-/// Spawn code execution in a background thread, returning a receiver for streaming output lines.
-/// Sends each line as it becomes available in real-time. Sends `None` when complete.
+const STDERR_START: &str = "\x1b[31m";
+const STDERR_END: &str = "\x1b[39m";
+
+static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(static\s+)?(int|void|char|float|double|long|unsigned|size_t|bool)\s+\**\w+\s*\(")
+        .unwrap()
+});
+
+static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(static\s+)?(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector<.*>|std::\w+)\s+\**\w+\s*\(",
+    )
+    .unwrap()
+});
+
+/// A running (or finished) code execution.
+pub struct Execution {
+    rx: Receiver<Option<String>>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Execution {
+    /// Returns the next output line, `Ok(None)` once the run has finished, or
+    /// `Err(TryRecvError::Empty)` when nothing new has arrived yet.
+    pub fn try_recv(&self) -> Result<Option<String>, TryRecvError> {
+        match self.rx.try_recv() {
+            Err(TryRecvError::Disconnected) => Ok(None),
+            other => other,
+        }
+    }
+}
+
+impl Drop for Execution {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Starts executing `code` in the background.
 ///
-/// Reads stdout line-by-line from the child process pipe, sending each line
-/// through the channel as soon as it's written.  This enables live streaming
-/// of output in the presentation (e.g., demo scripts that use `sleep` delays
-/// between commands will show output incrementally).
-pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<mpsc::Receiver<Option<String>>> {
+/// `pty_cols` sets the pseudo-terminal width for [`ExecMode::Pty`].
+///
+/// # Errors
+/// Fails without spawning anything if the code is too long or the language is
+/// not supported.
+pub fn spawn(
+    language: &str,
+    code: &str,
+    mode: ExecMode,
+    working_dir: Option<&Path>,
+    pty_cols: u16,
+) -> Result<Execution> {
     if code.len() > MAX_CODE_LENGTH {
-        bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
+        bail!("code exceeds {} KB limit", MAX_CODE_LENGTH / 1024);
     }
+    if !is_supported(language) {
+        bail!("unsupported language '{language}'");
+    }
+    let lang = normalize_language(language);
 
-    let (tx, rx) = mpsc::channel();
-    let language = language.to_string();
-    let lang = normalize_language(&language);
-    let code = wrap_for_execution(&lang, code);
-    let wd = working_dir.map(|p| p.to_path_buf());
-
-    std::thread::spawn(move || {
-        use std::io::BufRead;
-        use std::os::unix::process::CommandExt;
-
-        // Determine the interpreter and arguments based on language
-        let (cmd, args): (&str, Vec<String>) = match lang.as_str() {
-            "python" => ("python3", vec!["-u".into(), "-c".into(), code.clone()]),
-            "bash" | "sh" => ("bash", vec!["-c".into(), code.clone()]),
-            "javascript" => ("node", vec!["-e".into(), code.clone()]),
-            "ruby" => ("ruby", vec!["-e".into(), code.clone()]),
-            _ => ("sh", vec!["-c".into(), code.clone()]),
-        };
-
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let mut command = Command::new(cmd);
-        command.args(&arg_refs)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .env("PYTHONUNBUFFERED", "1");
-        if let Some(ref wd) = wd {
-            command.current_dir(wd);
+    let (tx, rx) = mpsc::sync_channel(OUTPUT_LINES_QUEUED);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let job = Job {
+        lang,
+        code: code.to_string(),
+        pty: mode == ExecMode::Pty,
+        pty_cols: pty_cols.max(20),
+        working_dir: working_dir.map(Path::to_path_buf),
+        sink: Arc::new(Sink {
+            tx,
+            bytes: AtomicUsize::new(0),
+            overflowed: AtomicBool::new(false),
+        }),
+        cancel: Arc::clone(&cancel),
+        deadline: Instant::now() + TIMEOUT,
+    };
+    thread::spawn(move || {
+        if let Err(e) = job.run() {
+            job.sink
+                .send(format!("{STDERR_START}[error] {e}{STDERR_END}"));
         }
-        // New process group for timeout safety (same as run_with_timeout)
-        unsafe {
-            command.pre_exec(|| {
-                let _ = libc::setsid();
-                Ok(())
-            });
-        }
-
-        let mut child = match command.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = tx.send(Some(format!("[error] {}", e)));
-                let _ = tx.send(None);
-                return;
-            }
-        };
-
-        // Read stdout line-by-line in real-time (not buffered until exit)
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        if let Some(stdout) = stdout {
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(l) => {
-                        if tx.send(Some(l)).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-
-        // Collect any remaining stderr after stdout closes
-        if let Some(stderr) = stderr {
-            let reader = std::io::BufReader::new(stderr);
-            for l in reader.lines().map_while(Result::ok) {
-                if !l.is_empty() {
-                    let _ = tx.send(Some(format!("[stderr] {}", l)));
-                }
-            }
-        }
-
-        let _ = child.wait();
-        let _ = tx.send(None);
+        let _ = job.sink.tx.send(None);
     });
-
-    Ok(rx)
+    Ok(Execution { rx, cancel })
 }
 
-/// Normalize language identifiers to canonical forms.
-///
-/// Maps common aliases (e.g. `"py"` -> `"python"`, `"js"` -> `"javascript"`,
-/// `"rs"` -> `"rust"`) so the rest of the executor can match on a small set
-/// of canonical names.
-fn normalize_language(lang: &str) -> String {
+/// Whether `language` (or an alias like `py`, `js`, `c++`) can be run.
+pub fn is_supported(language: &str) -> bool {
+    SUPPORTED.contains(&normalize_language(language))
+}
+
+const SUPPORTED: [&str; 9] = [
+    "python",
+    "bash",
+    "sh",
+    "javascript",
+    "ruby",
+    "rust",
+    "c",
+    "cpp",
+    "go",
+];
+
+fn normalize_language(lang: &str) -> &'static str {
+    let lang = lang.split([',', ' ']).next().unwrap_or_default();
     match lang.to_lowercase().as_str() {
-        "python3" | "py" => "python".to_string(),
-        "js" | "node" | "javascript" => "javascript".to_string(),
-        "sh" => "bash".to_string(),
-        "c++" | "cxx" | "cc" => "cpp".to_string(),
-        "rb" => "ruby".to_string(),
-        "golang" => "go".to_string(),
-        "rs" => "rust".to_string(),
-        other => other.to_string(),
+        "python" | "python3" | "py" => "python",
+        "bash" | "shell" | "zsh" => "bash",
+        "sh" => "sh",
+        "javascript" | "js" | "node" => "javascript",
+        "ruby" | "rb" => "ruby",
+        "rust" | "rs" => "rust",
+        "c" => "c",
+        "cpp" | "c++" | "cxx" | "cc" => "cpp",
+        "go" | "golang" => "go",
+        _ => "",
     }
 }
 
-// ---------------------------------------------------------------------------
-// Auto-wrapping: turn bare code snippets into compilable programs
-// ---------------------------------------------------------------------------
+/// Shared output channel with a byte budget across stdout and stderr.
+struct Sink {
+    tx: SyncSender<Option<String>>,
+    bytes: AtomicUsize,
+    overflowed: AtomicBool,
+}
 
-/// Wrap bare code snippets in a `main` function so they compile as standalone
-/// programs.  Interpreted languages (Python, Bash, Ruby, JavaScript) are
-/// returned unchanged because their runtimes already accept bare expressions.
-///
-/// For compiled languages the wrapper:
-/// 1. Checks if a `main` function already exists -- if so, returns code as-is.
-/// 2. Extracts top-level `use`/`#include` statements and helper function
-///    definitions, placing them *outside* `main`.
-/// 3. Wraps the remaining body lines inside a generated `main` function.
-/// 4. Adds common standard library imports (e.g. `stdio.h` for C, `fmt` for Go).
-///
-/// This lets presenters write concise snippets without boilerplate.
-fn wrap_for_execution(lang: &str, code: &str) -> String {
-    match lang {
-        "rust"       => wrap_rust(code),
-        "c"          => wrap_c(code),
-        "cpp"        => wrap_cpp(code),
-        "go"         => wrap_go(code),
-        // Interpreted languages: pass through unchanged
-        "python" | "bash" | "sh" | "ruby" | "javascript" => code.to_string(),
-        _ => code.to_string(),
+impl Sink {
+    fn send(&self, line: String) -> bool {
+        self.tx.send(Some(line)).is_ok()
+    }
+
+    fn remaining(&self) -> usize {
+        MAX_OUTPUT_BYTES.saturating_sub(self.bytes.load(Ordering::Relaxed))
+    }
+
+    /// Records `n` bytes; returns false (once, with a notice) when over budget.
+    fn charge(&self, n: usize) -> bool {
+        let total = self.bytes.fetch_add(n, Ordering::Relaxed) + n;
+        if total <= MAX_OUTPUT_BYTES {
+            return true;
+        }
+        if !self.overflowed.swap(true, Ordering::Relaxed) {
+            self.send(format!(
+                "{STDERR_START}[output truncated at {} MB]{STDERR_END}",
+                MAX_OUTPUT_BYTES / (1024 * 1024)
+            ));
+        }
+        false
     }
 }
 
-/// Rust wrapper.
-/// - Skip if `fn main` already present
-/// - Extract top-level `use` statements and function definitions, place before `main`
-/// - Inject `use std::io::Write;` as a common prelude
-/// - Wrap remaining body in `fn main() { ... }`
-fn wrap_rust(code: &str) -> String {
-    // Already has a main — nothing to do
-    if code.contains("fn main") {
-        return code.to_string();
+struct Job {
+    lang: &'static str,
+    code: String,
+    pty: bool,
+    pty_cols: u16,
+    working_dir: Option<PathBuf>,
+    sink: Arc<Sink>,
+    cancel: Arc<AtomicBool>,
+    deadline: Instant,
+}
+
+struct Step {
+    program: String,
+    args: Vec<String>,
+}
+
+fn step(program: impl Into<String>, args: &[&str]) -> Step {
+    Step {
+        program: program.into(),
+        args: args.iter().map(|a| a.to_string()).collect(),
+    }
+}
+
+impl Job {
+    fn run(&self) -> Result<()> {
+        let build_dir = tempfile::Builder::new().prefix("ostendo-").tempdir()?;
+        let (build, run) = self.plan(build_dir.path())?;
+        if let Some(build) = build {
+            if !self.run_step(&build, false)? {
+                return Ok(());
+            }
+        }
+        self.run_step(&run, self.pty)?;
+        Ok(())
     }
 
-    let mut uses = Vec::new();
-    let mut functions = Vec::new();
-    let mut body = Vec::new();
-    let mut in_fn = false;
-    let mut brace_depth = 0;
+    /// Returns the optional compile step and the run step.
+    fn plan(&self, dir: &Path) -> Result<(Option<Step>, Step)> {
+        let code = self.code.as_str();
+        let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        let bin = path("main");
+        let write = |name: &str, source: String| -> Result<String> {
+            let p = path(name);
+            std::fs::write(&p, source)?;
+            Ok(p)
+        };
+        Ok(match self.lang {
+            "python" => (None, step("python3", &["-u", "-c", code])),
+            "bash" => (None, step("bash", &["-c", code])),
+            "sh" => (None, step("sh", &["-c", code])),
+            "javascript" => (None, step("node", &["-e", code])),
+            "ruby" => (None, step("ruby", &["-e", code])),
+            "rust" => {
+                let src = write("main.rs", wrap_rust(code))?;
+                let compile = step(
+                    "rustc",
+                    &["--edition", "2021", "-A", "warnings", "-o", &bin, &src],
+                );
+                (Some(compile), step(bin.clone(), &[]))
+            }
+            "c" => {
+                let src = write("main.c", wrap_c(code))?;
+                let compile = step("cc", &["-w", "-o", &bin, &src, "-lm"]);
+                (Some(compile), step(bin.clone(), &[]))
+            }
+            "cpp" => {
+                let src = write("main.cpp", wrap_cpp(code))?;
+                let compile = step("c++", &["-std=c++17", "-w", "-o", &bin, &src]);
+                (Some(compile), step(bin.clone(), &[]))
+            }
+            "go" => {
+                let src = write("main.go", wrap_go(code))?;
+                (None, step("go", &["run", &src]))
+            }
+            other => bail!("unsupported language '{other}'"),
+        })
+    }
 
+    fn cwd(&self) -> PathBuf {
+        self.working_dir
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// Runs one step to completion or until cancelled; returns whether it succeeded.
+    fn run_step(&self, step: &Step, pty: bool) -> Result<bool> {
+        let mut proc = if pty {
+            self.spawn_pty(step)?
+        } else {
+            self.spawn_piped(step)?
+        };
+        let result = loop {
+            if let Some(success) = proc.try_wait()? {
+                break success;
+            }
+            if self.cancel.load(Ordering::Relaxed) || self.sink.overflowed.load(Ordering::Relaxed) {
+                proc.kill();
+                break false;
+            }
+            if Instant::now() >= self.deadline {
+                proc.kill();
+                self.sink.send(format!(
+                    "{STDERR_START}[timed out after {}s]{STDERR_END}",
+                    TIMEOUT.as_secs()
+                ));
+                break false;
+            }
+            thread::sleep(POLL_INTERVAL);
+        };
+        // Background children may still hold the pipes open.
+        proc.kill();
+        proc.join_readers();
+        Ok(result)
+    }
+
+    fn spawn_piped(&self, step: &Step) -> Result<Proc> {
+        let mut cmd = Command::new(&step.program);
+        cmd.args(&step.args)
+            .current_dir(self.cwd())
+            .env("PYTHONUNBUFFERED", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // A new session: the run gets its own process group and no
+            // controlling terminal, so it cannot read or draw on the TUI's tty.
+            // SAFETY: setsid is async-signal-safe and touches no parent state.
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("{}: {e}", step.program))?;
+        let mut readers = Vec::new();
+        if let Some(out) = child.stdout.take() {
+            readers.push(spawn_reader(out, false, Arc::clone(&self.sink)));
+        }
+        if let Some(err) = child.stderr.take() {
+            readers.push(spawn_reader(err, true, Arc::clone(&self.sink)));
+        }
+        Ok(Proc {
+            kind: ProcKind::Piped(child),
+            readers,
+        })
+    }
+
+    fn spawn_pty(&self, step: &Step) -> Result<Proc> {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        let pair = native_pty_system().openpty(PtySize {
+            rows: 40,
+            cols: self.pty_cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        let mut cmd = CommandBuilder::new(&step.program);
+        cmd.args(&step.args);
+        cmd.cwd(self.cwd());
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("PYTHONUNBUFFERED", "1");
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", step.program))?;
+        // The master must see EOF once the child exits.
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader()?;
+        Ok(Proc {
+            kind: ProcKind::Pty {
+                child,
+                _master: pair.master,
+            },
+            readers: vec![spawn_reader(reader, false, Arc::clone(&self.sink))],
+        })
+    }
+}
+
+enum ProcKind {
+    Piped(std::process::Child),
+    Pty {
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+        // Held so the reader does not see a hang-up before the child exits.
+        _master: Box<dyn portable_pty::MasterPty + Send>,
+    },
+}
+
+struct Proc {
+    kind: ProcKind,
+    readers: Vec<JoinHandle<()>>,
+}
+
+impl Proc {
+    fn try_wait(&mut self) -> Result<Option<bool>> {
+        Ok(match &mut self.kind {
+            ProcKind::Piped(c) => c.try_wait()?.map(|s| s.success()),
+            ProcKind::Pty { child, .. } => child.try_wait()?.map(|s| s.success()),
+        })
+    }
+
+    #[cfg(unix)]
+    fn pid(&self) -> Option<u32> {
+        match &self.kind {
+            ProcKind::Piped(c) => Some(c.id()),
+            ProcKind::Pty { child, .. } => child.process_id(),
+        }
+    }
+
+    /// Kills the whole process group (the child is a session leader).
+    fn kill(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.pid().and_then(|p| i32::try_from(p).ok()) {
+            // SAFETY: plain syscall; a stale group id only yields ESRCH.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+        match &mut self.kind {
+            ProcKind::Piped(c) => {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            ProcKind::Pty { child, .. } => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    fn join_readers(&mut self) {
+        let give_up = Instant::now() + DRAIN_GRACE;
+        while self.readers.iter().any(|r| !r.is_finished()) && Instant::now() < give_up {
+            thread::sleep(POLL_INTERVAL);
+        }
+        for reader in self.readers.drain(..).filter(|r| r.is_finished()) {
+            let _ = reader.join();
+        }
+    }
+}
+
+fn spawn_reader(
+    stream: impl Read + Send + 'static,
+    stderr: bool,
+    sink: Arc<Sink>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            // Bound each read by the remaining budget so a newline-free flood
+            // cannot grow the buffer without limit.
+            let limit = sink.remaining() as u64 + 1;
+            match (&mut reader).take(limit).read_until(b'\n', &mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if !sink.charge(n) {
+                        break;
+                    }
+                    let text = String::from_utf8_lossy(&buf);
+                    let line = text.trim_end_matches(['\n', '\r']);
+                    let line = if stderr {
+                        format!("{STDERR_START}{line}{STDERR_END}")
+                    } else {
+                        line.to_string()
+                    };
+                    if !sink.send(line) {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Splits a snippet into top-level imports, helper items, and body lines.
+fn split_snippet(
+    code: &str,
+    is_import: impl Fn(&str) -> bool,
+    is_item_start: impl Fn(&str) -> bool,
+) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
+    let (mut imports, mut items, mut body) = (Vec::new(), Vec::new(), Vec::new());
+    let mut depth: i64 = 0;
+    let mut in_item = false;
     for line in code.lines() {
         let trimmed = line.trim();
-        if in_fn {
-            functions.push(line.to_string());
-            brace_depth += trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth -= trimmed.chars().filter(|&c| c == '}').count();
-            if brace_depth == 0 {
-                in_fn = false;
-            }
-        } else if trimmed.starts_with("use ") {
-            uses.push(line.to_string());
-        } else if trimmed.starts_with("fn ") && !trimmed.starts_with("fn main") {
-            in_fn = true;
-            brace_depth = trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth -= trimmed.chars().filter(|&c| c == '}').count();
-            if brace_depth == 0 && trimmed.contains('{') && trimmed.contains('}') {
-                in_fn = false;
-            }
-            functions.push(line.to_string());
+        let delta = trimmed.matches('{').count() as i64 - trimmed.matches('}').count() as i64;
+        if in_item {
+            items.push(line);
+            depth = (depth + delta).max(0);
+            in_item = depth > 0;
+        } else if is_import(trimmed) {
+            imports.push(line);
+        } else if is_item_start(trimmed) {
+            items.push(line);
+            depth = delta.max(0);
+            // A signature whose `{` is on the next line keeps the item open;
+            // a one-line body or a `;` prototype closes it.
+            in_item = depth > 0 || !(trimmed.contains('}') || trimmed.ends_with(';'));
         } else {
-            body.push(line.to_string());
+            body.push(line);
         }
     }
+    (imports, items, body)
+}
 
-    let mut out = String::new();
-    out.push_str("use std::io::Write;\n");
-    for u in &uses {
-        out.push_str(u);
+fn assemble(
+    prelude: &str,
+    imports: &[&str],
+    items: &[&str],
+    main_open: &str,
+    body: &[&str],
+    main_close: &str,
+) -> String {
+    let mut out = String::from(prelude);
+    for line in imports.iter().chain([&""]).chain(items) {
+        out.push_str(line);
         out.push('\n');
     }
-    out.push('\n');
-    for f in &functions {
-        out.push_str(f);
-        out.push('\n');
-    }
-    if !functions.is_empty() {
-        out.push('\n');
-    }
-    out.push_str("fn main() {\n");
-    for line in &body {
+    out.push_str(main_open);
+    for line in body {
         out.push_str("    ");
         out.push_str(line);
         out.push('\n');
     }
-    out.push_str("}\n");
+    out.push_str(main_close);
     out
 }
 
-/// C wrapper.
-/// - Skip if `int main` or `void main` already present
-/// - Add common includes: stdio.h, stdlib.h, string.h, math.h
-/// - Extract function definitions (lines matching `type name(`) before main
-/// - Wrap remaining body in `int main() { ... return 0; }`
+fn wrap_rust(code: &str) -> String {
+    if code.contains("fn main") {
+        return code.to_string();
+    }
+    let (imports, items, body) = split_snippet(
+        code,
+        |l| l.starts_with("use "),
+        |l| l.starts_with("fn ") || l.starts_with("struct ") || l.starts_with("impl "),
+    );
+    assemble("", &imports, &items, "fn main() {\n", &body, "}\n")
+}
+
 fn wrap_c(code: &str) -> String {
     if code.contains("int main") || code.contains("void main") {
         return code.to_string();
     }
-
-    let mut functions = Vec::new();
-    let mut body = Vec::new();
-    let mut in_fn = false;
-    let mut brace_depth: usize = 0;
-
-    // Simple heuristic: a line starting with a C type followed by identifier( is a function def
-    for line in code.lines() {
-        let trimmed = line.trim();
-        if in_fn {
-            functions.push(line.to_string());
-            brace_depth += trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
-            if brace_depth == 0 {
-                in_fn = false;
-            }
-        } else if C_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
-            in_fn = true;
-            brace_depth = trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
-            if brace_depth == 0 && trimmed.contains('{') && trimmed.contains('}') {
-                in_fn = false;
-            }
-            functions.push(line.to_string());
-        } else {
-            body.push(line.to_string());
-        }
-    }
-
-    let mut out = String::new();
-    out.push_str("#include <stdio.h>\n");
-    out.push_str("#include <stdlib.h>\n");
-    out.push_str("#include <string.h>\n");
-    out.push_str("#include <math.h>\n\n");
-    for f in &functions {
-        out.push_str(f);
-        out.push('\n');
-    }
-    if !functions.is_empty() {
-        out.push('\n');
-    }
-    out.push_str("int main() {\n");
-    for line in &body {
-        out.push_str("    ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out.push_str("    return 0;\n");
-    out.push_str("}\n");
-    out
+    let (imports, items, body) = split_snippet(
+        code,
+        |l| l.starts_with("#include"),
+        |l| C_FN_PATTERN.is_match(l),
+    );
+    assemble(
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n",
+        &imports,
+        &items,
+        "int main(void) {\n",
+        &body,
+        "    return 0;\n}\n",
+    )
 }
 
-/// C++ wrapper.
-/// - Skip if `int main` or `void main` already present
-/// - Add common includes: iostream, vector, string, algorithm, cmath
-/// - Add `using namespace std;`
-/// - Extract function definitions before main
-/// - Wrap remaining body in `int main() { ... return 0; }`
 fn wrap_cpp(code: &str) -> String {
     if code.contains("int main") || code.contains("void main") {
         return code.to_string();
     }
-
-    let mut functions = Vec::new();
-    let mut body = Vec::new();
-    let mut in_fn = false;
-    let mut brace_depth: usize = 0;
-
-    for line in code.lines() {
-        let trimmed = line.trim();
-        if in_fn {
-            functions.push(line.to_string());
-            brace_depth += trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
-            if brace_depth == 0 {
-                in_fn = false;
-            }
-        } else if CPP_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
-            in_fn = true;
-            brace_depth = trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
-            if brace_depth == 0 && trimmed.contains('{') && trimmed.contains('}') {
-                in_fn = false;
-            }
-            functions.push(line.to_string());
-        } else {
-            body.push(line.to_string());
-        }
-    }
-
-    let mut out = String::new();
-    out.push_str("#include <iostream>\n");
-    out.push_str("#include <vector>\n");
-    out.push_str("#include <string>\n");
-    out.push_str("#include <algorithm>\n");
-    out.push_str("#include <cmath>\n");
-    out.push_str("using namespace std;\n\n");
-    for f in &functions {
-        out.push_str(f);
-        out.push('\n');
-    }
-    if !functions.is_empty() {
-        out.push('\n');
-    }
-    out.push_str("int main() {\n");
-    for line in &body {
-        out.push_str("    ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out.push_str("    return 0;\n");
-    out.push_str("}\n");
-    out
+    let (imports, items, body) = split_snippet(
+        code,
+        |l| l.starts_with("#include") || l.starts_with("using "),
+        |l| CPP_FN_PATTERN.is_match(l),
+    );
+    assemble(
+        "#include <iostream>\n#include <vector>\n#include <string>\n#include <algorithm>\n#include <cmath>\nusing namespace std;\n",
+        &imports,
+        &items,
+        "int main() {\n",
+        &body,
+        "    return 0;\n}\n",
+    )
 }
 
-/// Go wrapper.
-/// - Skip if `func main()` already present
-/// - Detect package usage by scanning for common prefixes:
-///   `fmt.`, `os.`, `strings.`, `strconv.`, `math.`, `time.`
-/// - Emit `package main`, import block, and `func main() { ... }`
 fn wrap_go(code: &str) -> String {
     if code.contains("func main()") {
         return code.to_string();
     }
-
-    // Detect which standard-library packages the snippet uses
-    let known_packages: &[(&str, &str)] = &[
-        ("fmt.",     "fmt"),
-        ("os.",      "os"),
-        ("strings.", "strings"),
-        ("strconv.", "strconv"),
-        ("math.",    "math"),
-        ("time.",    "time"),
-    ];
-
-    let mut imports: Vec<&str> = Vec::new();
-    for &(prefix, pkg) in known_packages {
-        if code.contains(prefix) && !imports.contains(&pkg) {
-            imports.push(pkg);
-        }
-    }
-
-    let mut out = String::new();
-    out.push_str("package main\n\n");
-
-    if !imports.is_empty() {
-        if imports.len() == 1 {
-            out.push_str(&format!("import \"{}\"\n\n", imports[0]));
-        } else {
-            out.push_str("import (\n");
-            for pkg in &imports {
-                out.push_str(&format!("    \"{}\"\n", pkg));
-            }
-            out.push_str(")\n\n");
-        }
-    }
-
-    // Extract non-main func definitions to place outside main
-    let mut functions = Vec::new();
-    let mut body = Vec::new();
-    let mut in_fn = false;
-    let mut brace_depth: usize = 0;
-
-    for line in code.lines() {
-        let trimmed = line.trim();
-        if in_fn {
-            functions.push(line.to_string());
-            brace_depth += trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
-            if brace_depth == 0 {
-                in_fn = false;
-            }
-        } else if trimmed.starts_with("func ") && !trimmed.starts_with("func main") {
-            in_fn = true;
-            brace_depth = trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
-            if brace_depth == 0 && trimmed.contains('{') && trimmed.contains('}') {
-                in_fn = false;
-            }
-            functions.push(line.to_string());
-        } else {
-            body.push(line.to_string());
-        }
-    }
-
-    for f in &functions {
-        out.push_str(f);
-        out.push('\n');
-    }
-    if !functions.is_empty() {
-        out.push('\n');
-    }
-    out.push_str("func main() {\n");
-    for line in &body {
-        out.push_str("    ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out.push_str("}\n");
-    out
+    let packages = ["fmt", "os", "strings", "strconv", "math", "time", "sort"];
+    let used: Vec<String> = packages
+        .iter()
+        .filter(|p| {
+            Regex::new(&format!(r"\b{p}\."))
+                .map(|re| re.is_match(code))
+                .unwrap_or(false)
+        })
+        .map(|p| format!("import \"{p}\""))
+        .collect();
+    let (_, items, body) = split_snippet(code, |_| false, |l| l.starts_with("func "));
+    let imports: Vec<&str> = used.iter().map(String::as_str).collect();
+    assemble(
+        "package main\n\n",
+        &imports,
+        &items,
+        "func main() {\n",
+        &body,
+        "}\n",
+    )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    // ---- Rust wrapping ----
+    /// Collects all output lines, failing if the run does not finish in time.
+    fn collect(exec: Execution, limit: Duration) -> Vec<String> {
+        let deadline = Instant::now() + limit;
+        let mut lines = Vec::new();
+        loop {
+            match exec.try_recv() {
+                Ok(Some(line)) => lines.push(line),
+                Ok(None) => return lines,
+                Err(_) => {
+                    assert!(Instant::now() < deadline, "run did not finish: {lines:?}");
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
 
-    #[test]
-    fn test_wrap_rust_bare() {
-        let code = r#"let x = 42;
-println!("{}", x);"#;
-        let wrapped = wrap_for_execution("rust", code);
-        assert!(wrapped.contains("fn main()"), "should contain fn main()");
-        assert!(wrapped.contains("use std::io::Write;"), "should contain prelude");
-        assert!(wrapped.contains("    let x = 42;"), "body should be indented");
-        assert!(wrapped.contains("    println!"), "body should be indented");
+    fn run(lang: &str, code: &str, limit: Duration) -> Vec<String> {
+        collect(spawn(lang, code, ExecMode::Exec, None, 80).unwrap(), limit)
+    }
+
+    fn installed(program: &str) -> bool {
+        Command::new(program)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
     }
 
     #[test]
-    fn test_wrap_rust_with_main() {
-        let code = r#"fn main() {
-    println!("hello");
-}"#;
-        let wrapped = wrap_for_execution("rust", code);
-        assert_eq!(wrapped, code, "code with fn main should be returned unchanged");
+    fn stderr_flood_does_not_deadlock() {
+        let lines = run(
+            "sh",
+            "head -c 300000 /dev/zero | tr '\\0' x >&2; echo done",
+            Duration::from_secs(10),
+        );
+        assert!(lines.iter().any(|l| l == "done"), "stdout lost");
+        assert!(lines.iter().any(|l| l.starts_with(STDERR_START)));
     }
 
     #[test]
-    fn test_wrap_rust_extracts_use() {
-        let code = "use std::collections::HashMap;\nlet m = HashMap::new();";
-        let wrapped = wrap_for_execution("rust", code);
-        // `use` lines should appear before fn main
-        let main_pos = wrapped.find("fn main()").unwrap();
-        let use_pos = wrapped.find("use std::collections::HashMap;").unwrap();
-        assert!(use_pos < main_pos, "use statements should come before fn main");
-        // The body line should be inside main
-        assert!(wrapped.contains("    let m = HashMap::new();"));
-    }
-
-    // ---- C wrapping ----
-
-    #[test]
-    fn test_wrap_c_bare() {
-        let code = r#"printf("hello %d\n", 42);"#;
-        let wrapped = wrap_for_execution("c", code);
-        assert!(wrapped.contains("#include <stdio.h>"));
-        assert!(wrapped.contains("#include <stdlib.h>"));
-        assert!(wrapped.contains("#include <string.h>"));
-        assert!(wrapped.contains("#include <math.h>"));
-        assert!(wrapped.contains("int main()"));
-        assert!(wrapped.contains("    printf(\"hello %d\\n\", 42);"));
-        assert!(wrapped.contains("    return 0;"));
+    fn output_cap_kills_endless_writer() {
+        let lines = run("sh", "yes", Duration::from_secs(10));
+        assert!(lines.iter().any(|l| l.contains("output truncated")));
     }
 
     #[test]
-    fn test_wrap_c_with_main() {
-        let code = r#"#include <stdio.h>
-int main() {
-    printf("hi\n");
-    return 0;
-}"#;
-        let wrapped = wrap_for_execution("c", code);
-        assert_eq!(wrapped, code, "code with int main should be returned unchanged");
-    }
-
-    // ---- C++ wrapping ----
-
-    #[test]
-    fn test_wrap_cpp_bare() {
-        let code = r#"cout << "hello" << endl;"#;
-        let wrapped = wrap_for_execution("cpp", code);
-        assert!(wrapped.contains("#include <iostream>"));
-        assert!(wrapped.contains("#include <vector>"));
-        assert!(wrapped.contains("#include <string>"));
-        assert!(wrapped.contains("#include <algorithm>"));
-        assert!(wrapped.contains("#include <cmath>"));
-        assert!(wrapped.contains("using namespace std;"));
-        assert!(wrapped.contains("int main()"));
-        assert!(wrapped.contains("    cout << \"hello\" << endl;"));
-        assert!(wrapped.contains("    return 0;"));
-    }
-
-    // ---- Go wrapping ----
-
-    #[test]
-    fn test_wrap_go_bare() {
-        let code = r#"fmt.Println("hello")"#;
-        let wrapped = wrap_for_execution("go", code);
-        assert!(wrapped.contains("package main"));
-        assert!(wrapped.contains("\"fmt\""), "should import fmt");
-        assert!(wrapped.contains("func main()"));
-        assert!(wrapped.contains("    fmt.Println(\"hello\")"));
+    fn background_children_are_killed_with_the_run() {
+        // Without the group kill, `sleep` keeps the pipe open for 60s.
+        let lines = run("sh", "sleep 60 & echo started", Duration::from_secs(5));
+        assert_eq!(lines, ["started"]);
     }
 
     #[test]
-    fn test_wrap_go_with_main() {
-        let code = r#"package main
-
-import "fmt"
-
-func main() {
-    fmt.Println("hi")
-}"#;
-        let wrapped = wrap_for_execution("go", code);
-        assert_eq!(wrapped, code, "code with func main() should be returned unchanged");
+    fn dropping_the_execution_kills_the_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let code = format!("echo $$ > {}; sleep 60", pid_file.display());
+        let exec = spawn("sh", &code, ExecMode::Exec, None, 80).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid = loop {
+            if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+                if !pid.trim().is_empty() {
+                    break pid.trim().to_string();
+                }
+            }
+            assert!(Instant::now() < deadline, "script never started");
+            thread::sleep(Duration::from_millis(10));
+        };
+        drop(exec);
+        let alive = || {
+            Command::new("kill")
+                .args(["-0", &pid])
+                .status()
+                .unwrap()
+                .success()
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while alive() {
+            assert!(Instant::now() < deadline, "process {pid} survived drop");
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
-    fn test_wrap_go_multiple_imports() {
-        let code = "fmt.Println(os.Args[0])";
-        let wrapped = wrap_for_execution("go", code);
-        assert!(wrapped.contains("\"fmt\""));
-        assert!(wrapped.contains("\"os\""));
-        assert!(wrapped.contains("import ("));
-    }
-
-    // ---- Function extraction ----
-
-    #[test]
-    fn test_wrap_rust_extracts_fn() {
-        let code = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\nprintln!(\"{}\", add(1, 2));";
-        let wrapped = wrap_for_execution("rust", code);
-        let main_pos = wrapped.find("fn main()").unwrap();
-        let fn_pos = wrapped.find("fn add(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    println!"), "println should be inside main");
+    fn invalid_utf8_is_kept_lossily() {
+        let lines = run(
+            "sh",
+            "printf 'a\\377b\\n'; echo after",
+            Duration::from_secs(5),
+        );
+        assert_eq!(lines, ["a\u{FFFD}b", "after"]);
     }
 
     #[test]
-    fn test_wrap_c_extracts_fn() {
-        let code = "int factorial(int n) {\n    if (n <= 1) return 1;\n    return n * factorial(n - 1);\n}\nprintf(\"%d\\n\", factorial(5));";
-        let wrapped = wrap_for_execution("c", code);
-        let main_pos = wrapped.find("int main()").unwrap();
-        let fn_pos = wrapped.find("int factorial(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    printf("), "printf should be inside main");
+    fn rejects_unsupported_language_and_oversized_code() {
+        assert!(spawn("yaml", "a: 1", ExecMode::Exec, None, 80).is_err());
+        assert!(is_supported("rust,ignore") && is_supported("C++"));
+        let huge = "x".repeat(MAX_CODE_LENGTH + 1);
+        assert!(spawn("sh", &huge, ExecMode::Exec, None, 80).is_err());
     }
 
     #[test]
-    fn test_wrap_go_extracts_fn() {
-        let code = "func add(a, b int) int {\n    return a + b\n}\nfmt.Println(add(3, 4))";
-        let wrapped = wrap_for_execution("go", code);
-        let main_pos = wrapped.find("func main()").unwrap();
-        let fn_pos = wrapped.find("func add(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    fmt.Println(add(3, 4))"), "Println should be inside main");
-    }
-
-    // ---- Interpreted languages: pass-through ----
-
-    #[test]
-    fn test_wrap_python_unchanged() {
-        let code = "print('hello')";
-        let wrapped = wrap_for_execution("python", code);
-        assert_eq!(wrapped, code, "python code should pass through unchanged");
+    fn pty_mode_reports_a_terminal() {
+        let exec = spawn("sh", "[ -t 1 ] && echo tty", ExecMode::Pty, None, 80).unwrap();
+        let lines = collect(exec, Duration::from_secs(5));
+        assert_eq!(lines, ["tty"]);
     }
 
     #[test]
-    fn test_wrap_bash_unchanged() {
-        let code = "echo hello";
-        let wrapped = wrap_for_execution("bash", code);
-        assert_eq!(wrapped, code, "bash code should pass through unchanged");
+    fn bare_snippets_compile_and_run() {
+        let cases = [
+            (
+                "rust",
+                "use std::collections::HashMap;\nfn sq(x: i32) -> i32 { x * x }\nlet m: HashMap<i32, i32> = (1..4).map(|i| (i, sq(i))).collect();\nprintln!(\"{}\", m[&3]);",
+                "rustc",
+            ),
+            (
+                "c",
+                "int twice(int n) {\n    return n * 2;\n}\nprintf(\"%d\\n\", twice(21));",
+                "cc",
+            ),
+            ("cpp", "cout << 6 * 7 << endl;", "c++"),
+            ("go", "fmt.Println(strings.Repeat(\"a\", 3))", "go"),
+        ];
+        let expected = ["9", "42", "42", "aaa"];
+        for ((lang, code, tool), want) in cases.iter().zip(expected) {
+            if !installed(tool) {
+                eprintln!("skipping {lang}: {tool} not installed");
+                continue;
+            }
+            let lines = run(lang, code, Duration::from_secs(60));
+            assert_eq!(lines, [want], "{lang}");
+        }
     }
 
     #[test]
-    fn test_wrap_javascript_unchanged() {
-        let code = "console.log('hello')";
-        let wrapped = wrap_for_execution("javascript", code);
-        assert_eq!(wrapped, code, "javascript code should pass through unchanged");
-    }
-
-    #[test]
-    fn test_wrap_ruby_unchanged() {
-        let code = "puts 'hello'";
-        let wrapped = wrap_for_execution("ruby", code);
-        assert_eq!(wrapped, code, "ruby code should pass through unchanged");
+    fn compile_errors_are_shown_and_stop_the_run() {
+        let lines = run("rust", "let x: i32 = \"no\";", Duration::from_secs(60));
+        assert!(lines.iter().any(|l| l.contains("mismatched types")));
     }
 }

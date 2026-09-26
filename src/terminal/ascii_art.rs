@@ -1,158 +1,166 @@
-//! ASCII art image rendering.
+//! Text renderings of images for terminals without an image protocol.
 //!
-//! Converts images to text-based representations using Unicode block characters
-//! for terminals without native image protocol support (e.g., no Kitty, iTerm2,
-//! or Sixel capability). Each pixel block is mapped to an ASCII character from a
-//! luminance ramp, where darker pixels get denser characters like `@` and lighter
-//! pixels get sparse characters like `.`.
-//!
-//! This module lives in `terminal/` because it is a terminal-specific fallback
-//! rendering strategy, used when protocol-based image display is unavailable.
+//! - [`render_blocks`]: true-color half blocks, two pixels per cell; the
+//!   faithful fallback.
+//! - [`render_ascii_art`]: a character-ramp look (blocks that stand out more
+//!   from the page get denser glyphs) chosen explicitly with
+//!   `image_render: ascii`; loop animations like `spin(image)` operate on its
+//!   glyphs.
 
 use crossterm::style::Color;
 
-/// A single character cell in the ASCII art output grid.
-///
-/// Each cell holds the character to display, a foreground color derived from
-/// the source image (or an override color), and an optional background color.
-/// The renderer collects these into rows (`Vec<Vec<AsciiCell>>`) that map
-/// directly to terminal lines.
 pub struct AsciiCell {
-    /// The ASCII character representing this pixel block's brightness.
     pub ch: char,
-    /// Foreground color — either sampled from the image or a user-specified override.
     pub fg: Color,
-    /// Optional background color. `None` means the terminal's default background is used.
-    pub bg: Option<Color>,
 }
 
-/// Brightness-to-character lookup table, ordered from lightest (space) to darkest (`$`).
-/// The index into this array is computed from the luminance of each pixel block.
-/// Characters with more ink coverage represent darker regions of the image.
+/// Ordered from least to most ink.
 const ASCII_RAMP: &[u8] = b" .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
 
-/// Convert an RGBA image to a grid of colored ASCII characters.
-///
-/// The image is scaled down to fit within `width` terminal columns. Each output
-/// cell spans multiple source pixels — their colors are averaged to produce a
-/// single luminance value that selects the ASCII character, and a single RGB
-/// color for the foreground.
-///
-/// # Parameters
-/// - `img`: The source RGBA image (from the `image` crate).
-/// - `width`: Target width in terminal columns.
-/// - `color_override`: If `Some`, all cells use this color instead of sampling from the image.
-/// - `bg_color`: Background color for transparent regions (defaults to white).
-///
-/// # Returns
-/// A 2D grid of `AsciiCell` values — one inner `Vec` per terminal row.
+/// Convert `img` to rows of exactly `width` cells (narrower if needed to stay
+/// within `max_rows`). Cells are twice as tall as wide, so each row covers
+/// twice the pixel height of a column's width. When `color_override` is set
+/// every visible cell uses it instead of the sampled color. `bg` is the page
+/// color: glyph density follows the distance from it, so art reads the same
+/// on light and dark themes.
 pub fn render_ascii_art(
     img: &image::RgbaImage,
     width: usize,
+    max_rows: usize,
     color_override: Option<Color>,
-    bg_color: Option<Color>,
+    bg: (u8, u8, u8),
 ) -> Vec<Vec<AsciiCell>> {
     let (iw, ih) = img.dimensions();
-    if iw == 0 || ih == 0 || width == 0 {
+    if iw == 0 || ih == 0 || width == 0 || max_rows == 0 {
         return Vec::new();
     }
+    // rows ≈ width * ih / (2 * iw); shrink the width until the rows fit.
+    let fit = (max_rows as f64 * 2.0 * iw as f64 / ih as f64).floor() as usize;
+    let width = width.min(fit.max(1));
 
-    // Calculate how many source pixels each output column covers.
+    let bg_luma = luma(bg.0, bg.1, bg.2);
+    let light_page = bg_luma > 127.5;
     let x_scale = iw as f64 / width as f64;
-    // Terminal characters are roughly twice as tall as they are wide,
-    // so each output row covers 2x the vertical pixels of one column.
     let row_scale = x_scale * 2.0;
     let height = (ih as f64 / row_scale).ceil() as usize;
 
-    let default_bg = bg_color.unwrap_or(Color::White);
-    let mut result = Vec::with_capacity(height);
+    // Every cell spans at least one source pixel; when upscaling, adjacent
+    // cells repeat a pixel rather than covering an empty range.
+    let span = |index: usize, scale: f64, limit: u32| {
+        let start = ((index as f64 * scale) as u32).min(limit - 1);
+        let end = (((index + 1) as f64 * scale) as u32).clamp(start + 1, limit);
+        (start, end)
+    };
 
-    for row in 0..height {
-        let mut line = Vec::with_capacity(width);
-        let y_start = (row as f64 * row_scale) as u32;
-        let y_end = (((row + 1) as f64 * row_scale) as u32).min(ih);
-
-        for col in 0..width {
-            let x_start = (col as f64 * x_scale) as u32;
-            let x_end = (((col + 1) as f64 * x_scale) as u32).min(iw);
-
-            // Average all pixels in this rectangular block to get one color.
-            let avg = block_average(img, x_start, y_start, x_end, y_end);
-            match avg {
-                // Fully transparent block — render as a space.
-                None => {
-                    line.push(AsciiCell { ch: ' ', fg: default_bg, bg: None });
-                }
-                Some((r, g, b)) => {
-                    // Convert to perceived luminance using BT.601 weights.
-                    // This determines which ASCII character to use from the ramp.
-                    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-                    let idx = ((lum / 255.0) * (ASCII_RAMP.len() - 1) as f64) as usize;
-                    let ch = ASCII_RAMP[idx.min(ASCII_RAMP.len() - 1)] as char;
-
-                    // Use the override color if provided; otherwise boost the
-                    // sampled color's saturation and brightness so it looks
-                    // vivid on a dark terminal background.
-                    let color = color_override.unwrap_or_else(|| {
-                        let (h, s, v) = rgb_to_hsv(r, g, b);
-                        let s_boosted = (s * 1.3).min(1.0);
-                        let v_boosted = v.max(0.5);
-                        let (cr, cg, cb) = hsv_to_rgb(h, s_boosted, v_boosted);
-                        Color::Rgb { r: cr, g: cg, b: cb }
-                    });
-
-                    line.push(AsciiCell { ch, fg: color, bg: None });
-                }
-            }
-        }
-        result.push(line);
-    }
-    result
+    (0..height)
+        .map(|row| {
+            let (y0, y1) = span(row, row_scale, ih);
+            (0..width)
+                .map(|col| {
+                    let (x0, x1) = span(col, x_scale, iw);
+                    match block_average(img, x0..x1, y0..y1) {
+                        None => AsciiCell {
+                            ch: ' ',
+                            fg: Color::Reset,
+                        },
+                        Some((r, g, b)) => AsciiCell {
+                            ch: ramp_char(luma(r, g, b), bg_luma),
+                            fg: color_override.unwrap_or_else(|| vivid(r, g, b, light_page)),
+                        },
+                    }
+                })
+                .collect()
+        })
+        .collect()
 }
 
-/// Average all pixels in a rectangular block. Returns None if out of bounds or fully transparent.
-fn block_average(img: &image::RgbaImage, x0: u32, y0: u32, x1: u32, y1: u32) -> Option<(u8, u8, u8)> {
+/// Upper/lower pixel colors for each cell of a half-block rendering at most
+/// `max_cols` × `max_rows` cells, transparency blended onto `bg`. Draw each
+/// cell as `▀` with the upper color as foreground and the lower as background.
+pub fn render_blocks(
+    img: &image::RgbaImage,
+    max_cols: usize,
+    max_rows: usize,
+    bg: (u8, u8, u8),
+) -> Vec<Vec<(Color, Color)>> {
     let (iw, ih) = img.dimensions();
-    let x0 = x0.min(iw);
-    let y0 = y0.min(ih);
-    let x1 = x1.min(iw);
-    let y1 = y1.min(ih);
-
-    if x0 >= x1 || y0 >= y1 {
-        return None;
+    if iw == 0 || ih == 0 || max_cols == 0 || max_rows == 0 {
+        return Vec::new();
     }
+    // A half cell is roughly square, so sample one pixel per column and two per row.
+    let scale = (max_cols as f64 / iw as f64).min(max_rows as f64 * 2.0 / ih as f64);
+    let w = ((iw as f64 * scale).round() as u32).clamp(1, max_cols as u32);
+    let h = ((ih as f64 * scale).round() as u32).clamp(1, max_rows as u32 * 2);
+    let small = image::imageops::resize(img, w, h + h % 2, image::imageops::FilterType::Triangle);
+    let blend = |x: u32, y: u32| {
+        let p = small.get_pixel(x, y);
+        let a = u16::from(p[3]);
+        let mix = |c: u8, b: u8| ((u16::from(c) * a + u16::from(b) * (255 - a)) / 255) as u8;
+        Color::Rgb {
+            r: mix(p[0], bg.0),
+            g: mix(p[1], bg.1),
+            b: mix(p[2], bg.2),
+        }
+    };
+    (0..small.height() / 2)
+        .map(|row| {
+            (0..w)
+                .map(|x| (blend(x, row * 2), blend(x, row * 2 + 1)))
+                .collect()
+        })
+        .collect()
+}
 
-    let mut r_sum: u64 = 0;
-    let mut g_sum: u64 = 0;
-    let mut b_sum: u64 = 0;
-    let mut count: u64 = 0;
+/// BT.601 luma, 0-255.
+fn luma(r: u8, g: u8, b: u8) -> f64 {
+    0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)
+}
 
-    for y in y0..y1 {
-        for x in x0..x1 {
+/// The further a block's luma is from the page's, the more ink its glyph has.
+fn ramp_char(luma: f64, bg_luma: f64) -> char {
+    let ink = (luma - bg_luma).abs() / bg_luma.max(255.0 - bg_luma);
+    let idx = (ink * (ASCII_RAMP.len() - 1) as f64) as usize;
+    ASCII_RAMP[idx.min(ASCII_RAMP.len() - 1)] as char
+}
+
+/// Boost saturation and pull values away from the page (lift on dark pages,
+/// deepen on light ones) so sampled colors stay legible.
+fn vivid(r: u8, g: u8, b: u8, light_page: bool) -> Color {
+    let (h, s, v) = rgb_to_hsv(r, g, b);
+    let v = if light_page { v.min(0.55) } else { v.max(0.5) };
+    let (r, g, b) = hsv_to_rgb(h, (s * 1.3).min(1.0), v);
+    Color::Rgb { r, g, b }
+}
+
+/// Alpha-weighted mean color of the block, or `None` if it is fully
+/// transparent.
+fn block_average(
+    img: &image::RgbaImage,
+    xs: std::ops::Range<u32>,
+    ys: std::ops::Range<u32>,
+) -> Option<(u8, u8, u8)> {
+    let (mut r_sum, mut g_sum, mut b_sum, mut count) = (0u64, 0u64, 0u64, 0u64);
+    for y in ys {
+        for x in xs.clone() {
             let p = img.get_pixel(x, y);
             let a = p[3] as u64;
-            if a > 0 {
-                r_sum += p[0] as u64 * a;
-                g_sum += p[1] as u64 * a;
-                b_sum += p[2] as u64 * a;
-                count += a;
-            }
+            r_sum += p[0] as u64 * a;
+            g_sum += p[1] as u64 * a;
+            b_sum += p[2] as u64 * a;
+            count += a;
         }
     }
-
     if count == 0 {
         return None;
     }
-
-    Some(((r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8))
+    Some((
+        (r_sum / count) as u8,
+        (g_sum / count) as u8,
+        (b_sum / count) as u8,
+    ))
 }
 
-/// Convert an RGB color to HSV (Hue, Saturation, Value) representation.
-///
-/// HSV is used here because it makes it easy to boost saturation and brightness
-/// independently — something that is awkward in RGB space.
-///
-/// Returns `(hue_degrees, saturation_0_to_1, value_0_to_1)`.
+/// Returns `(hue in degrees, saturation 0..=1, value 0..=1)`.
 fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
     let r = r as f64 / 255.0;
     let g = g as f64 / 255.0;
@@ -174,10 +182,7 @@ fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
     (h, s, max)
 }
 
-/// Convert an HSV color back to RGB.
-///
-/// This is the inverse of [`rgb_to_hsv`]. The result is clamped to `u8` range
-/// (0-255) for direct use as terminal color components.
+/// Inverse of [`rgb_to_hsv`].
 fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
@@ -205,47 +210,30 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::style::Color;
-    use image::{RgbaImage, Rgba};
+    use image::{Rgba, RgbaImage};
 
-    /// Build a tiny solid-color RGBA image for testing.
+    const BLACK: (u8, u8, u8) = (0, 0, 0);
+
     fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8) -> RgbaImage {
-        let mut img = RgbaImage::new(w, h);
-        for pixel in img.pixels_mut() {
-            *pixel = Rgba([r, g, b, 255]);
-        }
-        img
+        RgbaImage::from_pixel(w, h, Rgba([r, g, b, 255]))
     }
-
-    /// Build an RGBA image that is fully transparent.
-    fn transparent_image(w: u32, h: u32) -> RgbaImage {
-        let mut img = RgbaImage::new(w, h);
-        for pixel in img.pixels_mut() {
-            *pixel = Rgba([0, 0, 0, 0]);
-        }
-        img
-    }
-
-    // --- zero-dimension guards ---
 
     #[test]
     fn zero_width_returns_empty() {
         let img = solid_image(10, 10, 200, 100, 50);
-        assert!(render_ascii_art(&img, 0, None, None).is_empty());
+        assert!(render_ascii_art(&img, 0, 10, None, BLACK).is_empty());
     }
 
     #[test]
     fn zero_dimension_image_returns_empty() {
         let img = RgbaImage::new(0, 0);
-        assert!(render_ascii_art(&img, 20, None, None).is_empty());
+        assert!(render_ascii_art(&img, 20, 10, None, BLACK).is_empty());
     }
-
-    // --- output dimensions ---
 
     #[test]
     fn output_width_matches_requested_width() {
         let img = solid_image(100, 100, 128, 128, 128);
-        let result = render_ascii_art(&img, 40, None, None);
+        let result = render_ascii_art(&img, 40, 100, None, BLACK);
         assert!(!result.is_empty());
         for row in &result {
             assert_eq!(row.len(), 40, "every row must be exactly 40 cells wide");
@@ -253,71 +241,75 @@ mod tests {
     }
 
     #[test]
-    fn small_image_produces_non_empty_output() {
-        let img = solid_image(20, 20, 200, 50, 50);
-        let result = render_ascii_art(&img, 10, None, None);
-        assert!(!result.is_empty());
-        // Check that at least some cells have non-space characters
-        let has_content = result.iter().any(|row| row.iter().any(|c| c.ch != ' '));
-        assert!(has_content, "a bright solid image should produce non-space cells");
-    }
-
-    // --- transparent image ---
-
-    #[test]
-    fn fully_transparent_image_renders_spaces() {
-        let img = transparent_image(20, 20);
-        let result = render_ascii_art(&img, 10, None, None);
-        // All cells should be spaces (transparent -> None -> space)
-        for row in &result {
-            for cell in row {
-                assert_eq!(cell.ch, ' ', "transparent pixel should render as space");
-            }
+    fn every_cell_of_an_opaque_image_is_drawn() {
+        let img = solid_image(5, 5, 200, 50, 50);
+        for width in [3, 20] {
+            let rows = render_ascii_art(&img, width, 100, None, BLACK);
+            assert!(!rows.is_empty());
+            assert!(
+                rows.iter().flatten().all(|cell| cell.ch != ' '),
+                "blank cell at width {width}"
+            );
         }
     }
 
-    // --- color override ---
+    #[test]
+    fn fully_transparent_image_renders_spaces() {
+        let img = RgbaImage::new(20, 20);
+        let result = render_ascii_art(&img, 10, 100, None, BLACK);
+        assert!(result.iter().flatten().all(|cell| cell.ch == ' '));
+    }
 
     #[test]
     fn color_override_is_applied_to_all_opaque_cells() {
         let img = solid_image(20, 20, 200, 100, 50);
         let override_color = Color::Rgb { r: 255, g: 0, b: 0 };
-        let result = render_ascii_art(&img, 10, Some(override_color), None);
-        for row in &result {
-            for cell in row {
-                if cell.ch != ' ' {
-                    assert_eq!(
-                        cell.fg, override_color,
-                        "color_override must be applied to all opaque cells"
-                    );
-                }
-            }
+        let result = render_ascii_art(&img, 10, 100, Some(override_color), BLACK);
+        for cell in result.iter().flatten() {
+            assert_eq!(cell.fg, override_color);
         }
     }
 
-    // --- HSV round-trip (private helpers, tested indirectly) ---
-
     #[test]
-    fn dark_image_uses_sparse_ascii_characters() {
-        // A very dark image (near black) maps to low ramp index (sparse/light chars).
-        // The ramp goes lightest-to-densest: idx = (lum/255) * (len-1).
-        let img = solid_image(20, 20, 10, 10, 10);
-        let result = render_ascii_art(&img, 10, None, None);
-        let found_sparse = result.iter().any(|row| {
-            row.iter().any(|c| matches!(c.ch, ' ' | '.' | '\'' | '`' | '^'))
-        });
-        assert!(found_sparse, "dark image should yield sparse ASCII characters (low ramp index)");
+    fn glyph_density_follows_contrast_with_the_page() {
+        let sparse = [' ', '.', '\'', '`', '^'];
+        let dense = ['@', '$', '#', 'B', 'M', 'W', '%', '8', '&'];
+        let white = (250, 250, 250);
+        for (pixel, page, expected) in [
+            (10, BLACK, &sparse[..]),
+            (250, BLACK, &dense[..]),
+            (250, white, &sparse[..]),
+            (10, white, &dense[..]),
+        ] {
+            let img = solid_image(20, 20, pixel, pixel, pixel);
+            let cells = render_ascii_art(&img, 10, 100, None, page);
+            assert!(
+                cells.iter().flatten().all(|c| expected.contains(&c.ch)),
+                "pixel {pixel} on page {page:?}"
+            );
+        }
     }
 
     #[test]
-    fn bright_image_uses_dense_ascii_characters() {
-        // A very bright image (near white) maps to high ramp index (dense chars).
-        // The ramp goes lightest-to-densest: idx = (lum/255) * (len-1).
-        let img = solid_image(20, 20, 250, 250, 250);
-        let result = render_ascii_art(&img, 10, None, None);
-        let found_dense = result.iter().any(|row| {
-            row.iter().any(|c| matches!(c.ch, '@' | '$' | '#' | 'B' | 'M' | 'W' | '%' | '8' | '&'))
-        });
-        assert!(found_dense, "bright image should yield dense ASCII characters (high ramp index)");
+    fn blocks_fit_the_box_and_blend_transparency_onto_the_page() {
+        let mut img = solid_image(40, 20, 255, 0, 0);
+        img.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
+        let rows = render_blocks(&img, 10, 3, (0, 0, 255));
+        assert!(rows.len() <= 3 && !rows.is_empty());
+        assert!(rows.iter().all(|r| r.len() <= 10));
+        let (top, bottom) = rows[1][5];
+        assert_eq!(top, Color::Rgb { r: 255, g: 0, b: 0 });
+        assert_eq!(bottom, top);
+        assert!(
+            matches!(rows[0][0].0, Color::Rgb { b, .. } if b > 0),
+            "transparent corner not blended"
+        );
+    }
+
+    #[test]
+    fn ramp_art_shrinks_to_the_row_limit() {
+        let img = solid_image(10, 100, 200, 200, 200);
+        let rows = render_ascii_art(&img, 40, 5, None, BLACK);
+        assert!(rows.len() <= 5, "{} rows", rows.len());
     }
 }

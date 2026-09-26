@@ -1,26 +1,16 @@
-//! PDF export via headless browser.
-//!
-//! Converts the HTML export to PDF using headless Chrome (preferred) or
-//! `wkhtmltopdf` as a fallback. The workflow is:
-//! 1. The caller first generates a temporary HTML file via [`super::html::export_html`].
-//! 2. This module's [`export_pdf`] function detects an available converter and
-//!    shells out to it, producing the final PDF file.
-//! 3. The caller cleans up the temporary HTML file.
-//!
-//! Neither Chrome nor `wkhtmltopdf` is bundled — they must be installed on the
-//! system. If neither is found, a clear error message is returned.
+//! PDF export by printing the HTML export with headless Chrome/Chromium, or
+//! `wkhtmltopdf` as a fallback. Neither is bundled; a missing converter is
+//! reported as an error.
 
 use anyhow::{bail, Result};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-/// Detect an available PDF converter installed on the system.
-///
-/// Checks for Chrome/Chromium first (multiple binary names including the macOS
-/// app bundle path), then falls back to `wkhtmltopdf`. Returns the command name
-/// or path of the first converter found, or `None` if nothing is available.
+use crate::presentation::Slide;
+use crate::theme::Theme;
+
+/// Find an installed PDF converter, preferring Chrome/Chromium.
 pub fn detect_pdf_converter() -> Option<&'static str> {
-    // Check for Chrome/Chromium
     let chrome_names = [
         "google-chrome",
         "google-chrome-stable",
@@ -33,95 +23,64 @@ pub fn detect_pdf_converter() -> Option<&'static str> {
             return Some(name);
         }
     }
-
-    // Check for wkhtmltopdf
     if which_exists("wkhtmltopdf") {
         return Some("wkhtmltopdf");
     }
-
     None
 }
 
-/// Export an HTML file to PDF.
-///
-/// Uses headless Chrome (`--print-to-pdf`) or wkhtmltopdf as fallback.
-pub fn export_pdf(html_path: &Path, pdf_path: &Path) -> Result<()> {
-    let converter = detect_pdf_converter()
-        .ok_or_else(|| anyhow::anyhow!(
-            "No PDF converter found. Install Chrome/Chromium or wkhtmltopdf."
-        ))?;
+/// Render `slides` to a temporary HTML file and print it to `pdf_path`.
+pub fn export_pdf(slides: &[Slide], theme: &Theme, title: &str, pdf_path: &Path) -> Result<()> {
+    let converter = detect_pdf_converter().ok_or_else(|| {
+        anyhow::anyhow!("No PDF converter found. Install Chrome/Chromium or wkhtmltopdf.")
+    })?;
 
+    // Chrome picks the renderer from the extension, so the file must end in .html.
+    let html = tempfile::Builder::new()
+        .prefix("ostendo-export-")
+        .suffix(".html")
+        .tempfile()?;
+    super::html::export_html(slides, theme, title, html.path())?;
+
+    let mut command = Command::new(converter);
     if converter == "wkhtmltopdf" {
-        let status = Command::new("wkhtmltopdf")
-            .arg("--enable-local-file-access")
-            .arg("--page-size")
-            .arg("A4")
-            .arg("--orientation")
-            .arg("Landscape")
-            .arg(html_path.to_string_lossy().as_ref())
-            .arg(pdf_path.to_string_lossy().as_ref())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()?;
-
-        if !status.success() {
-            bail!("wkhtmltopdf failed to convert HTML to PDF");
-        }
+        command
+            .args(["--enable-local-file-access", "--page-size", "A4"])
+            .args(["--orientation", "Landscape"])
+            .arg(html.path())
+            .arg(pdf_path);
     } else {
-        // Chrome/Chromium headless
-        let html_url = format!("file://{}", html_path.canonicalize()?.display());
-        let pdf_arg = format!("--print-to-pdf={}", pdf_path.display());
-
-        let status = Command::new(converter)
-            .arg("--headless")
-            .arg("--disable-gpu")
-            .arg("--print-to-pdf-no-header")
+        command
+            .args(["--headless", "--disable-gpu", "--print-to-pdf-no-header"])
             .arg("--run-all-compositor-stages-before-draw")
             .arg("--virtual-time-budget=5000")
-            .arg(&pdf_arg)
-            .arg(&html_url)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()?;
-
-        if !status.success() {
-            bail!("Chrome headless failed to convert HTML to PDF");
-        }
+            .arg(format!("--print-to-pdf={}", pdf_path.display()))
+            .arg(format!("file://{}", html.path().canonicalize()?.display()));
     }
 
+    // `output()` drains stderr while waiting; `status()` with a piped stderr
+    // deadlocks once the converter fills the pipe buffer.
+    let output = command.stdin(Stdio::null()).output()?;
+    if !output.status.success() {
+        bail!(
+            "{converter} failed to convert HTML to PDF ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
     Ok(())
 }
 
-/// Check whether a command exists on the system PATH (or at an absolute path).
-///
-/// For absolute paths (like the macOS Chrome bundle), checks if the file exists
-/// directly. For simple command names, shells out to `which` to search the PATH.
+/// Absolute paths (the macOS Chrome bundle) are checked directly; bare
+/// command names are looked up on `PATH` with `which`.
 fn which_exists(cmd: &str) -> bool {
-    // Handle absolute paths (for macOS Chrome)
     if cmd.starts_with('/') {
         return Path::new(cmd).exists();
     }
     Command::new("which")
         .arg(cmd)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_which_exists_nonexistent() {
-        assert!(!which_exists("definitely_not_a_real_command_12345"));
-    }
-
-    #[test]
-    fn test_detect_pdf_converter_runs() {
-        // Just verify it doesn't panic — result depends on system
-        let _ = detect_pdf_converter();
-    }
+        .is_ok_and(|s| s.success())
 }

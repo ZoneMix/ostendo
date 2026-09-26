@@ -5,9 +5,3 @@ colors:
   accent: "#5BA4CF"
   text: "#E0E0E0"
   code_background: "#202A3B"
-fonts:
-  heading: "Courier New"
-  body: "Courier New"
-  code: "Courier New"
-layout: "center"
-visual_style: "glass"

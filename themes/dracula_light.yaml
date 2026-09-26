@@ -5,10 +5,4 @@ colors:
   accent: "#7C5AC7"
   text: "#282A36"
   code_background: "#E2DED6"
-fonts:
-  heading: "Inter"
-  body: "Fira Code"
-  code: "Fira Code"
-layout: "left"
-visual_style: "minimal"
 dark_variant: "dracula"
