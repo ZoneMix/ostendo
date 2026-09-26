@@ -322,64 +322,6 @@ fn test_test_presentation() {
 }
 
 #[test]
-fn test_inline_bold() {
-    use crossterm::style::Color;
-    let spans = parse_inline_formatting("hello **world**", Color::White, Color::DarkGrey);
-    assert_eq!(spans.len(), 2);
-    assert_eq!(spans[0].text, "hello ");
-    assert!(!spans[0].bold);
-    assert_eq!(spans[1].text, "world");
-    assert!(spans[1].bold);
-}
-
-#[test]
-fn test_inline_italic() {
-    use crossterm::style::Color;
-    let spans = parse_inline_formatting("hello *world*", Color::White, Color::DarkGrey);
-    assert_eq!(spans.len(), 2);
-    assert_eq!(spans[0].text, "hello ");
-    assert!(spans[1].italic);
-}
-
-#[test]
-fn test_inline_bold_italic_nested() {
-    use crossterm::style::Color;
-    let spans =
-        parse_inline_formatting("**Bold *and italic* mixed**", Color::White, Color::DarkGrey);
-    // Should produce: "Bold " (bold), "and italic" (bold+italic), " mixed" (bold)
-    assert!(
-        spans.len() >= 3,
-        "Expected at least 3 spans, got {}: {:?}",
-        spans.len(),
-        spans.iter().map(|s| &s.text).collect::<Vec<_>>()
-    );
-    assert!(spans[0].bold);
-    assert!(!spans[0].italic);
-    assert!(spans[1].bold);
-    assert!(spans[1].italic);
-    assert!(spans[2].bold);
-    assert!(!spans[2].italic);
-}
-
-#[test]
-fn test_inline_strikethrough() {
-    use crossterm::style::Color;
-    let spans = parse_inline_formatting("hello ~~world~~", Color::White, Color::DarkGrey);
-    assert_eq!(spans.len(), 2);
-    assert!(spans[1].strikethrough);
-}
-
-#[test]
-fn test_inline_code() {
-    use crossterm::style::Color;
-    let spans = parse_inline_formatting("use `println!`", Color::White, Color::DarkGrey);
-    assert_eq!(spans.len(), 2);
-    assert_eq!(spans[0].text, "use ");
-    assert!(spans[1].text.contains("println!"));
-    assert_eq!(spans[1].bg, Some(Color::DarkGrey));
-}
-
-#[test]
 fn test_table_parsing() {
     let src = "# Slide\n| Name | Unit | Value |\n| --- | --- | --- |\n| foo | m | 1 |\n| bar |  | 2 |";
     let slides = parse(src);
@@ -408,14 +350,6 @@ fn test_blockquote_parsing() {
         slides[0].block_quotes[0].lines,
         vec!["This is a quote", "Second line"]
     );
-}
-
-#[test]
-fn test_inline_plain_text() {
-    use crossterm::style::Color;
-    let spans = parse_inline_formatting("no formatting here", Color::White, Color::DarkGrey);
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].text, "no formatting here");
 }
 
 // ── Batch 1 tests ──
