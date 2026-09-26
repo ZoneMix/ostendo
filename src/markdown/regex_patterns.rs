@@ -33,11 +33,6 @@ pub(crate) static FENCE_CLOSE_RE: LazyLock<Regex> =
 pub(crate) static SECTION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*section:\s*(\S+)\s*-->").unwrap());
 
-/// Matches `<!-- timing: <minutes> -->`. Sets the speaker-time budget for a slide.
-/// Example: `"<!-- timing: 2.5 -->"`
-pub(crate) static TIMING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*timing:\s*([\d.]+)\s*-->").unwrap());
-
 /// Matches `<!-- ascii_title -->`. Enables FIGlet ASCII-art rendering for the slide title.
 /// Example: `"<!-- ascii_title -->"`
 pub(crate) static ASCII_TITLE_RE: LazyLock<Regex> =
@@ -121,11 +116,6 @@ pub(crate) static FONT_TRANSITION_RE: LazyLock<Regex> =
 /// Example: `"<!-- text_scale: 3 -->"`
 pub(crate) static TEXT_SCALE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*<!--\s*text_scale:\s*(\d+)\s*-->").unwrap());
-
-/// Matches `<!-- title_scale: <n> -->`. Scales title only via OSC 66 protocol (1-7).
-/// Example: `"<!-- title_scale: 5 -->"`
-pub(crate) static TITLE_SCALE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*<!--\s*title_scale:\s*(\d+)\s*-->").unwrap());
 
 /// Matches `<!-- column_text_scale: <n> -->`. Applies OSC 66 text scaling to bullet
 /// and FIGlet text in non-image columns (2-7). Used with column layouts to scale up

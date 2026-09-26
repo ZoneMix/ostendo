@@ -83,7 +83,6 @@ fn parse_front_matter(block: &str) -> PresentationMeta {
                 }
                 _ => {}
             }
-            meta.pairs.push((key, val));
         }
     }
     meta
@@ -115,7 +114,6 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut title = String::new();
     let mut subtitle = String::new();
     let mut section = String::new();
-    let mut timing: Option<f64> = None;
     let mut notes_lines: Vec<String> = Vec::new();
     let mut bullets: Vec<Bullet> = Vec::new();
     let mut code_blocks: Vec<CodeBlock> = Vec::new();
@@ -128,7 +126,6 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     let mut ascii_title = false;
     let mut font_size: Option<i8> = None;
     let mut text_scale: Option<u8> = None;
-    let mut title_scale: Option<u8> = None;
     let mut footer: Option<String> = None;
     let mut footer_align = FooterAlign::Left;
     let mut alignment: Option<SlideAlignment> = None;
@@ -270,12 +267,6 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
             continue;
         }
 
-        // Timing directive
-        if let Some(caps) = TIMING_RE.captures(line) {
-            timing = caps[1].parse().ok();
-            continue;
-        }
-
         // ASCII title directive
         if ASCII_TITLE_RE.is_match(line) {
             ascii_title = true;
@@ -299,12 +290,6 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         // Text scale directive (OSC 66 — scales title + subtitle)
         if let Some(caps) = TEXT_SCALE_RE.captures(line) {
             text_scale = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
-            continue;
-        }
-
-        // Title scale directive (OSC 66 — scales title only)
-        if let Some(caps) = TITLE_SCALE_RE.captures(line) {
-            title_scale = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
             continue;
         }
 
@@ -425,13 +410,10 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
 
         // Image render mode directive
         if let Some(caps) = IMAGE_RENDER_RE.captures(line) {
-            // When inside a column with an image, apply to the column image
+            // Column images are always ASCII, so the directive is a no-op for them
             if let Some(col_idx) = current_column {
-                if col_idx < column_contents.len() {
-                    if let Some(ref mut img) = column_contents[col_idx].image {
-                        img.render_mode = Some(caps[1].to_string());
-                        continue;
-                    }
+                if col_idx < column_contents.len() && column_contents[col_idx].image.is_some() {
+                    continue;
                 }
             }
             image_render = match &caps[1] {
@@ -616,7 +598,6 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
                 if col_idx < column_contents.len() {
                     column_contents[col_idx].image = Some(ColumnImage {
                         path: caps[2].to_string(),
-                        render_mode: None,
                         scale: None,
                         color: None,
                     });
@@ -692,9 +673,6 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
     }
     let current_section = section.clone();
 
-    // Resolve timing
-    let timing_minutes = timing.unwrap_or(1.0);
-
     // Resolve notes
     let notes = notes_lines.join("\n").trim().to_string();
 
@@ -756,13 +734,11 @@ fn parse_slide(raw: &str, number: usize, last_section: &str, base_dir: Option<&P
         image,
         ascii_title,
         notes,
-        timing_minutes,
         columns,
         tables,
         block_quotes,
         font_size,
         text_scale,
-        title_scale,
         footer,
         footer_align,
         alignment,

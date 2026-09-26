@@ -86,19 +86,6 @@ fn test_section_inherits() {
 }
 
 #[test]
-fn test_timing_directive() {
-    let src = "<!-- timing: 2.5 -->\n# Timed";
-    let slides = parse(src);
-    assert!((slides[0].timing_minutes - 2.5).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_default_timing() {
-    let slides = parse("# No Timing");
-    assert!((slides[0].timing_minutes - 1.0).abs() < f64::EPSILON);
-}
-
-#[test]
 fn test_notes_single_line() {
     let src = "# Slide\n<!-- notes: Remember this -->";
     let slides = parse(src);
@@ -351,15 +338,6 @@ fn test_text_scale_directive() {
     let src = "<!-- text_scale: 3 -->\n# Scaled Title";
     let slides = parse(src);
     assert_eq!(slides[0].text_scale, Some(3));
-    assert_eq!(slides[0].title_scale, None);
-}
-
-#[test]
-fn test_title_scale_directive() {
-    let src = "<!-- title_scale: 5 -->\n# Big Title";
-    let slides = parse(src);
-    assert_eq!(slides[0].title_scale, Some(5));
-    assert_eq!(slides[0].text_scale, None);
 }
 
 #[test]
@@ -367,13 +345,6 @@ fn test_text_scale_clamped() {
     let src = "<!-- text_scale: 99 -->\n# Clamped";
     let slides = parse(src);
     assert_eq!(slides[0].text_scale, Some(7));
-}
-
-#[test]
-fn test_title_scale_clamped_min() {
-    let src = "<!-- title_scale: 0 -->\n# Zero";
-    let slides = parse(src);
-    assert_eq!(slides[0].title_scale, Some(1));
 }
 
 #[test]
