@@ -428,9 +428,10 @@ impl Presenter {
         };
         // Restore per-slide font offsets from saved state
         let mut slide_font_offsets: HashMap<usize, i8> = HashMap::new();
+        let saved_offsets = state.font_offsets();
         for (i, slide) in slides.iter().enumerate() {
             // Markdown directive sets the base; saved state overrides
-            if let Some(saved) = state.get_font_offset(i) {
+            if let Some(saved) = saved_offsets.get(&i).copied() {
                 slide_font_offsets.insert(i, saved);
             } else if let Some(md_size) = slide.font_size {
                 // Convert markdown font_size (-3..7) to offset: (size - 1) * 2pt steps

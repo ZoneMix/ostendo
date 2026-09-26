@@ -152,9 +152,7 @@ impl Presenter {
     /// Persist current state (slide position, font offsets, theme, image scale) to disk.
     pub(crate) fn save_state(&mut self) {
         self.state.set_current_slide(self.current);
-        for (&slide, &offset) in &self.slide_font_offsets {
-            self.state.set_font_offset(slide, offset);
-        }
+        self.state.set_font_offsets(&self.slide_font_offsets);
         self.state.set_theme_slug(&self.theme.slug);
         self.state.set_image_scale_offset(self.image_scale_offset);
         let _ = self.state.save();
