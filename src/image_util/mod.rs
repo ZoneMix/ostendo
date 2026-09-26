@@ -179,7 +179,6 @@ pub fn scale_image_pixels(
     let mut width_px = available_width_px;
     let mut height_px = width_px * aspect_ratio;
 
-    // If too tall, scale down to fit height
     if height_px > available_height_px {
         height_px = available_height_px;
         width_px = height_px / aspect_ratio;
@@ -188,7 +187,6 @@ pub fn scale_image_pixels(
     let width_px = width_px.max(1.0) as u32;
     let height_px = height_px.max(1.0) as u32;
 
-    // Convert back to terminal cells
     let cols = (width_px as f64 / ppc).ceil() as usize;
     let rows = (height_px as f64 / ppr).ceil() as usize;
 

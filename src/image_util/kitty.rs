@@ -17,10 +17,6 @@ static NEXT_IMAGE_ID: AtomicU32 = AtomicU32::new(1);
 const CHUNK_SIZE: usize = 4096;
 
 /// Remove every placement and free all transmitted image data.
-#[allow(
-    dead_code,
-    reason = "requested for the engine rewrite, which has no caller yet"
-)]
 pub const DELETE_ALL_IMAGES: &str = "\x1b_Ga=d,d=A,q=2;AAAA\x1b\\";
 
 pub fn next_image_id() -> u32 {
@@ -75,10 +71,6 @@ pub fn placement_escape(id: u32, placement_id: u32, cols: usize, rows: usize) ->
 }
 
 /// Remove the placements of image `id` but keep its data for re-placement.
-#[allow(
-    dead_code,
-    reason = "requested for the engine rewrite, which has no caller yet"
-)]
 pub fn delete_placements(id: u32) -> String {
     format!("\x1b_Ga=d,d=i,i={id},q=2;AAAA\x1b\\")
 }

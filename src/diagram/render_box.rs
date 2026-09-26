@@ -158,7 +158,6 @@ fn render_row(
             let col_w = col_widths[i];
             let text = ann.as_deref().unwrap_or("");
             let text_chars: usize = text.chars().count();
-            // Center annotation under the box
             let total_pad = col_w.saturating_sub(text_chars);
             let left = total_pad / 2;
             let right = total_pad - left;
@@ -259,7 +258,6 @@ mod tests {
     fn test_with_title() {
         let graph = parse("# My Title\nA -> B");
         let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
-        // Should contain the title text
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -288,7 +286,6 @@ mod tests {
         let mut graph = parse("A -> B -> C\nC -> D\n: x : y : z");
         // Parser already clamps, but manually force extra annotation to test renderer defense
         graph.rows[1].annotations.push(Some("extra".into()));
-        // Should not panic
         render(&graph, test_accent(), test_text(), test_dim(), "  ");
     }
 

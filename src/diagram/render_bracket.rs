@@ -30,7 +30,6 @@ pub fn render(
     }
 
     for (row_idx, row) in graph.rows.iter().enumerate() {
-        // Compute column widths for alignment (bracket width = label + 2 for [])
         let col_widths: Vec<usize> = row
             .nodes
             .iter()
@@ -94,7 +93,6 @@ pub fn render(
             lines.push(ann_line);
         }
 
-        // Vertical connector between rows
         if row_idx + 1 < graph.rows.len() {
             let mut connector = StyledLine::empty();
             connector.content_type = LineContentType::Diagram;
@@ -109,7 +107,6 @@ pub fn render(
             let mut found = false;
             for (i, node) in row.nodes.iter().enumerate() {
                 if node.label == next_first {
-                    // Center under this column
                     let center = offset + col_widths[i] / 2;
                     connector.push(StyledSpan::new(&" ".repeat(center)));
                     connector.push(StyledSpan::new("↓").with_fg(accent));
