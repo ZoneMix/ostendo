@@ -376,6 +376,7 @@ impl Proc {
         })
     }
 
+    #[cfg(unix)]
     fn pid(&self) -> Option<u32> {
         match &self.kind {
             ProcKind::Piped(c) => Some(c.id()),
