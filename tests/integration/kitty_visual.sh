@@ -180,7 +180,7 @@ fi
 section "Slide 1 — Title"
 # ============================================================
 
-assert_text_contains "Slide 1 visible" "Slide 1/"
+assert_text_contains "Slide 1 visible" "1 / "
 capture_screenshot "slide_01_title"
 
 # ============================================================
@@ -190,10 +190,10 @@ section "Navigation"
 # Quick navigation check
 send_key Right
 sleep 2
-assert_text_contains "Slide 2" "Slide 2/"
+assert_text_contains "Slide 2" "2 / "
 send_key Left
 sleep 2
-assert_text_contains "Back to slide 1" "Slide 1/"
+assert_text_contains "Back to slide 1" "1 / "
 
 # ============================================================
 section "Full Traversal + Screenshot Capture ($SLIDE_COUNT slides)"
@@ -212,10 +212,10 @@ for i in $(seq 2 "$SLIDE_COUNT"); do
     case $i in
         5|10|14|20|30|38)
             content=$(get_text)
-            if echo "$content" | grep -qF "Slide $i/"; then
+            if echo "$content" | grep -qF "$i / $SLIDE_COUNT"; then
                 pass "Slide $i rendered"
             else
-                fail "Slide $i — expected 'Slide $i/' in content"
+                fail "Slide $i — expected '$i / $SLIDE_COUNT' in content"
             fi
             ;;
     esac
@@ -223,7 +223,7 @@ done
 
 # Verify we reached the last slide
 content=$(get_text)
-if echo "$content" | grep -qE "Slide [0-9]+/"; then
+if echo "$content" | grep -qE "[0-9]+ / [0-9]+"; then
     pass "Full traversal complete — Ostendo running"
 else
     fail "Full traversal — Ostendo may have crashed"
@@ -250,7 +250,7 @@ for char in t h e m e ' ' d r a c u l a; do
 done
 send_key Return
 sleep 1
-assert_text_contains "Theme switch to dracula" "Slide"
+assert_text_contains "Theme switch to dracula" " / "
 capture_screenshot "theme_dracula"
 
 # Toggle dark/light
@@ -307,7 +307,7 @@ send_key 2
 sleep 0.2
 send_key Return
 sleep 1.5
-assert_text_contains "Image slide 12" "Slide 12/"
+assert_text_contains "Image slide 12" "12 / "
 capture_screenshot "slide_12_image"
 
 # Slide 14 = Animated GIFs
@@ -319,7 +319,7 @@ send_key 4
 sleep 0.2
 send_key Return
 sleep 2
-assert_text_contains "GIF slide 14" "Slide 14/"
+assert_text_contains "GIF slide 14" "14 / "
 capture_screenshot "slide_14_gif"
 
 # Let GIF play for a few seconds to verify smooth animation

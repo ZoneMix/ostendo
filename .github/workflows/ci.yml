@@ -25,4 +25,6 @@ jobs:
         if: runner.os == 'Linux'
       - run: cargo clippy --all-targets
       - run: cargo test
-      - run: cargo run -- --validate presentations/examples/test_presentation.md
+      - name: Validate example decks
+        shell: bash
+        run: for deck in presentations/examples/*.md; do cargo run -q -- --validate "$deck"; done

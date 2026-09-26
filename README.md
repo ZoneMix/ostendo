@@ -99,7 +99,7 @@ demonstrated in `presentations/examples/test_presentation.md`.
 | `n` | Speaker notes (`N` / `P` scroll them) |
 | `Ctrl+E` | Run the code block (again: next block) |
 | `f` | Hide the status bar |
-| `t` | Start / pause the timer |
+| `t` | Start / reset the timer (it starts at the first slide change) |
 | `T` | Show the theme name |
 | `S` | Section labels above titles |
 | `D` | Switch between a theme's dark and light versions |

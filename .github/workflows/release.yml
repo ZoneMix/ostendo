@@ -69,7 +69,7 @@ jobs:
           for dir in */; do
             name="${dir%/}"
             if [[ "$name" == *.exe ]]; then
-              zip "../${name%.exe}-windows-x86_64.zip" "$dir$name"
+              zip "../${name%.exe}.zip" "$dir$name"
             else
               tar czf "../${name}.tar.gz" -C "$dir" "$name"
             fi
@@ -85,9 +85,7 @@ jobs:
           body: |
             ## Ostendo ${{ github.ref_name }}
 
-            *Latin: ostendo — to show, to display, to exhibit.*
-
-            AI-native terminal presentation tool — markdown to slides in your terminal.
+                        Markdown slides, presented in your terminal.
 
             ### Downloads
 
@@ -104,7 +102,7 @@ jobs:
             cargo build --release
             ```
 
-            Requires Rust 1.75+.
+            Requires Rust 1.89+.
 
             ### License
 
