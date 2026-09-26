@@ -577,7 +577,7 @@ impl Presenter {
         // Initialize mermaid renderer if any slide has mermaid blocks
         let has_mermaid = presenter.slides.iter().any(|s| !s.mermaid_blocks.is_empty());
         if has_mermaid && crate::image_util::mermaid::MermaidRenderer::is_available() {
-            presenter.mermaid_renderer = Some(crate::image_util::mermaid::MermaidRenderer::new());
+            presenter.mermaid_renderer = crate::image_util::mermaid::MermaidRenderer::new().ok();
         }
         // Restore saved theme (unless CLI explicitly specified a non-default theme)
         if presenter.theme.slug == "terminal_green" {

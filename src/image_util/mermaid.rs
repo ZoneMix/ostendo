@@ -1,122 +1,132 @@
-//! Mermaid diagram rendering via the external `mmdc` CLI tool.
+//! Mermaid diagram rendering via the external `mmdc` CLI
+//! (`npm install -g @mermaid-js/mermaid-cli`).
 //!
-//! Converts Mermaid diagram syntax (flowcharts, sequence diagrams, Gantt charts,
-//! etc.) into PNG images with transparent backgrounds.  The rendered PNGs are
-//! then displayed using the normal image rendering pipeline.
-//!
-//! # External dependency
-//!
-//! Requires the `mmdc` command (Mermaid CLI) to be installed and available on
-//! `$PATH`.  Install it with `npm install -g @mermaid-js/mermaid-cli`.
-//! Use [`MermaidRenderer::is_available`] to check before attempting to render.
-//!
-//! # Caching
-//!
-//! Rendered diagrams are cached by a hash of `(source_text, width)`.  If the
-//! same diagram source and width are requested again, the cached PNG is returned
-//! immediately without re-invoking `mmdc`.  Cache files are stored in the OS
-//! temp directory under `ostendo-mermaid-cache/`.
+//! Diagrams render to transparent PNGs inside a private temporary directory
+//! that is removed when the renderer is dropped. Successful renders are
+//! reused for the same `(source, width)`.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
-/// Stateful renderer that invokes `mmdc` and caches the output PNG files.
-///
-/// Create one instance with [`MermaidRenderer::new`] and reuse it across slides
-/// to benefit from the content-hash cache.
+/// mmdc drives a headless Chromium; a wedged browser must not stall the
+/// presentation indefinitely.
+const RENDER_TIMEOUT: Duration = Duration::from_secs(20);
+
 pub struct MermaidRenderer {
-    /// Directory where cached `.mmd` source and `.png` output files are stored.
-    cache_dir: PathBuf,
-    /// In-memory map from content hash to the path of the rendered PNG.
-    cache: HashMap<u64, PathBuf>,
+    /// Created with a random name and owner-only permissions, so other users
+    /// cannot pre-create it or plant symlinks for mmdc to write through.
+    dir: tempfile::TempDir,
+    rendered: HashMap<u64, PathBuf>,
 }
 
 impl MermaidRenderer {
-    /// Create a new renderer, initializing the cache directory in the OS temp folder.
-    pub fn new() -> Self {
-        let cache_dir = std::env::temp_dir().join("ostendo-mermaid-cache");
-        let _ = std::fs::create_dir_all(&cache_dir);
-        Self {
-            cache_dir,
-            cache: HashMap::new(),
-        }
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            dir: tempfile::Builder::new()
+                .prefix("ostendo-mermaid-")
+                .tempdir()?,
+            rendered: HashMap::new(),
+        })
     }
 
-    /// Check if the mmdc CLI is available.
     pub fn is_available() -> bool {
-        Command::new("mmdc")
+        let mut command = Command::new("mmdc");
+        command
             .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        run(command, RENDER_TIMEOUT).is_ok_and(|status| status.success())
     }
 
-    /// Render a Mermaid diagram to a PNG image and return the file path.
+    /// Render `source` to a PNG `width` pixels wide and return its path.
     ///
-    /// # Parameters
+    /// # Errors
     ///
-    /// - `source` -- the Mermaid diagram source text (e.g. `"graph LR; A-->B"`).
-    /// - `width` -- the desired output width in pixels, passed to `mmdc -w`.
-    ///
-    /// # Returns
-    ///
-    /// The path to the rendered PNG file (inside the cache directory).
-    /// On cache hit the file is returned immediately without invoking `mmdc`.
+    /// Fails if `mmdc` cannot be started, exits unsuccessfully (the error
+    /// includes its stderr), or runs longer than 20 seconds. Failures are not
+    /// remembered, so a caller that retries every frame should cache them.
     pub fn render(&mut self, source: &str, width: usize) -> Result<PathBuf> {
-        let hash = self.hash_source(source, width);
-
-        // Check cache
-        if let Some(path) = self.cache.get(&hash) {
-            if path.exists() {
-                return Ok(path.clone());
-            }
+        let key = cache_key(source, width);
+        if let Some(path) = self.rendered.get(&key) {
+            return Ok(path.clone());
         }
 
-        let input_path = self.cache_dir.join(format!("{}.mmd", hash));
-        let output_path = self.cache_dir.join(format!("{}.png", hash));
+        let input = self.dir.path().join(format!("{key}.mmd"));
+        let output = self.dir.path().join(format!("{key}.png"));
+        let log = self.dir.path().join(format!("{key}.log"));
+        std::fs::write(&input, source)?;
 
-        std::fs::write(&input_path, source)?;
-
-        let status = Command::new("mmdc")
+        let mut command = Command::new("mmdc");
+        command
             .arg("-i")
-            .arg(&input_path)
+            .arg(&input)
             .arg("-o")
-            .arg(&output_path)
+            .arg(&output)
             .arg("-w")
             .arg(width.to_string())
-            .arg("--backgroundColor")
-            .arg("transparent")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()?;
-
+            .args(["--backgroundColor", "transparent"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            // A file, not a pipe: nothing drains a pipe while we wait.
+            .stderr(std::fs::File::create(&log)?);
+        let status = run(command, RENDER_TIMEOUT)?;
         if !status.success() {
-            anyhow::bail!("mmdc failed to render Mermaid diagram");
+            let stderr = std::fs::read_to_string(&log).unwrap_or_default();
+            bail!("mmdc failed ({status}): {}", stderr.trim());
         }
 
-        self.cache.insert(hash, output_path.clone());
-        Ok(output_path)
-    }
-
-    /// Compute a deterministic hash of the diagram source and width for cache keying.
-    ///
-    /// Uses Rust's default `DefaultHasher` (SipHash).  Collisions are extremely
-    /// unlikely for the small number of diagrams in a typical presentation.
-    fn hash_source(&self, source: &str, width: usize) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut hasher);
-        width.hash(&mut hasher);
-        hasher.finish()
+        self.rendered.insert(key, output.clone());
+        Ok(output)
     }
 }
 
-impl Default for MermaidRenderer {
-    fn default() -> Self {
-        Self::new()
+fn cache_key(source: &str, width: usize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    width.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Run `command` to completion or kill it after `timeout`. On Unix it gets its
+/// own process group so the browser processes it spawned die with it.
+fn run(mut command: Command, timeout: Duration) -> Result<ExitStatus> {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            #[cfg(unix)]
+            // SAFETY: killpg only sends a signal; the group id is the child's
+            // pid because of process_group(0) above.
+            unsafe {
+                libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{command:?} timed out after {}s", timeout.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_kills_commands_that_outlive_the_timeout() {
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let started = Instant::now();
+        assert!(run(command, Duration::from_millis(200)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

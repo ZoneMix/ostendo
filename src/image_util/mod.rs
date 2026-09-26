@@ -1,21 +1,9 @@
-//! Image loading and protocol detection.
+//! Image loading and sizing.
 //!
-//! Handles PNG, JPG, GIF, BMP, WEBP, and SVG image formats.  Static images are
-//! loaded into an `RgbaImage` (from the `image` crate) which downstream code can
-//! then render using the appropriate terminal protocol.
-//!
-//! Animated GIFs receive special treatment: all frames are decoded eagerly in
-//! [`load_gif_frames`] and downscaled to a maximum of 800 px on the longest side
-//! to keep memory usage reasonable (a 60-frame 1080p GIF would otherwise consume
-//! hundreds of megabytes of uncompressed pixel data).
-//!
-//! SVG files are rasterized at 2x scale (capped at 2048 px) using the `resvg`
-//! library, which provides high-quality rendering without an external tool.
-//!
-//! # Submodules
-//!
-//! - [`render`] -- protocol-specific image rendering (Kitty, iTerm2, Sixel, ASCII)
-//! - [`mermaid`] -- Mermaid diagram rendering via external `mmdc` CLI
+//! Anything the `image` crate decodes is loaded as an `RgbaImage`; SVG is
+//! rasterized with `resvg` at 2x (capped at 2048 px) for high-DPI terminals.
+//! Animated GIF frames are downscaled to at most 800 px as they are decoded,
+//! so a long HD GIF never holds its full-size frames in memory at once.
 
 pub mod kitty;
 pub mod mermaid;
@@ -28,8 +16,8 @@ use std::path::Path;
 
 use crate::render::layout::WindowSize;
 
-/// Resize an RGBA image using SIMD-accelerated fast_image_resize.
-/// ~20x faster than `image::imageops::resize` on Apple Silicon.
+/// Resize with SIMD-accelerated `fast_image_resize`, which is far faster than
+/// `image::imageops::resize`. Returns the source unchanged if resizing fails.
 fn fast_resize(
     src: &RgbaImage,
     dst_width: u32,
@@ -39,49 +27,29 @@ fn fast_resize(
     if dst_width == 0 || dst_height == 0 {
         return RgbaImage::new(dst_width.max(1), dst_height.max(1));
     }
-    let (sw, sh) = src.dimensions();
-    if sw == dst_width && sh == dst_height {
+    if src.dimensions() == (dst_width, dst_height) {
         return src.clone();
     }
-    // Graceful fallback: if fast_image_resize fails, return the original image
-    let src_image =
-        match fir::images::Image::from_vec_u8(sw, sh, src.as_raw().clone(), fir::PixelType::U8x4) {
-            Ok(img) => img,
-            Err(_) => return src.clone(),
-        };
-    let mut dst_image = fir::images::Image::new(dst_width, dst_height, fir::PixelType::U8x4);
-    let mut resizer = fir::Resizer::new();
-    if resizer
-        .resize(
-            &src_image,
-            &mut dst_image,
-            &fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(filter)),
-        )
-        .is_err()
-    {
-        return src.clone();
-    }
-    RgbaImage::from_raw(dst_width, dst_height, dst_image.into_vec()).unwrap_or_else(|| src.clone())
+    let resized = || {
+        let (sw, sh) = src.dimensions();
+        let view = fir::images::ImageRef::new(sw, sh, src.as_raw(), fir::PixelType::U8x4).ok()?;
+        let mut dst = fir::images::Image::new(dst_width, dst_height, fir::PixelType::U8x4);
+        let options = fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(filter));
+        fir::Resizer::new().resize(&view, &mut dst, &options).ok()?;
+        RgbaImage::from_raw(dst_width, dst_height, dst.into_vec())
+    };
+    resized().unwrap_or_else(|| src.clone())
 }
 
-/// A single decoded frame from an animated GIF.
-///
-/// The rendering engine cycles through these frames on a timer, re-emitting the
-/// image escape sequence for each frame to produce animation in the terminal.
+/// One frame of an animated GIF, already downscaled.
 #[derive(Clone)]
 pub struct GifFrame {
-    /// The RGBA pixel data for this frame (already downscaled if needed).
     pub image: RgbaImage,
-    /// How long this frame should be displayed before advancing, in milliseconds.
-    /// The GIF spec uses centisecond precision; a value of 0 defaults to 100 ms.
+    /// Never zero: zero-delay frames are stored as 100 ms.
     pub delay_ms: u32,
 }
 
-/// Load a static image from disk and convert it to RGBA pixel format.
-///
-/// Supports all formats handled by the `image` crate (PNG, JPG, BMP, WEBP, GIF,
-/// etc.) plus SVG via `resvg`.  The returned `RgbaImage` is ready for protocol
-/// rendering or ASCII art conversion.
+/// Load any format the `image` crate decodes, or an SVG, as RGBA.
 pub fn load_image(path: &Path) -> Result<RgbaImage> {
     let ext = path
         .extension()
@@ -97,41 +65,34 @@ pub fn load_image(path: &Path) -> Result<RgbaImage> {
     }
 }
 
-/// Load all frames from a GIF file. Returns None for non-GIF or single-frame images.
-/// Frames are downscaled to max 800px on the longest side to avoid excessive memory usage.
+/// Decode every frame of an animated GIF. Returns `None` for non-GIF paths
+/// and single-frame GIFs, which load through [`load_image`].
 pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
     use image::AnimationDecoder;
     use std::io::BufReader;
 
-    let ext = path
+    const MAX_DIM: u32 = 800;
+
+    let is_gif = path
         .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if ext != "gif" {
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"));
+    if !is_gif {
         return None;
     }
 
     let file = std::fs::File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    let decoder = image::codecs::gif::GifDecoder::new(reader).ok()?;
-    let frames: Vec<image::Frame> = decoder.into_frames().filter_map(|f| f.ok()).collect();
-
-    if frames.len() <= 1 {
-        return None; // Static GIF, use normal load path
-    }
-
-    const MAX_DIM: u32 = 800;
-
-    let gif_frames: Vec<GifFrame> = frames
-        .into_iter()
-        .map(|f| {
-            let (numer, denom) = f.delay().numer_denom_ms();
-            let delay_ms = if denom > 0 { numer / denom } else { 100 };
-            // GIF spec: delay of 0 means "as fast as possible", default to 100ms
-            let delay_ms = if delay_ms == 0 { 100 } else { delay_ms };
-            let raw = f.into_buffer();
-            // Downscale large frames to keep memory usage reasonable
+    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).ok()?;
+    let frames: Vec<GifFrame> = decoder
+        .into_frames()
+        .filter_map(Result::ok)
+        .map(|frame| {
+            let (numer, denom) = frame.delay().numer_denom_ms();
+            // Browsers play zero-delay frames at 100 ms; match them.
+            let delay_ms = match numer.checked_div(denom) {
+                Some(0) | None => 100,
+                Some(ms) => ms,
+            };
+            let raw = frame.into_buffer();
             let (w, h) = raw.dimensions();
             let image = if w > MAX_DIM || h > MAX_DIM {
                 let scale = MAX_DIM as f64 / w.max(h) as f64;
@@ -145,7 +106,7 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
         })
         .collect();
 
-    Some(gif_frames)
+    (frames.len() > 1).then_some(frames)
 }
 
 /// Rasterize an SVG file to an RGBA image using the `resvg` library.
@@ -191,20 +152,9 @@ fn load_svg(path: &Path) -> Result<RgbaImage> {
     Ok(img)
 }
 
-/// Scale an image using pixel-accurate dimensions for protocol rendering.
-///
-/// Uses the terminal's pixel-per-cell ratios (from [`WindowSize`]) to compute
-/// the exact pixel size the image should be, then resizes it with Lanczos3
-/// filtering for high quality.
-///
-/// A 5% horizontal margin is reserved so images do not touch the window edge.
-///
-/// # Returns
-///
-/// A tuple of `(scaled_image, columns, rows)` where `columns` and `rows` are
-/// the number of terminal cells the image will occupy.  The rendering code uses
-/// these to emit the correct escape sequence parameters and to reserve
-/// placeholder lines in the virtual buffer.
+/// Resize `img` to the largest pixel size that fits `max_cols` x `max_rows`
+/// cells (less a 5% horizontal margin) at the terminal's cell size, keeping
+/// its aspect ratio. Returns the image and the `(cols, rows)` it occupies.
 pub fn scale_image_pixels(
     img: &RgbaImage,
     window: &WindowSize,
@@ -244,4 +194,41 @@ pub fn scale_image_pixels(
 
     let scaled = fast_resize(img, width_px, height_px, fir::FilterType::Lanczos3);
     (scaled, cols, rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::codecs::gif::GifEncoder;
+    use image::{Delay, Frame};
+
+    fn write_gif(path: &Path, frames: usize, width: u32) {
+        let mut encoder = GifEncoder::new(std::fs::File::create(path).unwrap());
+        for _ in 0..frames {
+            let frame = Frame::from_parts(
+                RgbaImage::from_pixel(width, 10, image::Rgba([255, 0, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(0, 1),
+            );
+            encoder.encode_frame(frame).unwrap();
+        }
+    }
+
+    #[test]
+    fn gif_frames_are_downscaled_and_single_frames_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let animated = dir.path().join("animated.gif");
+        write_gif(&animated, 2, 1600);
+        let frames = load_gif_frames(&animated).unwrap();
+        assert_eq!(frames.len(), 2);
+        for frame in &frames {
+            assert_eq!(frame.image.dimensions(), (800, 5));
+            assert_eq!(frame.delay_ms, 100);
+        }
+
+        let still = dir.path().join("still.gif");
+        write_gif(&still, 1, 20);
+        assert!(load_gif_frames(&still).is_none());
+    }
 }
