@@ -237,8 +237,8 @@ fn main() -> Result<()> {
         } else {
             format!("http://127.0.0.1:{}", cli.remote_port)
         };
+        let (rx, tx) = remote::server::start(cli.remote_port, cli.remote_token.clone())?;
         eprintln!("Remote control: {}", url);
-        let (rx, tx) = remote::server::RemoteServer::start(cli.remote_port, cli.remote_token.clone());
         Some((rx, tx))
     } else {
         None
