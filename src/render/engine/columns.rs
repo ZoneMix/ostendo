@@ -1,6 +1,6 @@
 //! Side-by-side column layouts.
 
-use crate::presentation::ColumnLayout;
+use crate::presentation::{ColumnItem, ColumnLayout};
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 
 use super::blocks::{self, Ctx};
@@ -58,44 +58,50 @@ pub(crate) fn columns(
                     );
                 }
             }
-            for text in &content.text_lines {
-                gap(&mut rows);
-                let mut lines = blocks::paragraph(&inner, text);
-                for s in lines.iter_mut().flat_map(|l| l.spans.iter_mut()) {
-                    s.bold = true;
+            let mut items = content.items.iter().peekable();
+            let mut previous: Option<ColumnItem> = None;
+            while let Some(item) = items.next() {
+                let consecutive_text = matches!(
+                    (previous, item),
+                    (Some(ColumnItem::Text(_)), ColumnItem::Text(_))
+                );
+                if !consecutive_text {
+                    gap(&mut rows);
                 }
-                rows.extend(lines);
-            }
-            if !content.bullets.is_empty() {
-                gap(&mut rows);
-                rows.extend(blocks::bullets(&inner, &content.bullets, false));
-            }
-            if let Some(s) = scale {
-                rows = rows
-                    .into_iter()
-                    .flat_map(|mut l| {
-                        for span in &mut l.spans {
-                            span.text_scale = s;
+                previous = Some(*item);
+                let lines = match *item {
+                    ColumnItem::Text(t) => blocks::paragraph(&inner, &content.text_lines[t]),
+                    ColumnItem::Bullet(first) => {
+                        let mut last = first;
+                        while let Some(ColumnItem::Bullet(next)) = items.peek() {
+                            last = *next;
+                            items.next();
                         }
-                        std::iter::once(l).chain((1..s).map(|_| StyledLine::empty()))
-                    })
-                    .collect();
-            }
-            for cb in &content.code_blocks {
-                gap(&mut rows);
-                let cctx = ctx.with_width(width);
-                rows.extend(blocks::code_block(&cctx, cb));
-                if cb.exec_mode.is_some() {
-                    if let Some(view) = ctx.exec.as_ref().filter(|v| v.block == exec_index) {
-                        rows.extend(blocks::exec_output(&cctx, view.output, view.running));
+                        blocks::bullets(&inner, &content.bullets[first..=last], false)
                     }
-                    exec_index += 1;
-                }
-            }
-            if let Some(img) = &content.image {
-                gap(&mut rows);
-                let img_width = width * usize::from(img.scale.unwrap_or(100).clamp(10, 100)) / 100;
-                rows.extend(image(img, img_width.max(1)));
+                    ColumnItem::Code(c) => {
+                        let cb = &content.code_blocks[c];
+                        let cctx = ctx.with_width(width);
+                        let mut lines = blocks::code_block(&cctx, cb);
+                        if cb.exec_mode.is_some() {
+                            if let Some(view) = ctx.exec.as_ref().filter(|v| v.block == exec_index)
+                            {
+                                lines.extend(blocks::exec_output(&cctx, view.output, view.running));
+                            }
+                            exec_index += 1;
+                        }
+                        rows.extend(lines);
+                        continue;
+                    }
+                    ColumnItem::Image => {
+                        let Some(img) = &content.image else { continue };
+                        let img_width =
+                            width * usize::from(img.scale.unwrap_or(100).clamp(10, 100)) / 100;
+                        rows.extend(image(img, img_width.max(1)));
+                        continue;
+                    }
+                };
+                rows.extend(scaled(lines, scale));
             }
             rows
         })
@@ -125,6 +131,20 @@ pub(crate) fn columns(
                 out.push(StyledSpan::new(&" ".repeat(widths[i].saturating_sub(used))));
             }
             out
+        })
+        .collect()
+}
+
+/// Applies OSC 66 scaling: each row grows to `scale` rows, so blank rows follow it.
+fn scaled(lines: Vec<StyledLine>, scale: Option<u8>) -> Vec<StyledLine> {
+    let Some(s) = scale else { return lines };
+    lines
+        .into_iter()
+        .flat_map(|mut l| {
+            for span in &mut l.spans {
+                span.text_scale = s;
+            }
+            std::iter::once(l).chain((1..s).map(|_| StyledLine::empty()))
         })
         .collect()
 }

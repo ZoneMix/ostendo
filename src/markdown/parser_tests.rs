@@ -275,14 +275,23 @@ fn image_directives_and_path_resolution() {
 #[test]
 fn columns_route_content_by_column() {
     let slides = parse(
-        "# T\n<!-- column_layout: [2, 1] -->\n<!-- column_separator: none -->\n<!-- column: 0 -->\n**Header**\n- a\n<!-- column: 1 -->\n![i](c.png)\n<!-- image_scale: 40 -->\n<!-- column: 5 -->\n- out of range\n<!-- reset_layout -->\n- after",
+        "# T\n<!-- column_layout: [2, 1] -->\n<!-- column_separator: none -->\n<!-- column: 0 -->\n**Header**\n- a\n**Later**\n- b\n<!-- column: 1 -->\n![i](c.png)\n<!-- image_scale: 40 -->\n<!-- column: 5 -->\n- out of range\n<!-- reset_layout -->\n- after",
     );
     let s = &slides[0];
     let cols = s.columns.as_ref().unwrap();
     assert_eq!(cols.ratios, [2, 1]);
     assert!(!cols.separator);
-    assert_eq!(cols.contents[0].text_lines, ["**Header**"]);
-    assert_eq!(cols.contents[0].bullets[0].text, "a");
+    assert_eq!(cols.contents[0].text_lines, ["**Header**", "**Later**"]);
+    assert_eq!(cols.contents[0].bullets[1].text, "b");
+    assert_eq!(
+        cols.contents[0].items,
+        [
+            ColumnItem::Text(0),
+            ColumnItem::Bullet(0),
+            ColumnItem::Text(1),
+            ColumnItem::Bullet(1)
+        ]
+    );
     let img = cols.contents[1].image.as_ref().unwrap();
     assert_eq!((img.path.as_str(), img.scale), ("c.png", Some(40)));
     let slide_bullets: Vec<&str> = s.bullets.iter().map(|b| b.text.as_str()).collect();

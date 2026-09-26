@@ -30,7 +30,7 @@ pub fn detect_pdf_converter() -> Option<&'static str> {
 }
 
 /// Render `slides` to a temporary HTML file and print it to `pdf_path`.
-pub fn export_pdf(slides: &[Slide], theme: &Theme, pdf_path: &Path) -> Result<()> {
+pub fn export_pdf(slides: &[Slide], theme: &Theme, title: &str, pdf_path: &Path) -> Result<()> {
     let converter = detect_pdf_converter().ok_or_else(|| {
         anyhow::anyhow!("No PDF converter found. Install Chrome/Chromium or wkhtmltopdf.")
     })?;
@@ -40,7 +40,7 @@ pub fn export_pdf(slides: &[Slide], theme: &Theme, pdf_path: &Path) -> Result<()
         .prefix("ostendo-export-")
         .suffix(".html")
         .tempfile()?;
-    super::html::export_html(slides, theme, html.path())?;
+    super::html::export_html(slides, theme, title, html.path())?;
 
     let mut command = Command::new(converter);
     if converter == "wkhtmltopdf" {

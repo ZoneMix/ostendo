@@ -473,12 +473,31 @@ pub(crate) fn table(ctx: &Ctx, t: &Table) -> Vec<StyledLine> {
     if cols == 0 {
         return Vec::new();
     }
-    let cell = |row: &[String], i: usize| row.get(i).map(String::as_str).unwrap_or("").to_string();
+    let pal = ctx.pal;
+    let parse = |row: &[String], header: bool| -> Vec<Vec<StyledSpan>> {
+        (0..cols)
+            .map(|i| {
+                let mut spans = ctx.inline(row.get(i).map(String::as_str).unwrap_or(""));
+                if header {
+                    for s in &mut spans {
+                        s.bold = true;
+                        if s.bg.is_none() {
+                            s.fg = Some(pal.accent);
+                        }
+                    }
+                }
+                spans
+            })
+            .collect()
+    };
+    let header = parse(&t.headers, true);
+    let body: Vec<Vec<Vec<StyledSpan>>> = t.rows.iter().map(|r| parse(r, false)).collect();
+    let span_width = |spans: &[StyledSpan]| spans.iter().map(StyledSpan::width).sum::<usize>();
     let mut widths: Vec<usize> = (0..cols)
         .map(|i| {
-            std::iter::once(&t.headers)
-                .chain(&t.rows)
-                .map(|r| cell(r, i).width())
+            std::iter::once(&header)
+                .chain(&body)
+                .map(|r| span_width(&r[i]))
                 .max()
                 .unwrap_or(0)
                 .max(1)
@@ -494,40 +513,33 @@ pub(crate) fn table(ctx: &Ctx, t: &Table) -> Vec<StyledLine> {
         widths[widest] = w - 1;
     }
 
-    let pal = ctx.pal;
     let border = |s: &str| StyledSpan::new(s).with_fg(pal.muted);
     let rule = |l: &str, m: &str, r: &str| {
         let body: Vec<String> = widths.iter().map(|w| "─".repeat(w + 2)).collect();
         line(vec![border(&format!("{l}{}{r}", body.join(m)))])
     };
     let align = |i: usize| t.alignments.get(i).copied().unwrap_or(TableAlign::Left);
-    let row_lines = |row: &[String], header: bool| -> Vec<StyledLine> {
-        let wrapped: Vec<Vec<String>> = (0..cols)
-            .map(|i| wrap_text(&cell(row, i), widths[i]))
+    let row_lines = |cells: &[Vec<StyledSpan>]| -> Vec<StyledLine> {
+        let wrapped: Vec<Vec<Vec<StyledSpan>>> = cells
+            .iter()
+            .enumerate()
+            .map(|(i, c)| wrap_spans(c, widths[i]))
             .collect();
         let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
         (0..height)
             .map(|r| {
                 let mut spans = vec![border("│")];
                 for (i, lines) in wrapped.iter().enumerate() {
-                    let text = lines.get(r).map(String::as_str).unwrap_or("");
-                    let free = widths[i].saturating_sub(text.width());
+                    let content = lines.get(r).cloned().unwrap_or_default();
+                    let free = widths[i].saturating_sub(span_width(&content));
                     let left = match align(i) {
                         TableAlign::Left => 0,
                         TableAlign::Center => free / 2,
                         TableAlign::Right => free,
                     };
-                    let mut span = StyledSpan::new(&format!(
-                        " {}{text}{} ",
-                        " ".repeat(left),
-                        " ".repeat(free - left)
-                    ));
-                    span = if header {
-                        span.with_fg(pal.accent).bold()
-                    } else {
-                        span.with_fg(pal.text)
-                    };
-                    spans.push(span);
+                    spans.push(StyledSpan::new(&" ".repeat(left + 1)));
+                    spans.extend(content);
+                    spans.push(StyledSpan::new(&" ".repeat(free - left + 1)));
                     spans.push(border("│"));
                 }
                 line(spans)
@@ -536,10 +548,10 @@ pub(crate) fn table(ctx: &Ctx, t: &Table) -> Vec<StyledLine> {
     };
 
     let mut out = vec![rule("╭", "┬", "╮")];
-    out.extend(row_lines(&t.headers, true));
+    out.extend(row_lines(&header));
     out.push(rule("├", "┼", "┤"));
-    for row in &t.rows {
-        out.extend(row_lines(row, false));
+    for row in &body {
+        out.extend(row_lines(row));
     }
     out.push(rule("╰", "┴", "╯"));
     out

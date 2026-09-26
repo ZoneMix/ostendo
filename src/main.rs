@@ -179,9 +179,18 @@ fn main() -> Result<()> {
             .output
             .clone()
             .unwrap_or_else(|| file.with_extension(ext));
+        let title = if meta.title.is_empty() {
+            &slides[0].title
+        } else {
+            &meta.title
+        };
+        let mut theme = theme;
+        if theme::colors::hex_to_color(&meta.accent).is_some() {
+            theme.colors.accent = meta.accent.clone();
+        }
         match format {
-            ExportFormat::Html => export::html::export_html(&slides, &theme, &output)?,
-            ExportFormat::Pdf => export::pdf::export_pdf(&slides, &theme, &output)?,
+            ExportFormat::Html => export::html::export_html(&slides, &theme, title, &output)?,
+            ExportFormat::Pdf => export::pdf::export_pdf(&slides, &theme, title, &output)?,
         }
         println!("Wrote {}", output.display());
         return Ok(());

@@ -145,6 +145,17 @@ pub struct ColumnContent {
     pub image: Option<ColumnImage>,
     /// Plain-text lines, typically a column header.
     pub text_lines: Vec<String>,
+    /// The column's content in source order.
+    pub items: Vec<ColumnItem>,
+}
+
+/// One entry of [`ColumnContent::items`], indexing into the column's lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnItem {
+    Text(usize),
+    Bullet(usize),
+    Code(usize),
+    Image,
 }
 
 #[derive(Debug, Clone)]

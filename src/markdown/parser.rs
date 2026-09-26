@@ -5,9 +5,9 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::presentation::{
-    Block, BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnLayout, DiagramBlock,
-    DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode, MermaidBlock,
-    PresentationMeta, Slide, SlideAlignment, SlideImage, Table,
+    Block, BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnItem, ColumnLayout,
+    DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode,
+    MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Table,
 };
 use crate::render::animation::{
     parse_entrance, parse_loop_animation, parse_transition, LoopAnimation,
@@ -360,7 +360,10 @@ impl<'a> SlideBuilder<'a> {
                             exec_mode,
                         };
                         match self.column_mut() {
-                            Some(col) => col.code_blocks.push(block),
+                            Some(col) => {
+                                col.items.push(ColumnItem::Code(col.code_blocks.len()));
+                                col.code_blocks.push(block);
+                            }
                             None => {
                                 self.push_block(Block::Code(self.slide.code_blocks.len()));
                                 self.slide.code_blocks.push(block);
@@ -502,6 +505,9 @@ impl<'a> SlideBuilder<'a> {
         let path = resolve_path(self.base_dir, path);
         match self.column_mut() {
             Some(col) => {
+                if col.image.is_none() {
+                    col.items.push(ColumnItem::Image);
+                }
                 col.image = Some(ColumnImage {
                     path: path.to_string_lossy().into_owned(),
                     scale: None,
@@ -526,6 +532,7 @@ impl<'a> SlideBuilder<'a> {
         };
         let bullet = Bullet { text, depth };
         if let Some(col) = self.column_mut() {
+            col.items.push(ColumnItem::Bullet(col.bullets.len()));
             col.bullets.push(bullet);
             return;
         }
@@ -546,6 +553,7 @@ impl<'a> SlideBuilder<'a> {
             return;
         }
         if let Some(col) = self.column_mut() {
+            col.items.push(ColumnItem::Text(col.text_lines.len()));
             col.text_lines.push(text.to_string());
             return;
         }
