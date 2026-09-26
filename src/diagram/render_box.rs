@@ -48,7 +48,15 @@ pub fn render(
 
     for (row_idx, row) in graph.rows.iter().enumerate() {
         let col_widths = compute_column_widths(row, content_width);
-        render_row(&mut lines, row, &col_widths, accent, text_color, dim_color, pad);
+        render_row(
+            &mut lines,
+            row,
+            &col_widths,
+            accent,
+            text_color,
+            dim_color,
+            pad,
+        );
 
         // Vertical connector to next row if rows share a node
         if row_idx + 1 < graph.rows.len() {
@@ -201,12 +209,7 @@ fn compute_connector_offset(col_widths: &[usize], col_idx: usize) -> usize {
 }
 
 /// Render vertical connector lines (│ and ▼) between two rows.
-fn render_vertical_connector(
-    lines: &mut Vec<StyledLine>,
-    offset: usize,
-    accent: Color,
-    pad: &str,
-) {
+fn render_vertical_connector(lines: &mut Vec<StyledLine>, offset: usize, accent: Color, pad: &str) {
     let pad_len = pad.len();
 
     // Pipe line
@@ -230,13 +233,25 @@ mod tests {
     use crate::diagram::parser::parse;
 
     fn test_accent() -> Color {
-        Color::Rgb { r: 189, g: 147, b: 249 }
+        Color::Rgb {
+            r: 189,
+            g: 147,
+            b: 249,
+        }
     }
     fn test_text() -> Color {
-        Color::Rgb { r: 248, g: 248, b: 242 }
+        Color::Rgb {
+            r: 248,
+            g: 248,
+            b: 242,
+        }
     }
     fn test_dim() -> Color {
-        Color::Rgb { r: 98, g: 114, b: 164 }
+        Color::Rgb {
+            r: 98,
+            g: 114,
+            b: 164,
+        }
     }
 
     #[test]

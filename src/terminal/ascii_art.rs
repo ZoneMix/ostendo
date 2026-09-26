@@ -81,7 +81,11 @@ pub fn render_ascii_art(
             match avg {
                 // Fully transparent block — render as a space.
                 None => {
-                    line.push(AsciiCell { ch: ' ', fg: default_bg, bg: None });
+                    line.push(AsciiCell {
+                        ch: ' ',
+                        fg: default_bg,
+                        bg: None,
+                    });
                 }
                 Some((r, g, b)) => {
                     // Convert to perceived luminance using BT.601 weights.
@@ -98,10 +102,18 @@ pub fn render_ascii_art(
                         let s_boosted = (s * 1.3).min(1.0);
                         let v_boosted = v.max(0.5);
                         let (cr, cg, cb) = hsv_to_rgb(h, s_boosted, v_boosted);
-                        Color::Rgb { r: cr, g: cg, b: cb }
+                        Color::Rgb {
+                            r: cr,
+                            g: cg,
+                            b: cb,
+                        }
                     });
 
-                    line.push(AsciiCell { ch, fg: color, bg: None });
+                    line.push(AsciiCell {
+                        ch,
+                        fg: color,
+                        bg: None,
+                    });
                 }
             }
         }
@@ -111,7 +123,13 @@ pub fn render_ascii_art(
 }
 
 /// Average all pixels in a rectangular block. Returns None if out of bounds or fully transparent.
-fn block_average(img: &image::RgbaImage, x0: u32, y0: u32, x1: u32, y1: u32) -> Option<(u8, u8, u8)> {
+fn block_average(
+    img: &image::RgbaImage,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+) -> Option<(u8, u8, u8)> {
     let (iw, ih) = img.dimensions();
     let x0 = x0.min(iw);
     let y0 = y0.min(ih);
@@ -144,7 +162,11 @@ fn block_average(img: &image::RgbaImage, x0: u32, y0: u32, x1: u32, y1: u32) -> 
         return None;
     }
 
-    Some(((r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8))
+    Some((
+        (r_sum / count) as u8,
+        (g_sum / count) as u8,
+        (b_sum / count) as u8,
+    ))
 }
 
 /// Convert an RGB color to HSV (Hue, Saturation, Value) representation.
@@ -206,7 +228,7 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
 mod tests {
     use super::*;
     use crossterm::style::Color;
-    use image::{RgbaImage, Rgba};
+    use image::{Rgba, RgbaImage};
 
     /// Build a tiny solid-color RGBA image for testing.
     fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8) -> RgbaImage {
@@ -259,7 +281,10 @@ mod tests {
         assert!(!result.is_empty());
         // Check that at least some cells have non-space characters
         let has_content = result.iter().any(|row| row.iter().any(|c| c.ch != ' '));
-        assert!(has_content, "a bright solid image should produce non-space cells");
+        assert!(
+            has_content,
+            "a bright solid image should produce non-space cells"
+        );
     }
 
     // --- transparent image ---
@@ -304,9 +329,13 @@ mod tests {
         let img = solid_image(20, 20, 10, 10, 10);
         let result = render_ascii_art(&img, 10, None, None);
         let found_sparse = result.iter().any(|row| {
-            row.iter().any(|c| matches!(c.ch, ' ' | '.' | '\'' | '`' | '^'))
+            row.iter()
+                .any(|c| matches!(c.ch, ' ' | '.' | '\'' | '`' | '^'))
         });
-        assert!(found_sparse, "dark image should yield sparse ASCII characters (low ramp index)");
+        assert!(
+            found_sparse,
+            "dark image should yield sparse ASCII characters (low ramp index)"
+        );
     }
 
     #[test]
@@ -316,8 +345,12 @@ mod tests {
         let img = solid_image(20, 20, 250, 250, 250);
         let result = render_ascii_art(&img, 10, None, None);
         let found_dense = result.iter().any(|row| {
-            row.iter().any(|c| matches!(c.ch, '@' | '$' | '#' | 'B' | 'M' | 'W' | '%' | '8' | '&'))
+            row.iter()
+                .any(|c| matches!(c.ch, '@' | '$' | '#' | 'B' | 'M' | 'W' | '%' | '8' | '&'))
         });
-        assert!(found_dense, "bright image should yield dense ASCII characters (high ramp index)");
+        assert!(
+            found_dense,
+            "bright image should yield dense ASCII characters (high ramp index)"
+        );
     }
 }

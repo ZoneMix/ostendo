@@ -17,9 +17,9 @@
 //! - [`render`] -- protocol-specific image rendering (Kitty, iTerm2, Sixel, ASCII)
 //! - [`mermaid`] -- Mermaid diagram rendering via external `mmdc` CLI
 
-pub mod render;
-pub mod mermaid;
 pub mod kitty;
+pub mod mermaid;
+pub mod render;
 
 use anyhow::Result;
 use fast_image_resize as fir;
@@ -30,7 +30,12 @@ use crate::render::layout::WindowSize;
 
 /// Resize an RGBA image using SIMD-accelerated fast_image_resize.
 /// ~20x faster than `image::imageops::resize` on Apple Silicon.
-fn fast_resize(src: &RgbaImage, dst_width: u32, dst_height: u32, filter: fir::FilterType) -> RgbaImage {
+fn fast_resize(
+    src: &RgbaImage,
+    dst_width: u32,
+    dst_height: u32,
+    filter: fir::FilterType,
+) -> RgbaImage {
     if dst_width == 0 || dst_height == 0 {
         return RgbaImage::new(dst_width.max(1), dst_height.max(1));
     }
@@ -39,22 +44,24 @@ fn fast_resize(src: &RgbaImage, dst_width: u32, dst_height: u32, filter: fir::Fi
         return src.clone();
     }
     // Graceful fallback: if fast_image_resize fails, return the original image
-    let src_image = match fir::images::Image::from_vec_u8(
-        sw, sh, src.as_raw().clone(), fir::PixelType::U8x4,
-    ) {
-        Ok(img) => img,
-        Err(_) => return src.clone(),
-    };
+    let src_image =
+        match fir::images::Image::from_vec_u8(sw, sh, src.as_raw().clone(), fir::PixelType::U8x4) {
+            Ok(img) => img,
+            Err(_) => return src.clone(),
+        };
     let mut dst_image = fir::images::Image::new(dst_width, dst_height, fir::PixelType::U8x4);
     let mut resizer = fir::Resizer::new();
-    if resizer.resize(
-        &src_image, &mut dst_image,
-        &fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(filter)),
-    ).is_err() {
+    if resizer
+        .resize(
+            &src_image,
+            &mut dst_image,
+            &fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(filter)),
+        )
+        .is_err()
+    {
         return src.clone();
     }
-    RgbaImage::from_raw(dst_width, dst_height, dst_image.into_vec())
-        .unwrap_or_else(|| src.clone())
+    RgbaImage::from_raw(dst_width, dst_height, dst_image.into_vec()).unwrap_or_else(|| src.clone())
 }
 
 /// A single decoded frame from an animated GIF.
@@ -76,7 +83,8 @@ pub struct GifFrame {
 /// etc.) plus SVG via `resvg`.  The returned `RgbaImage` is ready for protocol
 /// rendering or ASCII art conversion.
 pub fn load_image(path: &Path) -> Result<RgbaImage> {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
@@ -95,7 +103,8 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
     use image::AnimationDecoder;
     use std::io::BufReader;
 
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
@@ -114,24 +123,27 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
 
     const MAX_DIM: u32 = 800;
 
-    let gif_frames: Vec<GifFrame> = frames.into_iter().map(|f| {
-        let (numer, denom) = f.delay().numer_denom_ms();
-        let delay_ms = if denom > 0 { numer / denom } else { 100 };
-        // GIF spec: delay of 0 means "as fast as possible", default to 100ms
-        let delay_ms = if delay_ms == 0 { 100 } else { delay_ms };
-        let raw = f.into_buffer();
-        // Downscale large frames to keep memory usage reasonable
-        let (w, h) = raw.dimensions();
-        let image = if w > MAX_DIM || h > MAX_DIM {
-            let scale = MAX_DIM as f64 / w.max(h) as f64;
-            let nw = (w as f64 * scale).max(1.0) as u32;
-            let nh = (h as f64 * scale).max(1.0) as u32;
-            fast_resize(&raw, nw, nh, fir::FilterType::Bilinear)
-        } else {
-            raw
-        };
-        GifFrame { image, delay_ms }
-    }).collect();
+    let gif_frames: Vec<GifFrame> = frames
+        .into_iter()
+        .map(|f| {
+            let (numer, denom) = f.delay().numer_denom_ms();
+            let delay_ms = if denom > 0 { numer / denom } else { 100 };
+            // GIF spec: delay of 0 means "as fast as possible", default to 100ms
+            let delay_ms = if delay_ms == 0 { 100 } else { delay_ms };
+            let raw = f.into_buffer();
+            // Downscale large frames to keep memory usage reasonable
+            let (w, h) = raw.dimensions();
+            let image = if w > MAX_DIM || h > MAX_DIM {
+                let scale = MAX_DIM as f64 / w.max(h) as f64;
+                let nw = (w as f64 * scale).max(1.0) as u32;
+                let nh = (h as f64 * scale).max(1.0) as u32;
+                fast_resize(&raw, nw, nh, fir::FilterType::Bilinear)
+            } else {
+                raw
+            };
+            GifFrame { image, delay_ms }
+        })
+        .collect();
 
     Some(gif_frames)
 }
@@ -143,10 +155,8 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
 /// premultiplied alpha internally, so pixel values are un-premultiplied before
 /// returning.
 fn load_svg(path: &Path) -> Result<RgbaImage> {
-    let tree = resvg::usvg::Tree::from_data(
-        &std::fs::read(path)?,
-        &resvg::usvg::Options::default(),
-    )?;
+    let tree =
+        resvg::usvg::Tree::from_data(&std::fs::read(path)?, &resvg::usvg::Options::default())?;
 
     let size = tree.size();
     // Render at 2x for quality, capped at 2048px

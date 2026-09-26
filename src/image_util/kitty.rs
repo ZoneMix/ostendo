@@ -229,10 +229,14 @@ mod tests {
     #[test]
     fn test_transmit_escape_small_image() {
         // Create a tiny 2x2 RGBA image
-        let img = image::RgbaImage::from_raw(2, 2, vec![
-            255, 0, 0, 255,  0, 255, 0, 255,
-            0, 0, 255, 255,  255, 255, 255, 255,
-        ]).unwrap();
+        let img = image::RgbaImage::from_raw(
+            2,
+            2,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap();
 
         let esc = transmit_escape(99, &img).unwrap();
         assert!(esc.contains("a=t"));
@@ -250,15 +254,18 @@ mod tests {
 
     #[test]
     fn test_animation_frame_escape_format() {
-        let img = image::RgbaImage::from_raw(2, 2, vec![
-            255, 0, 0, 255,  0, 255, 0, 255,
-            0, 0, 255, 255,  255, 255, 255, 255,
-        ]).unwrap();
+        let img = image::RgbaImage::from_raw(
+            2,
+            2,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap();
 
         let esc = animation_frame_escape(42, &img, 100).unwrap();
         assert!(esc.contains("a=f"));
         assert!(esc.contains("i=42"));
         assert!(esc.contains("z=100"));
     }
-
 }

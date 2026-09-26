@@ -26,11 +26,7 @@ use crate::theme::Theme;
 /// - Base64-encoded images as data URIs
 /// - Keyboard navigation (arrow keys, space)
 /// - Hidden speaker notes (toggled with 'N' key)
-pub fn export_html(
-    slides: &[Slide],
-    theme: &Theme,
-    output_path: &Path,
-) -> Result<()> {
+pub fn export_html(slides: &[Slide], theme: &Theme, output_path: &Path) -> Result<()> {
     let bg = &theme.colors.background;
     let text = &theme.colors.text;
     let accent = &theme.colors.accent;
@@ -132,7 +128,10 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
     // Slides
     for (i, slide) in slides.iter().enumerate() {
         let active = if i == 0 { " active" } else { "" };
-        html.push_str(&format!("<div class=\"slide{}\" data-slide=\"{}\">\n", active, i));
+        html.push_str(&format!(
+            "<div class=\"slide{}\" data-slide=\"{}\">\n",
+            active, i
+        ));
 
         // Title
         if !slide.title.is_empty() {
@@ -141,7 +140,10 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
 
         // Subtitle
         if !slide.subtitle.is_empty() {
-            html.push_str(&format!("<div class=\"subtitle\">{}</div>\n", escape_html(&slide.subtitle)));
+            html.push_str(&format!(
+                "<div class=\"subtitle\">{}</div>\n",
+                escape_html(&slide.subtitle)
+            ));
         }
 
         // Bullets
@@ -149,15 +151,22 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
             html.push_str("<ul>\n");
             for bullet in &slide.bullets {
                 let indent = "  ".repeat(bullet.depth);
-                html.push_str(&format!("{}<li>{}</li>\n", indent, escape_html(&bullet.text)));
+                html.push_str(&format!(
+                    "{}<li>{}</li>\n",
+                    indent,
+                    escape_html(&bullet.text)
+                ));
             }
             html.push_str("</ul>\n");
         }
 
         // Code blocks
         for cb in &slide.code_blocks {
-            html.push_str(&format!("<pre><code class=\"language-{}\">{}</code></pre>\n",
-                escape_html(&cb.language), escape_html(&cb.code)));
+            html.push_str(&format!(
+                "<pre><code class=\"language-{}\">{}</code></pre>\n",
+                escape_html(&cb.language),
+                escape_html(&cb.code)
+            ));
         }
 
         // Block quotes
@@ -190,7 +199,9 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
         if let Some(ref img) = slide.image {
             if img.path.exists() {
                 if let Ok(data) = std::fs::read(&img.path) {
-                    let ext = img.path.extension()
+                    let ext = img
+                        .path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("png")
                         .to_lowercase();
@@ -201,17 +212,24 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
                         "webp" => "image/webp",
                         _ => "image/png",
                     };
-                    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-                    html.push_str(&format!("<img src=\"data:{};base64,{}\" alt=\"{}\">\n",
-                        mime, b64, escape_html(&img.alt_text)));
+                    let b64 =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+                    html.push_str(&format!(
+                        "<img src=\"data:{};base64,{}\" alt=\"{}\">\n",
+                        mime,
+                        b64,
+                        escape_html(&img.alt_text)
+                    ));
                 }
             }
         }
 
         // Speaker notes (hidden by default)
         if !slide.notes.is_empty() {
-            html.push_str(&format!("<div class=\"notes\">{}</div>\n",
-                escape_html(&slide.notes).replace('\n', "<br>")));
+            html.push_str(&format!(
+                "<div class=\"notes\">{}</div>\n",
+                escape_html(&slide.notes).replace('\n', "<br>")
+            ));
         }
 
         html.push_str("</div>\n");
@@ -223,7 +241,8 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
 
     // Navigation JavaScript
     html.push_str("<script>\n");
-    html.push_str(r#"
+    html.push_str(
+        r#"
 let current = 0;
 const slides = document.querySelectorAll('.slide');
 const total = slides.length;
@@ -248,7 +267,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 showSlide(0);
-"#);
+"#,
+    );
     html.push_str("</script>\n");
     html.push_str("</body>\n</html>\n");
 
@@ -263,9 +283,9 @@ showSlide(0);
 /// before embedding in the HTML output.
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -280,13 +300,11 @@ mod tests {
 
     #[test]
     fn test_export_html_basic() {
-        let slides = vec![
-            Slide {
-                number: 1,
-                title: "Test Slide".to_string(),
-                ..Slide::default()
-            },
-        ];
+        let slides = vec![Slide {
+            number: 1,
+            title: "Test Slide".to_string(),
+            ..Slide::default()
+        }];
         let theme = Theme {
             name: "test".to_string(),
             slug: "test".to_string(),

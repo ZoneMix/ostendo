@@ -40,13 +40,25 @@ pub fn render_adaptive(
     pad: &str,
 ) -> Vec<StyledLine> {
     let fallback_chain: &[DiagramStyle] = match style {
-        DiagramStyle::Box => &[DiagramStyle::Box, DiagramStyle::Bracket, DiagramStyle::Vertical],
+        DiagramStyle::Box => &[
+            DiagramStyle::Box,
+            DiagramStyle::Bracket,
+            DiagramStyle::Vertical,
+        ],
         DiagramStyle::Bracket => &[DiagramStyle::Bracket, DiagramStyle::Vertical],
         DiagramStyle::Vertical => &[DiagramStyle::Vertical],
     };
 
     for &try_style in fallback_chain {
-        let lines = render_with_style(graph, try_style, content_width, accent, text_color, dim_color, pad);
+        let lines = render_with_style(
+            graph,
+            try_style,
+            content_width,
+            accent,
+            text_color,
+            dim_color,
+            pad,
+        );
         let widest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
         if widest <= max_width {
             return lines;
@@ -55,7 +67,15 @@ pub fn render_adaptive(
         // with truncated labels. This preserves box/bracket visuals at the
         // cost of shorter labels, which is preferable to losing the style.
         let truncated = truncate_graph_labels_for_style(graph, max_width, pad, try_style);
-        let lines = render_with_style(&truncated, try_style, content_width, accent, text_color, dim_color, pad);
+        let lines = render_with_style(
+            &truncated,
+            try_style,
+            content_width,
+            accent,
+            text_color,
+            dim_color,
+            pad,
+        );
         let widest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
         if widest <= max_width {
             return lines;
@@ -64,7 +84,15 @@ pub fn render_adaptive(
 
     // All styles overflow even with truncation — use truncated Vertical as last resort.
     let truncated = truncate_graph_labels_for_style(graph, max_width, pad, DiagramStyle::Vertical);
-    render_with_style(&truncated, DiagramStyle::Vertical, content_width, accent, text_color, dim_color, pad)
+    render_with_style(
+        &truncated,
+        DiagramStyle::Vertical,
+        content_width,
+        accent,
+        text_color,
+        dim_color,
+        pad,
+    )
 }
 
 /// Render a diagram using a specific style (no fallback).
@@ -78,9 +106,15 @@ fn render_with_style(
     pad: &str,
 ) -> Vec<StyledLine> {
     match style {
-        DiagramStyle::Box => render_box::render(graph, content_width, accent, text_color, dim_color, pad),
-        DiagramStyle::Bracket => render_bracket::render(graph, content_width, accent, text_color, dim_color, pad),
-        DiagramStyle::Vertical => render_vertical::render(graph, content_width, accent, text_color, dim_color, pad),
+        DiagramStyle::Box => {
+            render_box::render(graph, content_width, accent, text_color, dim_color, pad)
+        }
+        DiagramStyle::Bracket => {
+            render_bracket::render(graph, content_width, accent, text_color, dim_color, pad)
+        }
+        DiagramStyle::Vertical => {
+            render_vertical::render(graph, content_width, accent, text_color, dim_color, pad)
+        }
     }
 }
 
@@ -90,7 +124,10 @@ fn render_with_style(
 /// Computes per-style overhead (borders, arrows, padding) and divides
 /// the remaining space equally among node labels.
 fn truncate_graph_labels_for_style(
-    graph: &DiagramGraph, max_width: usize, pad: &str, style: DiagramStyle,
+    graph: &DiagramGraph,
+    max_width: usize,
+    pad: &str,
+    style: DiagramStyle,
 ) -> DiagramGraph {
     let pad_len = pad.len();
     // Per-style overhead per node and arrow
@@ -110,7 +147,8 @@ fn truncate_graph_labels_for_style(
             new_rows.push(row.clone());
             continue;
         }
-        let overhead = pad_len + indent + n * per_node_overhead + (n.saturating_sub(1)) * arrow_width;
+        let overhead =
+            pad_len + indent + n * per_node_overhead + (n.saturating_sub(1)) * arrow_width;
         let available = max_width.saturating_sub(overhead);
         let max_label = if n > 0 { available / n } else { available };
         // Minimum 3 chars so truncated labels are still readable (e.g. "Ab…")
@@ -169,9 +207,21 @@ mod tests {
 
     fn test_colors() -> (Color, Color, Color) {
         (
-            Color::Rgb { r: 189, g: 147, b: 249 },
-            Color::Rgb { r: 248, g: 248, b: 242 },
-            Color::Rgb { r: 98, g: 114, b: 164 },
+            Color::Rgb {
+                r: 189,
+                g: 147,
+                b: 249,
+            },
+            Color::Rgb {
+                r: 248,
+                g: 248,
+                b: 242,
+            },
+            Color::Rgb {
+                r: 98,
+                g: 114,
+                b: 164,
+            },
         )
     }
 
@@ -182,31 +232,58 @@ mod tests {
         // Wide terminal — should keep Box style
         let lines = render_adaptive(&graph, DiagramStyle::Box, 80, 120, accent, text, dim, "  ");
         // Box style has "┌" characters
-        let all_text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.text.as_str()).collect();
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.text.as_str())
+            .collect();
         assert!(all_text.contains("┌"), "Expected box-style output");
     }
 
     #[test]
     fn test_adaptive_truncates_box_before_bracket() {
         // Long labels that overflow at Box style — should try truncated Box first
-        let graph = parser::parse("Very Long Node Name -> Another Very Long Name -> Third Long One");
+        let graph =
+            parser::parse("Very Long Node Name -> Another Very Long Name -> Third Long One");
         let (accent, text, dim) = test_colors();
         let box_lines = render_with_style(&graph, DiagramStyle::Box, 60, accent, text, dim, "  ");
         let box_max = box_lines.iter().map(|l| l.width()).max().unwrap_or(0);
-        let bracket_lines = render_with_style(&graph, DiagramStyle::Bracket, 60, accent, text, dim, "  ");
+        let bracket_lines =
+            render_with_style(&graph, DiagramStyle::Bracket, 60, accent, text, dim, "  ");
         let bracket_max = bracket_lines.iter().map(|l| l.width()).max().unwrap_or(0);
 
         if box_max > bracket_max {
             // Set max_width between bracket_max and box_max — should try truncated Box
-            let lines = render_adaptive(&graph, DiagramStyle::Box, 60, bracket_max, accent, text, dim, "  ");
-            let all_text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.text.as_str()).collect();
+            let lines = render_adaptive(
+                &graph,
+                DiagramStyle::Box,
+                60,
+                bracket_max,
+                accent,
+                text,
+                dim,
+                "  ",
+            );
+            let all_text: String = lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .map(|s| s.text.as_str())
+                .collect();
             // Truncated Box should preserve box borders with shortened labels
             let has_box = all_text.contains('┌');
             let has_bracket = all_text.contains('[');
             // Either truncated Box fits, or it falls back to bracket — both are valid
-            assert!(has_box || has_bracket, "Should render as truncated Box or Bracket");
+            assert!(
+                has_box || has_bracket,
+                "Should render as truncated Box or Bracket"
+            );
             let widest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
-            assert!(widest <= bracket_max, "Output {} exceeds max_width {}", widest, bracket_max);
+            assert!(
+                widest <= bracket_max,
+                "Output {} exceeds max_width {}",
+                widest,
+                bracket_max
+            );
         }
     }
 
@@ -236,7 +313,11 @@ mod tests {
         // pad="  " (2), indent=2, arrow=3, 2 nodes => overhead=7, available=13, max_label=6
         let truncated = truncate_graph_labels_for_style(&graph, 20, "  ", DiagramStyle::Vertical);
         for node in &truncated.rows[0].nodes {
-            assert!(node.label.chars().count() <= 6, "Label '{}' exceeds max", node.label);
+            assert!(
+                node.label.chars().count() <= 6,
+                "Label '{}' exceeds max",
+                node.label
+            );
         }
     }
 }
