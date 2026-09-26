@@ -157,7 +157,10 @@ impl Presenter {
                 self.font.request(Some(self.current));
             }
             Mode::Overview => self.overview_key(key.code),
-            Mode::Command | Mode::Goto => return self.prompt_key(key.code),
+            Mode::Command | Mode::Goto => {
+                let typed = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+                return self.prompt_key(key.code, typed);
+            }
             Mode::Normal => return self.normal_key(key.code, ctrl),
         }
         false
@@ -223,7 +226,8 @@ impl Presenter {
         self.mode = mode;
     }
 
-    fn prompt_key(&mut self, code: KeyCode) -> bool {
+    /// `typed` is false for chords (Ctrl/Alt), which never insert text.
+    fn prompt_key(&mut self, code: KeyCode, typed: bool) -> bool {
         match code {
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Backspace => {
@@ -242,7 +246,7 @@ impl Presenter {
                     _ => self.execute_command(&input),
                 };
             }
-            KeyCode::Char(c) if self.mode == Mode::Command || c.is_ascii_digit() => {
+            KeyCode::Char(c) if typed && (self.mode == Mode::Command || c.is_ascii_digit()) => {
                 self.input.push(c)
             }
             _ => {}
