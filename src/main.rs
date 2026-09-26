@@ -1,263 +1,311 @@
-//! Ostendo -- AI-native terminal presentations from markdown.
-//!
-//! This is the CLI entry point using the `clap` argument parser. It handles
-//! argument validation, presentation loading, and launching the TUI presenter.
-//!
-//! # Execution Flow
-//! 1. Parse CLI arguments via [`Cli`] (powered by `clap`).
-//! 2. Load the theme registry (all 29 built-in themes).
-//! 3. Handle "early exit" flags: `--list-themes`, `--detect-protocol`, `--count`,
-//!    `--export-titles`, `--validate`, `--export`.
-//! 4. Parse the markdown file into slides via [`markdown::parse_presentation`].
-//! 5. Optionally start the WebSocket remote control server.
-//! 6. Create a [`render::Presenter`] and call [`run()`](render::Presenter::run)
-//!    to enter the interactive TUI loop.
+//! Ostendo: present markdown slides in the terminal.
 
+mod code;
+mod diagram;
+mod export;
+mod image_util;
 mod markdown;
 mod presentation;
-mod render;
 mod remote;
+mod render;
 mod terminal;
 mod theme;
-mod code;
-mod image_util;
-mod export;
 mod watch;
-mod diagram;
 
-use anyhow::Result;
-use clap::Parser;
-use std::path::PathBuf;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 
-/// Command-line arguments for the Ostendo presentation tool.
-///
-/// Parsed automatically by `clap` from `std::env::args`. The `#[derive(Parser)]`
-/// macro generates argument parsing code from the struct fields and their
-/// `#[arg(...)]` attributes. Each field becomes a CLI flag or positional argument.
-#[derive(Parser, Debug)]
-#[command(name = "ostendo", about = "Terminal-based presentation tool", version)]
-pub struct Cli {
-    /// Path to the markdown presentation file
-    pub file: Option<PathBuf>,
+use anyhow::{bail, Context, Result};
+use clap::{Parser, ValueEnum};
 
-    /// Theme slug to use
-    #[arg(short, long, default_value = "terminal_green")]
-    pub theme: String,
+use presentation::{PresentationMeta, Slide};
+use terminal::protocols::ImageProtocol;
+use theme::{Theme, ThemeRegistry};
 
-    /// Start at specific slide number
-    #[arg(short, long, default_value_t = 1)]
-    pub slide: usize,
+const DEFAULT_THEME: &str = "terminal_green";
 
-    /// Image render mode (auto, kitty, iterm, sixel, ascii)
-    #[arg(long, default_value = "auto")]
-    pub image_mode: String,
+#[derive(Parser)]
+#[command(
+    name = "ostendo",
+    version,
+    about = "Present markdown slides in your terminal"
+)]
+struct Cli {
+    /// Markdown presentation to show
+    #[arg(required_unless_present_any = ["list_themes", "detect_protocol"])]
+    file: Option<PathBuf>,
 
-    /// List available themes and exit
+    /// Theme slug (overrides the front matter; see --list-themes)
+    #[arg(short, long, value_name = "SLUG")]
+    theme: Option<String>,
+
+    /// Slide to start on (default: where you left off)
+    #[arg(short, long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    slide: Option<u32>,
+
+    /// Image protocol
+    #[arg(long, value_enum, default_value_t = ImageMode::Auto)]
+    image_mode: ImageMode,
+
+    /// Content width as a percentage of the terminal
+    #[arg(long, value_name = "PERCENT", default_value_t = 80, value_parser = clap::value_parser!(u8).range(40..=100))]
+    scale: u8,
+
+    /// Hide the status bar
     #[arg(long)]
-    pub list_themes: bool,
+    fullscreen: bool,
 
-    /// Enable WebSocket remote control
+    /// Start the timer immediately
     #[arg(long)]
-    pub remote: bool,
+    timer: bool,
 
-    /// Remote control port
-    #[arg(long, default_value_t = 8765)]
-    pub remote_port: u16,
-
-    /// Validate presentation without running TUI
+    /// Never run code blocks (hides the Ctrl+E hints)
     #[arg(long)]
-    pub validate: bool,
+    no_exec: bool,
 
-    /// Print slide count and exit
+    /// Serve a browser remote control on 127.0.0.1
     #[arg(long)]
-    pub count: bool,
+    remote: bool,
 
-    /// Export slide titles to stdout (one per line)
+    #[arg(long, value_name = "PORT", default_value_t = 8765, requires = "remote")]
+    remote_port: u16,
+
+    /// Require this token for remote connections ([A-Za-z0-9._~-])
+    #[arg(long, value_name = "TOKEN", requires = "remote")]
+    remote_token: Option<String>,
+
+    /// Let the remote run code blocks
+    #[arg(long, requires = "remote")]
+    remote_exec: bool,
+
+    /// Check the presentation and exit (non-zero status on problems)
     #[arg(long)]
-    pub export_titles: bool,
+    validate: bool,
 
-    /// Detect and print image protocol, then exit
+    /// Write the presentation to a file and exit
+    #[arg(long, value_enum, value_name = "FORMAT")]
+    export: Option<ExportFormat>,
+
+    /// Output path for --export (default: next to the input)
+    #[arg(short, long, value_name = "PATH", requires = "export")]
+    output: Option<PathBuf>,
+
+    /// List themes and exit
     #[arg(long)]
-    pub detect_protocol: bool,
+    list_themes: bool,
 
-    /// Override content scale (50-200, default 80)
+    /// Print the slide count and exit
     #[arg(long)]
-    pub scale: Option<u8>,
+    count: bool,
 
-    /// Start with fullscreen mode (no status bar)
+    /// Print slide titles, one per line, and exit
     #[arg(long)]
-    pub fullscreen: bool,
+    export_titles: bool,
 
-    /// Start with timer running
+    /// Print the image protocol this terminal supports and exit
     #[arg(long)]
-    pub timer: bool,
-
-    /// Export presentation to HTML or PDF
-    #[arg(long, value_name = "FORMAT")]
-    pub export: Option<String>,
-
-    /// Output path for export (default: presentation name with new extension)
-    #[arg(short, long, value_name = "PATH")]
-    pub output: Option<PathBuf>,
-
-    /// Allow code execution from remote control (WebSocket). Default: disabled
-    #[arg(long)]
-    pub remote_exec: bool,
-
-    /// Disable all code execution (+exec/+pty blocks). Hides exec badges.
-    #[arg(long)]
-    pub no_exec: bool,
-
-    /// Bearer token for WebSocket remote control authentication
-    #[arg(long)]
-    pub remote_token: Option<String>,
+    detect_protocol: bool,
 }
 
-/// Application entry point.
-///
-/// Returns `anyhow::Result` so that any error — from file I/O, parsing, or the
-/// TUI render loop — is printed with full context and a non-zero exit code.
-fn main() -> Result<()> {
-    // Parse CLI arguments. clap handles --help and --version automatically.
-    let cli = Cli::parse();
+#[derive(Clone, Copy, ValueEnum)]
+enum ImageMode {
+    Auto,
+    Kitty,
+    Iterm,
+    Sixel,
+    Ascii,
+}
 
-    // Load all built-in themes from compiled YAML sources.
-    let registry = theme::ThemeRegistry::load();
+#[derive(Clone, Copy, ValueEnum)]
+enum ExportFormat {
+    Html,
+    Pdf,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let registry = ThemeRegistry::load();
 
     if cli.list_themes {
-        println!("Available themes:");
-        for name in registry.list() {
-            println!("  {}", name);
-        }
+        list_themes(&registry);
         return Ok(());
     }
-
     if cli.detect_protocol {
-        let proto = terminal::protocols::detect_protocol();
-        println!("{:?}", proto);
+        println!("{:?}", terminal::protocols::detect_protocol());
         return Ok(());
     }
 
-    let file = cli.file.unwrap_or_else(|| {
-        eprintln!("Error: no presentation file specified");
-        std::process::exit(1);
-    });
-
-    let theme = registry
-        .get(&cli.theme)
-        .unwrap_or_else(|| registry.get("terminal_green").expect("default theme missing"));
-
-    let source = std::fs::read_to_string(&file)?;
+    let file = cli.file.clone().context("no presentation file given")?;
+    let source = std::fs::read_to_string(&file)
+        .with_context(|| format!("cannot read {}", file.display()))?;
     let (meta, slides) = markdown::parse_presentation(&source, file.parent())?;
-
     if slides.is_empty() {
-        anyhow::bail!("No slides found in {:?}", file);
+        bail!("{} has no slides", file.display());
     }
 
     if cli.count {
         println!("{}", slides.len());
         return Ok(());
     }
-
     if cli.export_titles {
         for slide in &slides {
-            println!("{}", if slide.title.is_empty() { "(untitled)" } else { &slide.title });
-        }
-        return Ok(());
-    }
-
-    if cli.validate {
-        println!("Presentation: {:?}", file);
-        println!("Slides: {}", slides.len());
-        println!("Theme: {}", cli.theme);
-        let mut issues = Vec::new();
-        for slide in &slides {
-            // Check image paths
-            if let Some(ref img) = slide.image {
-                if !img.path.exists() {
-                    issues.push(format!(
-                        "Slide {}: image not found: {:?}", slide.number, img.path
-                    ));
+            println!(
+                "{}",
+                if slide.title.is_empty() {
+                    "(untitled)"
+                } else {
+                    &slide.title
                 }
-            }
-            // Check for empty slides
-            if slide.title.is_empty() && slide.bullets.is_empty()
-                && slide.code_blocks.is_empty() && slide.tables.is_empty()
-            {
-                issues.push(format!("Slide {}: appears empty (no title, bullets, code, or tables)", slide.number));
-            }
-        }
-        if issues.is_empty() {
-            println!("Status: OK - no issues found");
-        } else {
-            println!("Issues found: {}", issues.len());
-            for issue in &issues {
-                println!("  - {}", issue);
-            }
+            );
         }
         return Ok(());
     }
-
-    // Export mode — generate HTML or PDF and exit without starting the TUI.
-    if let Some(ref format) = cli.export {
-        let output_path = cli.output.clone().unwrap_or_else(|| {
-            let stem = file.file_stem().unwrap_or_default().to_string_lossy();
-            match format.as_str() {
-                "pdf" => PathBuf::from(format!("{}.pdf", stem)),
-                _ => PathBuf::from(format!("{}.html", stem)),
-            }
-        });
-        match format.as_str() {
-            "html" => {
-                export::html::export_html(&slides, &theme, &output_path)?;
-                println!("Exported HTML to {:?}", output_path);
-            }
-            "pdf" => {
-                export::pdf::export_pdf(&slides, &theme, &output_path)?;
-                println!("Exported PDF to {:?}", output_path);
-            }
-            _ => {
-                eprintln!("Unknown export format: {}. Use 'html' or 'pdf'.", format);
-                std::process::exit(1);
-            }
-        }
-        return Ok(());
+    if cli.validate {
+        return validate(&file, &meta, &slides, &registry, cli.theme.as_deref());
     }
 
-    // Start WebSocket remote control server in a background thread if --remote is set.
-    // Returns a pair of channels for bidirectional communication with the presenter.
-    let remote_channels = if cli.remote {
-        let url = if let Some(ref token) = cli.remote_token {
-            format!("http://127.0.0.1:{}/#token={}", cli.remote_port, token)
-        } else {
-            format!("http://127.0.0.1:{}", cli.remote_port)
+    let requested = cli.theme.clone().or_else(|| meta.theme.clone());
+    let theme = resolve_theme(&registry, requested.as_deref())?;
+
+    if let Some(format) = cli.export {
+        let ext = match format {
+            ExportFormat::Html => "html",
+            ExportFormat::Pdf => "pdf",
         };
-        let (rx, tx) = remote::server::start(cli.remote_port, cli.remote_token.clone())?;
-        eprintln!("Remote control: {}", url);
-        Some((rx, tx))
+        let output = cli
+            .output
+            .clone()
+            .unwrap_or_else(|| file.with_extension(ext));
+        match format {
+            ExportFormat::Html => export::html::export_html(&slides, &theme, &output)?,
+            ExportFormat::Pdf => export::pdf::export_pdf(&slides, &theme, &output)?,
+        }
+        println!("Wrote {}", output.display());
+        return Ok(());
+    }
+
+    let remote = if cli.remote {
+        let channels = remote::server::start(cli.remote_port, cli.remote_token.clone())?;
+        let fragment = cli
+            .remote_token
+            .as_ref()
+            .map(|t| format!("/#token={t}"))
+            .unwrap_or_default();
+        eprintln!(
+            "Remote control: http://127.0.0.1:{}{fragment}",
+            cli.remote_port
+        );
+        Some(channels)
     } else {
         None
     };
 
-    let mut presenter = render::Presenter::new(render::PresenterConfig {
+    render::Presenter::new(render::PresenterConfig {
         slides,
         meta,
         theme,
-        start: cli.slide.saturating_sub(1),
+        theme_explicit: requested.is_some(),
+        start: cli.slide.map(|n| n as usize - 1),
         presentation_path: file,
-        image_mode: cli.image_mode.clone(),
-        remote_channels,
-        no_exec: cli.no_exec,
-        remote_exec: cli.remote_exec,
-    });
-    if cli.fullscreen {
-        presenter.set_fullscreen(true);
+        image_protocol: match cli.image_mode {
+            ImageMode::Auto => None,
+            ImageMode::Kitty => Some(ImageProtocol::Kitty),
+            ImageMode::Iterm => Some(ImageProtocol::Iterm2),
+            ImageMode::Sixel => Some(ImageProtocol::Sixel),
+            ImageMode::Ascii => Some(ImageProtocol::Ascii),
+        },
+        remote,
+        allow_exec: !cli.no_exec,
+        allow_remote_exec: cli.remote_exec,
+        fullscreen: cli.fullscreen,
+        timer: cli.timer,
+        scale: cli.scale,
+    })
+    .run()
+}
+
+fn resolve_theme(registry: &ThemeRegistry, slug: Option<&str>) -> Result<Theme> {
+    let slug = slug.unwrap_or(DEFAULT_THEME);
+    registry
+        .get(slug)
+        .with_context(|| format!("unknown theme '{slug}' (run `ostendo --list-themes`)"))
+}
+
+fn list_themes(registry: &ThemeRegistry) {
+    let color = std::io::stdout().is_terminal();
+    for slug in registry.list() {
+        let Some(theme) = registry.get(&slug) else {
+            continue;
+        };
+        let swatch = if color {
+            let rgb =
+                |hex: &str| theme::colors::hex_to_color(hex).and_then(theme::colors::color_to_rgb);
+            match (rgb(&theme.colors.background), rgb(&theme.colors.accent)) {
+                (Some((br, bg, bb)), Some((ar, ag, ab))) => {
+                    format!("\x1b[48;2;{br};{bg};{bb}m\x1b[38;2;{ar};{ag};{ab}m ■■ \x1b[0m ")
+                }
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        };
+        println!("{swatch}{slug:<24} {}", theme.name);
     }
-    if cli.timer {
-        presenter.start_timer();
+}
+
+/// Reports problems that would show up during the talk.
+fn validate(
+    file: &Path,
+    meta: &PresentationMeta,
+    slides: &[Slide],
+    registry: &ThemeRegistry,
+    cli_theme: Option<&str>,
+) -> Result<()> {
+    let mut issues = Vec::new();
+    let theme = cli_theme.or(meta.theme.as_deref()).unwrap_or(DEFAULT_THEME);
+    if registry.get(theme).is_none() {
+        issues.push(format!("unknown theme '{theme}'"));
     }
-    if let Some(scale) = cli.scale {
-        presenter.set_default_scale(scale.clamp(50, 200));
+    for slide in slides {
+        let n = slide.number;
+        let images = slide.image.iter().map(|i| i.path.clone()).chain(
+            slide
+                .columns
+                .iter()
+                .flat_map(|c| &c.contents)
+                .filter_map(|c| c.image.as_ref().map(|i| PathBuf::from(&i.path))),
+        );
+        for path in images {
+            if !path.exists() {
+                issues.push(format!("slide {n}: image not found: {}", path.display()));
+            }
+        }
+        if let Some(slug) = &slide.theme_override {
+            if registry.get(slug).is_none() {
+                issues.push(format!("slide {n}: unknown theme '{slug}'"));
+            }
+        }
+        let columns = slide.columns.iter().flat_map(|c| &c.contents);
+        for cb in slide
+            .code_blocks
+            .iter()
+            .chain(columns.flat_map(|c| &c.code_blocks))
+        {
+            if cb.exec_mode.is_some() && !code::executor::is_supported(&cb.language) {
+                issues.push(format!("slide {n}: cannot run '{}' code", cb.language));
+            }
+        }
+        if slide.title.is_empty() && slide.subtitle.is_empty() && slide.blocks.is_empty() {
+            issues.push(format!("slide {n}: empty"));
+        }
     }
-    presenter.run()
+    println!("{}: {} slides, theme {theme}", file.display(), slides.len());
+    if issues.is_empty() {
+        println!("OK");
+        return Ok(());
+    }
+    for issue in &issues {
+        println!("  - {issue}");
+    }
+    bail!("{} problem(s) found", issues.len())
 }

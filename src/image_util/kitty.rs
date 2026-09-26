@@ -16,9 +16,6 @@ static NEXT_IMAGE_ID: AtomicU32 = AtomicU32::new(1);
 /// The protocol caps each escape's base64 payload at 4096 bytes.
 const CHUNK_SIZE: usize = 4096;
 
-/// Remove every placement on screen; image data stays cached in the terminal.
-pub const DELETE_ALL_PLACEMENTS: &str = "\x1b_Ga=d,d=a,q=2;AAAA\x1b\\";
-
 /// Remove every placement and free all transmitted image data.
 #[allow(
     dead_code,

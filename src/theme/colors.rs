@@ -1,17 +1,4 @@
-//! Color utilities including hex parsing, interpolation, and WCAG 2.0 contrast checking.
-//!
-//! This module provides the low-level color manipulation functions used
-//! throughout the theme system and renderer. Key capabilities:
-//!
-//! - **Hex conversion**: [`hex_to_color`] and [`color_to_hex`] convert between
-//!   `"#RRGGBB"` strings and crossterm's [`Color`] type.
-//! - **Interpolation**: [`interpolate_color`] linearly blends two colors for
-//!   gradient rendering.
-//! - **Contrast checking**: [`contrast_ratio`] and [`relative_luminance`]
-//!   implement the WCAG 2.0 algorithm so the theme system can verify that
-//!   text is readable against its background.
-//! - **Adjustment**: [`lighten_color`] and [`ensure_badge_contrast`] tweak
-//!   colors to meet minimum contrast thresholds.
+//! Hex parsing, blending, and WCAG 2.0 contrast for theme colors.
 
 use crossterm::style::Color;
 
@@ -26,31 +13,6 @@ pub fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
     match color {
         Color::Rgb { r, g, b } => Some((r, g, b)),
         _ => None,
-    }
-}
-
-/// Lighten an RGB color by mixing it toward pure white.
-///
-/// The `amount` parameter controls how far to shift: `0.0` returns the
-/// original color unchanged, `1.0` returns pure white. Values in between
-/// produce a proportional blend. Non-RGB colors are returned unchanged.
-///
-/// # Parameters
-/// - `color` — the base color to lighten.
-/// - `amount` — blend factor from `0.0` (no change) to `1.0` (white).
-pub fn lighten_color(color: Color, amount: f64) -> Color {
-    if let Some((r, g, b)) = color_to_rgb(color) {
-        // For each channel, move `amount` of the way from the current value toward 255 (white).
-        let r2 = (r as f64 + (255.0 - r as f64) * amount).min(255.0) as u8;
-        let g2 = (g as f64 + (255.0 - g as f64) * amount).min(255.0) as u8;
-        let b2 = (b as f64 + (255.0 - b as f64) * amount).min(255.0) as u8;
-        Color::Rgb {
-            r: r2,
-            g: g2,
-            b: b2,
-        }
-    } else {
-        color
     }
 }
 
@@ -105,26 +67,6 @@ pub fn contrast_ratio(c1: Color, c2: Color) -> f64 {
     // The lighter luminance goes in the numerator per the WCAG formula.
     let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
     (lighter + 0.05) / (darker + 0.05)
-}
-
-/// Ensure a badge background has sufficient contrast against the page background.
-///
-/// If the contrast ratio between `badge_bg` and `page_bg` is below `1.5`,
-/// the badge background is lightened by 30% to improve visibility.
-///
-/// # Parameters
-/// - `badge_bg` — the badge's current background color.
-/// - `page_bg` — the slide/page background color.
-///
-/// # Returns
-/// Either the original `badge_bg` (if contrast is sufficient) or a lightened
-/// version of it.
-pub fn ensure_badge_contrast(badge_bg: Color, page_bg: Color) -> Color {
-    if contrast_ratio(badge_bg, page_bg) < 1.5 {
-        lighten_color(badge_bg, 0.30)
-    } else {
-        badge_bg
-    }
 }
 
 /// Linearly interpolate between two RGB colors.

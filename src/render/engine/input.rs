@@ -1,577 +1,332 @@
-//! Event loop and input handling.
-//!
-//! Processes keyboard events, mouse input (scroll wheel), terminal resize
-//! events, and commands from the optional WebSocket remote control server.
-//!
-//! # Event Loop Design
-//!
-//! The main loop uses `crossterm::event::poll()` with a dynamic timeout:
-//! - **33ms** (~30 fps) when animations or GIFs are active.
-//! - **100ms** when idle (saves CPU while still updating the timer).
-//!
-//! All pending events are drained in a tight inner loop before rendering,
-//! which prevents mouse scroll flooding from causing redundant redraws.
-//! After input handling, animation ticks, GIF frame advances, code execution
-//! polling, hot reload checks, and remote command polling all happen in sequence.
+//! The event loop and keyboard handling.
 
-use super::*;
+use std::io::{self, Write};
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
+
+use super::types::Mode;
+use super::Presenter;
+
+/// Frame interval while something is moving.
+const ANIMATION_TICK: Duration = Duration::from_millis(16);
+/// Upper bound on sleeping, so file changes and remote commands are noticed.
+const IDLE_TICK: Duration = Duration::from_millis(250);
 
 impl Presenter {
-    /// The main event loop that drives the presentation.
-    ///
-    /// This function blocks until the user presses `q` (or another quit trigger).
-    /// Each iteration:
-    /// 1. Checks for completed background GIF loading.
-    /// 2. Drains pre-rendered GIF frames from the background render thread.
-    /// 3. Polls for terminal events with a dynamic timeout.
-    /// 4. Drains all pending events (prevents mouse flooding).
-    /// 5. Renders a frame if input was received or the timer is running.
-    /// 6. Ticks active animations (transitions, entrances, loops).
-    /// 7. Advances GIF frames if their delay has elapsed.
-    /// 8. Polls for streaming code execution output.
-    /// 9. Checks for file changes (hot reload).
-    /// 10. Polls for WebSocket remote commands.
     pub(crate) fn event_loop(&mut self) -> Result<()> {
-        self.render_frame()?;
-        self.broadcast_state();
+        let mut out = io::stdout();
         loop {
-            // Check if background GIF loading has completed.
-            // Only stores the decoded frames — NO synchronous encoding or
-            // transmission here. GIF frames are rendered lazily in render_frame()
-            // on first visit to the GIF slide (same as static images).
-            if let Some(handle) = self.gif_loading.take() {
-                if handle.is_finished() {
-                    if let Ok(loaded) = handle.join() {
-                        self.gif_frames
-                            .extend(loaded.into_iter().map(|(k, v)| (k, std::sync::Arc::new(v))));
-                        self.needs_full_redraw = true;
-                    }
-                } else {
-                    self.gif_loading = Some(handle);
-                }
-            }
-
-            // Dynamic poll timeout: 33ms when animation/GIF active (~30fps), 100ms otherwise.
-            // Kitty native animation: terminal drives GIF, so no app-side polling needed.
-            let has_active_gif = self.current_slide_has_gif();
-            let kitty_drives_gif = has_active_gif
-                && self.kitty_animation_cap
-                    == crate::terminal::protocols::KittyAnimationCapability::Supported
-                && self.slides[self.current]
-                    .image
-                    .as_ref()
-                    .map(|img| self.kitty_gif_ids.contains_key(&img.path))
-                    .unwrap_or(false);
-            let needs_gif_polling = has_active_gif && !kitty_drives_gif;
-            let poll_ms = if self.active_animation.is_some()
-                || !self.active_loop.is_empty()
-                || needs_gif_polling
-            {
-                33
-            } else {
-                100
-            };
-            let mut had_input = false;
-            if event::poll(std::time::Duration::from_millis(poll_ms))? {
-                // Drain ALL pending events before rendering (prevents mouse event flooding)
+            self.render(&mut out)?;
+            self.broadcast_state();
+            if event::poll(self.poll_timeout())? {
                 loop {
-                    match event::read()? {
-                        Event::Key(key) => {
-                            if self.handle_key(key)? {
-                                return Ok(());
-                            }
-                            had_input = true;
-                        }
-                        Event::Mouse(mouse) => {
-                            match mouse.kind {
-                                MouseEventKind::ScrollUp => {
-                                    self.scroll_up(3);
-                                    had_input = true;
-                                }
-                                MouseEventKind::ScrollDown => {
-                                    self.scroll_down(3);
-                                    had_input = true;
-                                }
-                                _ => {} // ignore move/drag events
-                            }
-                        }
-                        Event::Resize(w, h) => {
-                            self.width = w;
-                            self.height = h;
-                            self.window_size = WindowSize::query();
-                            self.needs_full_redraw = true;
-                            had_input = true;
-                        }
-                        _ => {}
+                    if self.handle_event(event::read()?) {
+                        return Ok(());
                     }
-                    // Drain remaining events without blocking
-                    if !event::poll(std::time::Duration::from_millis(0))? {
+                    if !event::poll(Duration::ZERO)? {
                         break;
                     }
                 }
-                if had_input {
-                    self.render_frame()?;
-                    self.broadcast_state();
-                }
-            } else if self.timer_start.is_some() && self.mode == Mode::Normal {
-                self.render_frame()?;
-                self.broadcast_state();
             }
-
-            // Tick active animation
-            if let Some(ref mut anim) = self.active_animation {
-                anim.tick();
-                if anim.is_done() {
-                    // Chain: transition -> entrance animation if slide has one
-                    if matches!(anim.kind, AnimationKind::Transition(_)) {
-                        let slide = &self.slides[self.current];
-                        if let Some(ea) = slide.entrance_animation {
-                            self.active_animation = Some(AnimationState::new_entrance(ea));
-                        } else {
-                            self.active_animation = None;
-                        }
-                    } else {
-                        self.active_animation = None;
-                    }
-                    // Don't render now — the previous tick already showed a
-                    // near-final frame.  Rendering immediately would cause a
-                    // visible "pop" from ~97% brightness to 100%.  The next
-                    // event-loop iteration will do a clean render instead.
-                    self.needs_full_redraw = true;
-                } else {
-                    self.needs_full_redraw = true;
-                    self.render_frame()?;
-                }
-            }
-
-            // Tick loop animations
-            if !self.active_loop.is_empty() {
-                for (_, ref mut frame) in self.active_loop.iter_mut() {
-                    *frame += 1;
-                }
-                self.needs_full_redraw = true;
-                // Only render loop when no transition/entrance is active
-                if self.active_animation.is_none() {
-                    self.render_frame()?;
-                }
-            }
-
-            // Advance animated GIF frame if delay has elapsed.
-            // Skip when Kitty native animation is active — terminal drives playback.
-            if needs_gif_polling && self.advance_gif_frame() {
-                self.needs_full_redraw = true;
-                if self.active_animation.is_none() {
-                    self.render_frame()?;
-                }
-            }
-
-            // Poll for streaming code execution output (only re-render in Normal mode)
-            if self.mode == Mode::Normal && self.poll_exec_output() {
-                self.needs_full_redraw = true;
-                self.render_frame()?;
-            }
-
-            // Poll for file changes (hot reload)
-            if let Some(ref watcher) = self.file_watcher {
-                if watcher.check_modified() {
-                    self.try_reload();
-                    self.render_frame()?;
-                }
-            }
-
-            // Poll for remote commands
-            self.poll_remote()?;
+            self.tick();
         }
     }
 
-    /// Poll the WebSocket remote control channel for incoming commands.
-    ///
-    /// Drains all queued commands without blocking. Each command maps to the
-    /// same action as its keyboard equivalent (next slide, toggle notes, etc.).
-    /// If any command was received, triggers a re-render and broadcasts the
-    /// updated state back to connected clients.
-    ///
-    /// The receiver is temporarily taken out of `self` via `Option::take()` to
-    /// avoid a borrow conflict (we need `&mut self` for the command handlers
-    /// while also reading from the receiver). It is put back after processing.
-    pub(crate) fn poll_remote(&mut self) -> Result<()> {
-        // Take the receiver out to avoid borrow conflict with &mut self
-        let rx = match self.remote_rx.take() {
-            Some(rx) => rx,
-            None => return Ok(()),
-        };
-        let mut got_command = false;
-        while let Ok(cmd) = rx.try_recv() {
-            match cmd {
-                crate::remote::RemoteCommand::Next => self.next_slide(),
-                crate::remote::RemoteCommand::Prev => self.prev_slide(),
-                crate::remote::RemoteCommand::Goto(n) => self.goto_slide(n.saturating_sub(1)),
-                crate::remote::RemoteCommand::NextSection => self.next_section(),
-                crate::remote::RemoteCommand::PrevSection => self.prev_section(),
-                crate::remote::RemoteCommand::ScrollUp => self.scroll_up(3),
-                crate::remote::RemoteCommand::ScrollDown => self.scroll_down(3),
-                crate::remote::RemoteCommand::ToggleFullscreen => self.toggle_fullscreen(),
-                crate::remote::RemoteCommand::ToggleNotes => self.toggle_notes(),
-                crate::remote::RemoteCommand::ToggleThemeName => self.toggle_theme_name(),
-                crate::remote::RemoteCommand::ToggleSections => self.toggle_sections(),
-                crate::remote::RemoteCommand::ToggleDarkMode => self.toggle_dark_mode(),
-                crate::remote::RemoteCommand::ScaleUp => self.scale_up(),
-                crate::remote::RemoteCommand::ScaleDown => self.scale_down(),
-                crate::remote::RemoteCommand::ImageScaleUp => self.image_scale_up(),
-                crate::remote::RemoteCommand::ImageScaleDown => self.image_scale_down(),
-                crate::remote::RemoteCommand::FontUp => self.adjust_font_offset(1),
-                crate::remote::RemoteCommand::FontDown => self.adjust_font_offset(-1),
-                crate::remote::RemoteCommand::FontReset => self.reset_font_offset(),
-                crate::remote::RemoteCommand::ExecuteCode => {
-                    if self.allow_remote_exec {
-                        self.execute_code();
-                    }
-                }
-                crate::remote::RemoteCommand::TimerStart => {
-                    if self.timer_start.is_none() {
-                        self.start_timer();
-                    }
-                }
-                crate::remote::RemoteCommand::TimerReset => self.reset_timer(),
-                crate::remote::RemoteCommand::SetTheme(slug) => {
-                    let registry = crate::theme::ThemeRegistry::load();
-                    if let Some(new_theme) = registry.get(&slug) {
-                        self.is_light_variant = new_theme.dark_variant.is_some();
-                        self.base_theme = new_theme.clone();
-                        self.apply_theme(new_theme);
-                    }
+    fn poll_timeout(&self) -> Duration {
+        let slide = &self.slides[self.current];
+        let gif = slide
+            .image
+            .as_ref()
+            .is_some_and(|i| self.images.is_animated(&i.path));
+        let moving = self.animation.is_some()
+            || !slide.loop_animations.is_empty()
+            || gif
+            || self.exec.is_some();
+        if moving && self.mode == Mode::Normal {
+            return ANIMATION_TICK;
+        }
+        match self.timer_start {
+            Some(start) => {
+                let into_second = start.elapsed().subsec_millis();
+                Duration::from_millis(u64::from(1000 - into_second) + 5).min(IDLE_TICK)
+            }
+            None => IDLE_TICK,
+        }
+    }
+
+    /// Advances everything time-driven; runs once per loop iteration.
+    fn tick(&mut self) {
+        if self.animation.as_ref().is_some_and(|a| a.is_done()) {
+            let finished = self.animation.take();
+            let entrance = self.slides[self.current].entrance_animation;
+            if let (Some(a), Some(e)) = (finished, entrance) {
+                if matches!(
+                    a.kind,
+                    crate::render::animation::AnimationKind::Transition(_)
+                ) {
+                    self.animation =
+                        Some(crate::render::animation::AnimationState::new_entrance(e));
                 }
             }
-            got_command = true;
         }
-        // Put the receiver back
-        self.remote_rx = Some(rx);
-        if got_command {
-            self.render_frame()?;
-            self.broadcast_state();
+        if self.images.poll_gif_loading() {
+            self.invalidate();
         }
+        if let Some(img) = &self.slides[self.current].image {
+            let path = img.path.clone();
+            self.images.advance_gif(&path);
+        }
+        if self.poll_exec_output() {
+            self.invalidate();
+        }
+        if self.watcher.as_ref().is_some_and(|w| w.check_modified()) {
+            self.reload();
+        }
+        self.poll_remote();
+    }
+
+    /// Composes the screen and writes whatever changed.
+    pub(crate) fn render(&mut self, out: &mut impl Write) -> Result<()> {
+        if let Some(size) = self.font.take_pending() {
+            self.change_font(size, out)?;
+        }
+        let screen = self.compose();
+        let transmit = self.images.take_outbox();
+        if !transmit.is_empty() {
+            out.write_all(&transmit)?;
+        }
+        self.display
+            .present(&screen, self.width, self.palette.text, out)?;
         Ok(())
     }
 
-    /// Broadcast the current presentation state to all connected WebSocket clients.
-    ///
-    /// Serializes a `StateMessage` containing the current slide number, title,
-    /// notes, timer, content, theme info, and all toggle states. This is sent
-    /// as JSON over the broadcast channel. If no receivers are connected,
-    /// the function returns immediately to avoid unnecessary work.
-    pub(crate) fn broadcast_state(&self) {
-        if let Some(ref tx) = self.state_broadcast {
-            if tx.receiver_count() == 0 {
-                return;
+    /// Changes the font size and waits briefly for the terminal to re-layout,
+    /// so the next frame is drawn once at the new size.
+    fn change_font(&mut self, size: f64, out: &mut impl Write) -> Result<()> {
+        crossterm::queue!(out, crossterm::terminal::BeginSynchronizedUpdate)?;
+        let before = (self.window.columns, self.window.rows);
+        self.font.apply(size, out);
+        let deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            self.window = crate::render::layout::WindowSize::query();
+            if (self.window.columns, self.window.rows) != before || Instant::now() >= deadline {
+                break;
             }
-            let slide = &self.slides[self.current];
-            let mut content: Vec<String> = Vec::new();
-            // Subtitle
-            if !slide.subtitle.is_empty() {
-                content.push(slide.subtitle.clone());
-                content.push(String::new());
-            }
-            // Bullets
-            for b in &slide.bullets {
-                let indent = "  ".repeat(b.depth);
-                content.push(format!("{}{}", indent, b.text));
-            }
-            // Code blocks
-            for cb in &slide.code_blocks {
-                content.push(String::new());
-                if !cb.label.is_empty() {
-                    content.push(format!("[{}]", cb.label));
-                }
-                for code_line in cb.code.lines() {
-                    content.push(format!("  {}", code_line));
-                }
-            }
-            // Block quotes
-            for bq in &slide.block_quotes {
-                content.push(String::new());
-                for qline in &bq.lines {
-                    content.push(format!("> {}", qline));
-                }
-            }
-            // Tables
-            for table in &slide.tables {
-                content.push(String::new());
-                content.push(table.headers.join(" | "));
-                for row in &table.rows {
-                    content.push(row.join(" | "));
-                }
-            }
-            // Column content
-            if let Some(ref cols) = slide.columns {
-                for (i, col) in cols.contents.iter().enumerate() {
-                    content.push(format!("--- Column {} ---", i + 1));
-                    for b in &col.bullets {
-                        let indent = "  ".repeat(b.depth);
-                        content.push(format!("{}{}", indent, b.text));
-                    }
-                    for cb in &col.code_blocks {
-                        for code_line in cb.code.lines() {
-                            content.push(format!("  {}", code_line));
-                        }
-                    }
-                }
-            }
-            let has_exec = self.allow_exec && !exec_blocks(slide).is_empty();
-            let font_offset = self
-                .slide_font_offsets
-                .get(&self.current)
-                .copied()
-                .unwrap_or(0);
-            let msg = crate::remote::StateMessage {
-                msg_type: "state".to_string(),
-                slide: self.current + 1,
-                total: self.slides.len(),
-                slide_title: slide.title.clone(),
-                notes: slide.notes.clone(),
-                timer: self.format_timer(),
-                slide_content: content,
-                section: slide.section.clone(),
-                is_fullscreen: self.show_fullscreen,
-                is_notes_visible: self.show_notes,
-                is_dark_mode: !self.is_light_variant,
-                show_theme_name: self.show_theme_name,
-                show_sections: self.show_sections,
-                theme_name: self.theme.name.clone(),
-                theme_slug: self.theme.slug.clone(),
-                scale: self.global_scale,
-                image_scale: self.image_scale_offset,
-                font_offset,
-                has_executable_code: has_exec,
-                timer_running: self.timer_start.is_some(),
-                themes: self.theme_slugs.clone(),
-                theme_bg: crate::theme::colors::color_to_hex(self.bg_color),
-                theme_accent: crate::theme::colors::color_to_hex(self.accent_color),
-                theme_text: crate::theme::colors::color_to_hex(self.text_color),
-            };
-            if let Ok(json) = serde_json::to_string(&msg) {
-                let _ = tx.send(json);
-            }
+            std::thread::sleep(Duration::from_millis(10));
         }
+        self.resize(self.window.columns, self.window.rows);
+        Ok(())
     }
 
-    /// Handle a keyboard event, dispatching based on the current mode.
-    ///
-    /// Returns `Ok(true)` if the user wants to quit (pressed `q` in Normal mode),
-    /// `Ok(false)` otherwise. The function first checks the current mode:
-    ///
-    /// - **Command** — Routes to `handle_command_key()` for `:` command input.
-    /// - **Goto** — Routes to `handle_goto_key()` for numeric slide input.
-    /// - **Help** — Any key returns to Normal mode.
-    /// - **Overview** — Arrow keys / vim keys navigate, Enter selects, Esc closes.
-    /// - **Normal** — Full keybinding set (navigation, toggles, scale, font, etc.).
-    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+    fn resize(&mut self, width: u16, height: u16) {
+        self.window = crate::render::layout::WindowSize::query();
+        self.width = width.max(1);
+        self.height = height.max(1);
+        self.images.clear();
+        self.display.invalidate();
+        super::terminal::set_background(self.palette.bg);
+    }
+
+    /// Handles one terminal event; returns true to quit.
+    fn handle_event(&mut self, event: Event) -> bool {
+        match event {
+            Event::Key(key) if key.kind != KeyEventKind::Release => return self.handle_key(key),
+            Event::Mouse(m) if self.mode == Mode::Normal => match m.kind {
+                MouseEventKind::ScrollDown => self.scroll_by(3),
+                MouseEventKind::ScrollUp => self.scroll_by(-3),
+                _ => {}
+            },
+            Event::Resize(w, h) => self.resize(w, h),
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && key.code == KeyCode::Char('c') {
+            return true;
+        }
         match self.mode {
-            Mode::Command => return self.handle_command_key(key),
-            Mode::Goto => return self.handle_goto_key(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
-                // Restore slide font instantly — no transition or stepping.
-                self.font_change_is_slide_transition = FontTransitionMode::None;
-                self.skip_next_font_stepping = true;
-                self.apply_slide_font();
-                self.needs_full_redraw = true;
-                return Ok(false);
+                self.font.request(Some(self.current));
             }
-            Mode::Overview => {
-                match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => {
-                        self.mode = Mode::Normal;
-                        self.font_change_is_slide_transition = FontTransitionMode::None;
-                        self.skip_next_font_stepping = true;
-                        self.apply_slide_font();
-                        self.needs_full_redraw = true;
-                    }
-                    KeyCode::Enter => {
-                        self.mode = Mode::Normal;
-                        self.font_change_is_slide_transition = FontTransitionMode::None;
-                        self.skip_next_font_stepping = true;
-                        self.apply_slide_font();
-                        self.needs_full_redraw = true;
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        if self.current < self.slides.len() - 1 {
-                            self.current += 1;
-                        }
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if self.current > 0 {
-                            self.current -= 1;
-                        }
-                    }
-                    KeyCode::Char('h') | KeyCode::Left => {
-                        // Jump to same position in previous column
-                        let th = self.height as usize;
-                        let rows_per_col = (th.saturating_sub(5)) / 2;
-                        if rows_per_col > 0 && self.current >= rows_per_col {
-                            self.current -= rows_per_col;
-                        }
-                    }
-                    KeyCode::Char('l') | KeyCode::Right => {
-                        let th = self.height as usize;
-                        let rows_per_col = (th.saturating_sub(5)) / 2;
-                        if rows_per_col > 0 && self.current + rows_per_col < self.slides.len() {
-                            self.current += rows_per_col;
-                        }
-                    }
-                    _ => {}
-                }
-                return Ok(false);
-            }
-            Mode::Normal => {}
+            Mode::Overview => self.overview_key(key.code),
+            Mode::Command | Mode::Goto => return self.prompt_key(key.code),
+            Mode::Normal => return self.normal_key(key.code, ctrl),
         }
+        false
+    }
 
-        match key.code {
-            KeyCode::Char('q') => return Ok(true),
-            KeyCode::Char('h') | KeyCode::Left => self.prev_slide(),
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(' ') => self.next_slide(),
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_down(1),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_up(1),
+    fn normal_key(&mut self, code: KeyCode, ctrl: bool) -> bool {
+        let page = isize::try_from(self.height / 2).unwrap_or(1);
+        match code {
+            KeyCode::Char('q') => return true,
+            KeyCode::Char('d') if ctrl => self.scroll_by(page),
+            KeyCode::Char('u') if ctrl => self.scroll_by(-page),
+            KeyCode::Char('e') if ctrl => self.execute_code(),
+            KeyCode::Right | KeyCode::Char('l' | ' ') | KeyCode::Enter | KeyCode::PageDown => {
+                self.next_slide()
+            }
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace | KeyCode::PageUp => {
+                self.prev_slide()
+            }
+            KeyCode::Home => self.goto_slide(0),
+            KeyCode::End => self.goto_slide(usize::MAX),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
             KeyCode::Char('J') => self.next_section(),
             KeyCode::Char('K') => self.prev_section(),
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_down(self.height as usize / 2);
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_up(self.height as usize / 2);
-            }
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.execute_code();
-            }
-            KeyCode::Char('g') => {
-                self.mode = Mode::Goto;
-                self.goto_buf.clear();
-            }
+            KeyCode::Char('g') => self.open_prompt(Mode::Goto),
+            KeyCode::Char(':') => self.open_prompt(Mode::Command),
             KeyCode::Char('n') => self.toggle_notes(),
-            KeyCode::Char('N') if self.show_notes => {
-                self.notes_scroll += 1;
-                self.needs_full_redraw = true;
+            KeyCode::Char('N') => self.notes_scroll += 1,
+            KeyCode::Char('P') => self.notes_scroll = self.notes_scroll.saturating_sub(1),
+            KeyCode::Char('f') => {
+                self.fullscreen_default = !self.fullscreen;
+                self.fullscreen = self.fullscreen_default;
             }
-            KeyCode::Char('P') if self.show_notes => {
-                self.notes_scroll = self.notes_scroll.saturating_sub(1);
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Char('f') => self.toggle_fullscreen(),
-            KeyCode::Char('T') => self.toggle_theme_name(),
+            KeyCode::Char('t') => self.toggle_timer(),
+            KeyCode::Char('T') => self.show_theme_name = !self.show_theme_name,
             KeyCode::Char('S') => self.toggle_sections(),
             KeyCode::Char('D') => self.toggle_dark_mode(),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.scale_up(),
-            KeyCode::Char('-') => self.scale_down(),
-            KeyCode::Char('>') => self.image_scale_up(),
-            KeyCode::Char('<') => self.image_scale_down(),
-            KeyCode::Char(']') if self.font_capability.is_available() => self.adjust_font_offset(1),
-            KeyCode::Char('[') if self.font_capability.is_available() => {
-                self.adjust_font_offset(-1)
-            }
-            KeyCode::Char('0')
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    || key.modifiers.contains(KeyModifiers::SUPER) =>
-            {
-                self.reset_font_offset()
-            }
-            KeyCode::Char('o') => {
-                self.mode = Mode::Overview;
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Char('?') => self.mode = Mode::Help,
-            KeyCode::Char(':') => {
-                self.mode = Mode::Command;
-                self.command_buf.clear();
-                self.needs_full_redraw = true;
+            KeyCode::Char('+' | '=') => self.adjust_scale(5),
+            KeyCode::Char('-') => self.adjust_scale(-5),
+            KeyCode::Char('>') => self.adjust_image_scale(10),
+            KeyCode::Char('<') => self.adjust_image_scale(-10),
+            KeyCode::Char(']') => self.adjust_font(1),
+            KeyCode::Char('[') => self.adjust_font(-1),
+            KeyCode::Char('0') => self.reset_font(),
+            KeyCode::Char('o') => self.open_overview(),
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help;
+                self.font.request(None);
             }
             _ => {}
         }
-        Ok(false)
+        false
     }
 
-    /// Handle keyboard input while in Command mode (`:` prompt at the bottom).
-    ///
-    /// Esc cancels, Enter executes the command, Backspace deletes, and any
-    /// printable character is appended to the command buffer. Always returns
-    /// `Ok(false)` since commands cannot quit the application directly.
-    pub(crate) fn handle_command_key(&mut self, key: KeyEvent) -> Result<bool> {
-        match key.code {
-            KeyCode::Esc => {
-                self.mode = Mode::Normal;
-                self.needs_full_redraw = true;
-            }
-            KeyCode::Enter => {
-                let cmd = self.command_buf.clone();
-                self.mode = Mode::Normal;
-                self.needs_full_redraw = true;
-                self.execute_command(&cmd);
-            }
-            KeyCode::Backspace => {
-                self.command_buf.pop();
-            }
-            KeyCode::Char(c) => self.command_buf.push(c),
-            _ => {}
-        }
-        Ok(false)
+    fn open_overview(&mut self) {
+        self.overview_sel = self.current;
+        self.mode = Mode::Overview;
+        self.font.request(None);
     }
 
-    /// Handle keyboard input while in Goto mode (`g` then type a slide number).
-    ///
-    /// Only accepts digit characters. Enter jumps to the entered slide number
-    /// (1-based), Esc cancels.
-    pub(crate) fn handle_goto_key(&mut self, key: KeyEvent) -> Result<bool> {
-        match key.code {
+    fn open_prompt(&mut self, mode: Mode) {
+        self.input.clear();
+        self.mode = mode;
+    }
+
+    fn prompt_key(&mut self, code: KeyCode) -> bool {
+        match code {
             KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Enter => {
-                if let Ok(n) = self.goto_buf.parse::<usize>() {
-                    self.goto_slide(n.saturating_sub(1));
+            KeyCode::Backspace => {
+                if self.input.pop().is_none() {
+                    self.mode = Mode::Normal;
                 }
-                self.mode = Mode::Normal;
             }
-            KeyCode::Char(c) if c.is_ascii_digit() => self.goto_buf.push(c),
+            KeyCode::Enter => {
+                let input = std::mem::take(&mut self.input);
+                let mode = std::mem::replace(&mut self.mode, Mode::Normal);
+                return match mode {
+                    Mode::Goto => {
+                        self.goto_number(&input);
+                        false
+                    }
+                    _ => self.execute_command(&input),
+                };
+            }
+            KeyCode::Char(c) if self.mode == Mode::Command || c.is_ascii_digit() => {
+                self.input.push(c)
+            }
             _ => {}
         }
-        Ok(false)
+        false
     }
 
-    /// Execute a colon command entered in Command mode.
-    ///
-    /// Supported commands:
-    /// - `:theme <slug>` — Switch to a named theme.
-    /// - `:goto <N>` — Jump to slide N (1-based).
-    /// - `:notes` — Toggle speaker notes panel.
-    /// - `:timer` / `:timer reset` — Start or reset the presentation timer.
-    /// - `:overview` — Enter overview grid mode.
-    /// - `:help` — Show the help overlay.
-    /// - `:reload` — Force-reload the presentation file from disk.
-    pub(crate) fn execute_command(&mut self, cmd: &str) {
-        let parts: Vec<&str> = cmd.trim().splitn(2, ' ').collect();
-        match parts.first().copied() {
-            Some("theme") => {
-                if let Some(slug) = parts.get(1) {
-                    let registry = crate::theme::ThemeRegistry::load();
-                    if let Some(new_theme) = registry.get(slug.trim()) {
-                        self.base_theme = new_theme.clone();
-                        self.apply_theme(new_theme);
-                    }
+    fn goto_number(&mut self, text: &str) {
+        if let Ok(n) = text.trim().parse::<usize>() {
+            self.goto_slide(n.saturating_sub(1));
+        }
+    }
+
+    /// Runs a `:` command; returns true to quit.
+    fn execute_command(&mut self, cmd: &str) -> bool {
+        let (name, arg) = cmd.trim().split_once(' ').unwrap_or((cmd.trim(), ""));
+        match name {
+            "q" | "quit" => return true,
+            "theme" => {
+                if let Some(theme) = self.registry.get(arg.trim()) {
+                    self.set_base_theme(theme);
+                    self.save_state();
                 }
             }
-            Some("goto") => {
-                if let Some(n) = parts.get(1).and_then(|s| s.trim().parse::<usize>().ok()) {
-                    self.goto_slide(n.saturating_sub(1));
+            "goto" => self.goto_number(arg),
+            n if n.parse::<usize>().is_ok() => self.goto_number(n),
+            "notes" => self.toggle_notes(),
+            "timer" => {
+                if arg.trim() == "reset" {
+                    self.timer_start = None;
+                } else {
+                    self.timer_start.get_or_insert_with(Instant::now);
                 }
             }
-            Some("notes") => self.toggle_notes(),
-            Some("timer") => {
-                if parts.get(1).map(|s| s.trim()) == Some("reset") {
-                    self.reset_timer();
-                } else if self.timer_start.is_none() {
-                    self.start_timer();
-                }
-            }
-            Some("overview") => self.mode = Mode::Overview,
-            Some("help") => self.mode = Mode::Help,
-            Some("reload") => self.try_reload(),
+            "overview" => self.open_overview(),
+            "help" => self.mode = Mode::Help,
+            "reload" => self.reload(),
             _ => {}
+        }
+        false
+    }
+
+    /// Rows of cards per overview page (must match `overview_screen`).
+    fn overview_rows(&self) -> usize {
+        (usize::from(self.height).saturating_sub(4) / 3).max(1)
+    }
+
+    fn overview_key(&mut self, code: KeyCode) {
+        let last = self.slides.len() - 1;
+        let rows = self.overview_rows();
+        let sel = self.overview_sel;
+        self.overview_sel = match code {
+            KeyCode::Down | KeyCode::Char('j') => (sel + 1).min(last),
+            KeyCode::Up | KeyCode::Char('k') => sel.saturating_sub(1),
+            KeyCode::Right | KeyCode::Char('l') => (sel + rows).min(last),
+            KeyCode::Left | KeyCode::Char('h') => sel.saturating_sub(rows),
+            KeyCode::Home => 0,
+            KeyCode::End => last,
+            KeyCode::Enter => {
+                self.mode = Mode::Normal;
+                self.font.request(Some(self.current));
+                self.goto_slide(sel);
+                return;
+            }
+            KeyCode::Esc | KeyCode::Char('o' | 'q') => {
+                self.mode = Mode::Normal;
+                self.font.request(Some(self.current));
+                return;
+            }
+            _ => sel,
+        };
+    }
+
+    fn adjust_font(&mut self, delta: i8) {
+        if self.font.available() {
+            self.font.adjust(self.current, delta);
+            self.save_state();
+        }
+    }
+
+    fn reset_font(&mut self) {
+        if self.font.available() {
+            self.font.reset(self.current);
+            self.save_state();
         }
     }
 }

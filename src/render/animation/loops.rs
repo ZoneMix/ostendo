@@ -1,31 +1,12 @@
-//! Continuous loop animations that run while a slide is displayed.
-//!
-//! Loop animations modify the rendered buffer on every frame. They never complete
-//! and are replaced only when the user navigates to a different slide.
+//! Loop animations that run while a slide is shown.
 
 use crossterm::style::Color;
 
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
-use crate::theme::colors::interpolate_color;
 
-use super::{line_to_string, LoopAnimation};
+use super::{cells, from_cells, LoopAnimation};
 
-/// Dispatch function: renders one frame of a loop animation, returning the modified buffer.
-///
-/// Called by the render engine on every tick. Unlike transitions and entrances, loop animations
-/// use the `frame` counter (incrementing each tick) rather than a 0.0-1.0 progress value,
-/// because they run indefinitely.
-///
-/// # Parameters
-/// - `buffer`: The current slide's fully-rendered content.
-/// - `animation`: Which loop effect to apply.
-/// - `frame`: Monotonically increasing frame counter (drives animation timing).
-/// - `accent`: The theme's accent color (used by bounce ball, pulse, and sparkle).
-/// - `bg`: The theme's background color (used by pulse for interpolation).
-/// - `width`: Terminal width in columns (used by matrix and bounce for positioning).
-/// - `height`: Terminal height in rows (used by matrix and bounce for screen coverage).
-/// - `target`: Optional animation target filter. When `Some("figlet")` or `Some("image")`,
-///   only lines matching that content type are animated; other lines pass through unchanged.
+/// One frame of `animation`. `target` limits it to `figlet` or `image` lines.
 #[allow(clippy::too_many_arguments)]
 pub fn render_loop_frame(
     buffer: &[StyledLine],
@@ -37,775 +18,279 @@ pub fn render_loop_frame(
     height: usize,
     target: Option<&str>,
 ) -> Vec<StyledLine> {
+    let targeted = |line: &StyledLine| match target {
+        Some("figlet") => line.content_type == LineContentType::FigletTitle,
+        Some("image") => {
+            line.content_type == LineContentType::AsciiImage
+                || line.spans.iter().any(|s| s.animatable)
+        }
+        _ => true,
+    };
     match animation {
-        LoopAnimation::Matrix => render_matrix(buffer, frame, width, height),
-        LoopAnimation::Bounce => render_bounce(buffer, frame, accent, width, height),
-        LoopAnimation::Pulse => render_pulse(buffer, frame, accent, bg),
-        LoopAnimation::Sparkle => render_sparkle(buffer, frame, accent, target),
-        LoopAnimation::Spin => render_spin(buffer, frame, target),
-    }
-}
-
-/// Renders the Matrix rain loop animation: green cascading characters falling top-to-bottom.
-///
-/// Columns of random alphanumeric characters "rain" down the screen at different speeds.
-/// Content rows are processed at character-level granularity to interleave rain and content spans.
-fn render_matrix(
-    buffer: &[StyledLine],
-    frame: u64,
-    width: usize,
-    height: usize,
-) -> Vec<StyledLine> {
-    let bright_green = Color::Rgb { r: 0, g: 255, b: 0 };
-    let green = Color::Rgb { r: 0, g: 180, b: 0 };
-    let dim_green = Color::Rgb { r: 0, g: 80, b: 0 };
-    let dark_green = Color::Rgb { r: 0, g: 40, b: 0 };
-    let matrix_chars: &[u8] = b"0123456789abcdef:.<>+-=*/#@$%&";
-
-    // Classify each column into a brightness level (0=space, 1-4=bright to dark)
-    let classify = |col: usize, row: usize| -> (u8, u8) {
-        let stream_speed = (col as u64 % 5) + 1;
-        let stream_offset = col as u64 * 37 + 13;
-        let drop_pos = ((frame * stream_speed + stream_offset) / 3) % (height as u64 * 2);
-        let dist = (row as u64).wrapping_sub(drop_pos) % (height as u64 * 2);
-        let ch_idx = ((col as u64 + row as u64 + frame) % matrix_chars.len() as u64) as usize;
-        let ch = matrix_chars[ch_idx];
-        let brightness = if dist == 0 {
-            4
-        } else if dist < 3 {
-            3
-        } else if dist < 6 {
-            2
-        } else if dist < 10 {
-            1
-        } else {
-            0
-        };
-        (brightness, ch)
-    };
-
-    // Helper: append rain characters from col_start..col_end as batched spans
-    let append_rain = |line: &mut StyledLine, row: usize, col_start: usize, col_end: usize| {
-        let mut batch = String::with_capacity(col_end - col_start);
-        let mut cur_brightness: u8 = 255; // sentinel
-        for col in col_start..col_end {
-            let (b, ch) = classify(col, row);
-            if b != cur_brightness && !batch.is_empty() {
-                line.push(styled_rain_span(
-                    &batch,
-                    cur_brightness,
-                    bright_green,
-                    green,
-                    dim_green,
-                    dark_green,
-                ));
-                batch.clear();
-            }
-            cur_brightness = b;
-            if b == 0 {
-                batch.push(' ');
-            } else {
-                batch.push(ch as char);
-            }
+        LoopAnimation::Matrix => matrix(buffer, frame, width, height),
+        LoopAnimation::Bounce => bounce(buffer, frame, accent, width, height),
+        LoopAnimation::Pulse => {
+            let amount = 0.65 + 0.35 * (frame as f64 * 0.15).sin();
+            buffer
+                .iter()
+                .map(|l| {
+                    if targeted(l) {
+                        super::transitions::tint(l, bg, amount)
+                    } else {
+                        l.clone()
+                    }
+                })
+                .collect()
         }
-        if !batch.is_empty() {
-            line.push(styled_rain_span(
-                &batch,
-                cur_brightness,
-                bright_green,
-                green,
-                dim_green,
-                dark_green,
-            ));
-        }
-    };
-
-    let mut result = Vec::with_capacity(height);
-
-    for row in 0..height {
-        let has_content = buffer
-            .get(row)
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .any(|s| s.text.chars().any(|c| !c.is_whitespace()))
+        LoopAnimation::Sparkle => buffer
+            .iter()
+            .enumerate()
+            .map(|(row, l)| {
+                if targeted(l) {
+                    sparkle(l, row, frame, accent)
+                } else {
+                    l.clone()
+                }
             })
-            .unwrap_or(false);
-
-        if has_content {
-            let source_line = &buffer[row];
-            let mut char_entries: Vec<(char, usize)> = Vec::new();
-            for (span_idx, span) in source_line.spans.iter().enumerate() {
-                for ch in span.text.chars() {
-                    char_entries.push((ch, span_idx));
-                }
-            }
-            let content_len = char_entries.len();
-
-            let mut mixed_line = StyledLine::empty();
-            let mut col = 0;
-
-            while col < width {
-                if col < content_len {
-                    let (ch, _span_idx) = char_entries[col];
-                    if ch.is_whitespace() {
-                        let rain_start = col;
-                        while col < content_len {
-                            let (c, _) = char_entries[col];
-                            if !c.is_whitespace() {
-                                break;
-                            }
-                            col += 1;
-                        }
-                        append_rain(&mut mixed_line, row, rain_start, col);
-                    } else {
-                        let run_span_idx = char_entries[col].1;
-                        let run_start = col;
-                        while col < content_len {
-                            let (c, si) = char_entries[col];
-                            if c.is_whitespace() || si != run_span_idx {
-                                break;
-                            }
-                            col += 1;
-                        }
-                        let text: String = char_entries[run_start..col]
-                            .iter()
-                            .map(|(c, _)| *c)
-                            .collect();
-                        mixed_line.push(StyledSpan {
-                            text,
-                            ..source_line.spans[run_span_idx].clone()
-                        });
-                    }
+            .collect(),
+        LoopAnimation::Spin => buffer
+            .iter()
+            .enumerate()
+            .map(|(row, l)| {
+                if targeted(l) {
+                    spin(l, row, frame, target == Some("image"))
                 } else {
-                    append_rain(&mut mixed_line, row, col, width);
-                    col = width;
+                    l.clone()
                 }
-            }
-
-            result.push(mixed_line);
-        } else {
-            let mut rain_line = StyledLine::empty();
-            append_rain(&mut rain_line, row, 0, width);
-            result.push(rain_line);
-        }
-    }
-    result
-}
-
-/// Creates a styled span for matrix rain characters at the given brightness level.
-///
-/// Brightness levels: 4 = bright green + bold (leading drop), 3 = green, 2 = dim green,
-/// 1 = dark green, 0 = unstyled (space).
-fn styled_rain_span(
-    text: &str,
-    brightness: u8,
-    bright: Color,
-    green: Color,
-    dim: Color,
-    dark: Color,
-) -> StyledSpan {
-    match brightness {
-        4 => StyledSpan::new(text).with_fg(bright).bold(),
-        3 => StyledSpan::new(text).with_fg(green),
-        2 => StyledSpan::new(text).with_fg(dim).dim(),
-        1 => StyledSpan::new(text).with_fg(dark).dim(),
-        _ => StyledSpan::new(text),
+            })
+            .collect(),
     }
 }
 
-/// Renders the bounce loop animation: a filled circle bouncing off the screen edges.
-///
-/// A single ball character in the theme's accent color moves across the screen, bouncing off
-/// all four edges. The ball follows a triangle-wave pattern.
-fn render_bounce(
+fn cell_hash(row: usize, col: usize) -> u64 {
+    (row as u64)
+        .wrapping_mul(7919)
+        .wrapping_add(col as u64 * 6271)
+        .wrapping_add(31)
+}
+
+/// Green rain falling behind the content: blank cells show rain, content stays.
+fn matrix(buffer: &[StyledLine], frame: u64, width: usize, height: usize) -> Vec<StyledLine> {
+    const GLYPHS: &[u8] = b"0123456789abcdef:.<>+-=*/#@$%&";
+    let shades = [
+        StyledSpan::new("").with_fg(Color::Rgb { r: 0, g: 40, b: 0 }),
+        StyledSpan::new("").with_fg(Color::Rgb { r: 0, g: 90, b: 0 }),
+        StyledSpan::new("").with_fg(Color::Rgb { r: 0, g: 180, b: 0 }),
+        StyledSpan::new("")
+            .with_fg(Color::Rgb {
+                r: 180,
+                g: 255,
+                b: 180,
+            })
+            .bold(),
+    ];
+    let space = StyledSpan::new(" ");
+    let cycle = (height.max(1) * 2) as u64;
+    let rain = |row: usize, col: usize| -> Option<(char, usize)> {
+        let speed = col as u64 % 5 + 1;
+        let head = ((frame * speed + col as u64 * 37 + 13) / 3) % cycle;
+        let dist = (row as u64 + cycle - head) % cycle;
+        let shade = match dist {
+            0 => 3,
+            1..=2 => 2,
+            3..=5 => 1,
+            6..=9 => 0,
+            _ => return None,
+        };
+        let glyph = GLYPHS[((col as u64 + row as u64 + frame) % GLYPHS.len() as u64) as usize];
+        Some((glyph as char, shade))
+    };
+    let empty = StyledLine::empty();
+    (0..buffer.len().max(height))
+        .map(|row| {
+            let line = buffer.get(row).unwrap_or(&empty);
+            let content = cells(line);
+            // Rain stays clear of the text on this row, with a one-cell margin.
+            let inked: Vec<usize> = (0..content.len())
+                .filter(|&c| !content[c].0.is_whitespace())
+                .collect();
+            let clear = match (inked.first(), inked.last()) {
+                (Some(&a), Some(&b)) => a.saturating_sub(1)..b + 2,
+                _ => 0..0,
+            };
+            let out: Vec<(char, &StyledSpan)> = (0..width.max(content.len()))
+                .map(|col| match content.get(col) {
+                    Some(&cell) if clear.contains(&col) => cell,
+                    _ => rain(row, col).map_or((' ', &space), |(g, shade)| (g, &shades[shade])),
+                })
+                .collect();
+            from_cells(out, line)
+        })
+        .collect()
+}
+
+/// A ball bouncing around the content area.
+fn bounce(
     buffer: &[StyledLine],
     frame: u64,
     accent: Color,
     width: usize,
     height: usize,
 ) -> Vec<StyledLine> {
-    let ball = "\u{25CF}";
-    // Simple bounce physics -- triangle wave
-    let period_x = (width.max(2) * 2) as u64;
-    let period_y = (height.max(2) * 2) as u64;
-    let x_pos = if period_x > 0 {
-        let raw = frame % period_x;
-        if raw < width as u64 {
-            raw as usize
-        } else {
-            (period_x - raw) as usize
-        }
-    } else {
-        0
+    let tri = |t: u64, span: usize| {
+        let span = span.max(2) as u64 - 1;
+        let p = t % (span * 2);
+        (if p < span { p } else { span * 2 - p }) as usize
     };
-    let y_pos = if period_y > 0 {
-        let raw = (frame * 2) % period_y;
-        if raw < height as u64 {
-            raw as usize
-        } else {
-            (period_y - raw) as usize
-        }
-    } else {
-        0
-    };
-
-    let mut result: Vec<StyledLine> = buffer.to_vec();
-    // Extend to fill screen if needed
-    while result.len() < height {
-        result.push(StyledLine::empty());
+    let (x, y) = (tri(frame, width), tri(frame * 2 / 3, height));
+    let ball = StyledSpan::new("●").with_fg(accent).bold();
+    let space = StyledSpan::new(" ");
+    let mut out = buffer.to_vec();
+    out.resize(out.len().max(height), StyledLine::empty());
+    let mut row = cells(&out[y]);
+    if row.len() <= x {
+        row.resize(x + 1, (' ', &space));
     }
-
-    let target_row = y_pos.min(result.len().saturating_sub(1));
-    let x_clamped = x_pos.min(width.saturating_sub(1));
-
-    // Rebuild the target row with the ball inserted at x_pos
-    let original = &result[target_row];
-    let original_text = line_to_string(original);
-    let original_chars: Vec<char> = original_text.chars().collect();
-
-    let mut new_line = StyledLine::empty();
-    // Part before ball
-    if x_clamped > 0 {
-        if x_clamped <= original_chars.len() {
-            let prefix: String = original_chars[..x_clamped].iter().collect();
-            let mut chars_emitted = 0;
-            for span in &original.spans {
-                let span_chars: Vec<char> = span.text.chars().collect();
-                if chars_emitted >= x_clamped {
-                    break;
-                }
-                let take = (x_clamped - chars_emitted).min(span_chars.len());
-                let partial: String = span_chars[..take].iter().collect();
-                new_line.push(StyledSpan {
-                    text: partial,
-                    ..span.clone()
-                });
-                chars_emitted += take;
-            }
-            if chars_emitted < x_clamped {
-                new_line.push(StyledSpan::new(&" ".repeat(x_clamped - chars_emitted)));
-            }
-            let _ = prefix; // used via chars_emitted logic
-        } else {
-            let existing: String = original_chars.iter().collect();
-            if !existing.is_empty() {
-                for span in &original.spans {
-                    new_line.push(span.clone());
-                }
-            }
-            let pad = x_clamped - original_chars.len();
-            if pad > 0 {
-                new_line.push(StyledSpan::new(&" ".repeat(pad)));
-            }
-        }
-    }
-
-    // The ball itself
-    new_line.push(StyledSpan::new(ball).with_fg(accent).bold());
-
-    // Part after ball
-    let after_pos = x_clamped + 1;
-    if after_pos < original_chars.len() {
-        let mut chars_emitted = 0;
-        for span in &original.spans {
-            let span_chars: Vec<char> = span.text.chars().collect();
-            let span_end = chars_emitted + span_chars.len();
-            if span_end <= after_pos {
-                chars_emitted = span_end;
-                continue;
-            }
-            let start_in_span = after_pos.saturating_sub(chars_emitted);
-            let partial: String = span_chars[start_in_span..].iter().collect();
-            if !partial.is_empty() {
-                new_line.push(StyledSpan {
-                    text: partial,
-                    ..span.clone()
-                });
-            }
-            chars_emitted = span_end;
-        }
-    }
-
-    result[target_row] = new_line;
-    result
+    row[x] = ('●', &ball);
+    out[y] = from_cells(row, &buffer.get(y).cloned().unwrap_or_default());
+    out
 }
 
-/// Renders the pulse loop animation: all content brightness oscillates in a sine-wave pattern.
-///
-/// Every character on screen smoothly pulsates between dim and bright.
-fn render_pulse(buffer: &[StyledLine], frame: u64, accent: Color, bg: Color) -> Vec<StyledLine> {
-    // Sine wave oscillation: 0.3 to 1.0
-    let t = 0.65 + 0.35 * (frame as f64 * 0.15).sin();
-    let mut result = Vec::with_capacity(buffer.len());
-    for line in buffer.iter() {
-        let mut pulsed = StyledLine::empty();
-        pulsed.is_scale_placeholder = line.is_scale_placeholder;
-        pulsed.content_type = line.content_type;
-        for span in &line.spans {
-            let fg = span.fg.unwrap_or(accent);
-            let pulsed_fg = interpolate_color(bg, fg, t);
-            pulsed.push(StyledSpan {
-                fg: Some(pulsed_fg),
-                ..span.clone()
-            });
-        }
-        result.push(pulsed);
-    }
-    result
-}
-
-/// Renders the sparkle loop animation: random cells twinkle as star/sparkle characters.
-///
-/// Non-whitespace cells periodically flash as sparkle characters in bright colors. The
-/// `target` parameter can limit the effect to specific content types (`"figlet"` or `"image"`).
-fn render_sparkle(
-    buffer: &[StyledLine],
-    frame: u64,
-    accent: Color,
-    target: Option<&str>,
-) -> Vec<StyledLine> {
-    let sparkle_chars: &[char] = &[
-        '\u{2726}', '\u{2727}', '\u{2605}', '\u{2606}', '\u{272B}', '\u{272C}', '\u{00B7}',
-        '\u{207A}', '\u{2739}', '\u{2735}',
+fn sparkle(line: &StyledLine, row: usize, frame: u64, accent: Color) -> StyledLine {
+    const STARS: &[char] = &['✦', '✧', '★', '☆', '✫', '✬', '·', '⁺', '✹', '✵'];
+    let colors = [
+        StyledSpan::new("")
+            .with_fg(Color::Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            })
+            .bold(),
+        StyledSpan::new("")
+            .with_fg(Color::Rgb {
+                r: 255,
+                g: 255,
+                b: 100,
+            })
+            .bold(),
+        StyledSpan::new("")
+            .with_fg(Color::Rgb {
+                r: 100,
+                g: 255,
+                b: 255,
+            })
+            .bold(),
+        StyledSpan::new("").with_fg(accent).bold(),
     ];
-    let bright_white = Color::Rgb {
-        r: 255,
-        g: 255,
-        b: 255,
-    };
-    let bright_yellow = Color::Rgb {
-        r: 255,
-        g: 255,
-        b: 100,
-    };
-    let bright_cyan = Color::Rgb {
-        r: 100,
-        g: 255,
-        b: 255,
-    };
-
-    let mut result = Vec::with_capacity(buffer.len());
-
-    for (row, line) in buffer.iter().enumerate() {
-        let should_animate = match target {
-            None => true,
-            Some("figlet") => line.content_type == LineContentType::FigletTitle,
-            Some("image") => line.content_type == LineContentType::AsciiImage,
-            _ => true,
-        };
-        if !should_animate {
-            result.push(line.clone());
-            continue;
-        }
-        let chars: Vec<char> = line.spans.iter().flat_map(|s| s.text.chars()).collect();
-        if chars.is_empty() || chars.iter().all(|c| c.is_whitespace()) {
-            result.push(line.clone());
-            continue;
-        }
-
-        // Determine which cells sparkle this frame
-        let mut sparkle_map: Vec<Option<(char, Color)>> = vec![None; chars.len()];
-        for col in 0..chars.len() {
-            if chars[col].is_whitespace() {
-                continue;
+    let out: Vec<(char, &StyledSpan)> = cells(line)
+        .into_iter()
+        .enumerate()
+        .map(|(col, (c, s))| {
+            let h = cell_hash(row, col);
+            if c.is_whitespace() || frame.wrapping_add(h) % (40 + h % 50) >= 3 {
+                return (c, s);
             }
-            let cell_hash = (row as u64)
-                .wrapping_mul(7919)
-                .wrapping_add(col as u64 * 6271)
-                .wrapping_add(31);
-            let sparkle_period = 40 + (cell_hash % 50);
-            let phase = (frame.wrapping_add(cell_hash)) % sparkle_period;
-            if phase < 3 {
-                let ch_idx = ((cell_hash + frame) % sparkle_chars.len() as u64) as usize;
-                let color_pick = (cell_hash + frame / 3) % 4;
-                let color = match color_pick {
-                    0 => bright_white,
-                    1 => bright_yellow,
-                    2 => bright_cyan,
-                    _ => accent,
-                };
-                sparkle_map[col] = Some((sparkle_chars[ch_idx], color));
-            }
-        }
-
-        if sparkle_map.iter().all(|s| s.is_none()) {
-            result.push(line.clone());
-            continue;
-        }
-
-        // Rebuild line with sparkles injected
-        let mut new_line = StyledLine::empty();
-        new_line.content_type = line.content_type;
-        let mut char_pos = 0;
-        for span in &line.spans {
-            let span_chars: Vec<char> = span.text.chars().collect();
-            let mut run_start = 0;
-            while run_start < span_chars.len() {
-                let global_pos = char_pos + run_start;
-                if global_pos < sparkle_map.len() {
-                    if let Some((sch, scolor)) = sparkle_map[global_pos] {
-                        new_line.push(StyledSpan::new(&sch.to_string()).with_fg(scolor).bold());
-                        run_start += 1;
-                        continue;
-                    }
-                }
-                let run_end = (run_start + 1..span_chars.len())
-                    .find(|&i| {
-                        let gp = char_pos + i;
-                        gp < sparkle_map.len() && sparkle_map[gp].is_some()
-                    })
-                    .unwrap_or(span_chars.len());
-                let chunk: String = span_chars[run_start..run_end].iter().collect();
-                new_line.push(StyledSpan {
-                    text: chunk,
-                    ..span.clone()
-                });
-                run_start = run_end;
-            }
-            char_pos += span_chars.len();
-        }
-        result.push(new_line);
-    }
-    result
+            let star = STARS[((h + frame) % STARS.len() as u64) as usize];
+            (star, &colors[((h + frame / 3) % 4) as usize])
+        })
+        .collect();
+    from_cells(out, line)
 }
 
-/// Renders the spin loop animation: ASCII art characters cycle through the brightness ramp.
-///
-/// Each ASCII art character is shifted along a brightness ramp by a sine-wave offset that
-/// varies by position and frame, creating a shimmering wave effect. The `target` parameter
-/// can limit the effect to `"figlet"` or `"image"` lines.
-fn render_spin(buffer: &[StyledLine], frame: u64, target: Option<&str>) -> Vec<StyledLine> {
-    const ASCII_RAMP: &[u8] =
-        b" .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
-
-    // Build O(1) lookup table: byte value -> ramp index (255 = not in ramp)
-    let mut ramp_lookup = [255u8; 128];
-    for (i, &b) in ASCII_RAMP.iter().enumerate() {
-        if (b as usize) < 128 {
-            ramp_lookup[b as usize] = i as u8;
-        }
-    }
-
-    let mut result = Vec::with_capacity(buffer.len());
-
-    for (row, line) in buffer.iter().enumerate() {
-        let line_level_animate = match target {
-            None => true,
-            Some("figlet") => line.content_type == LineContentType::FigletTitle,
-            Some("image") => true, // handle per-span below
-            _ => true,
-        };
-
-        // For "image" targeting, check if ANY span is animatable
-        let has_animatable_spans =
-            target == Some("image") && line.spans.iter().any(|s| s.animatable);
-
-        if !line_level_animate && !has_animatable_spans {
-            result.push(line.clone());
-            continue;
-        }
-
-        let chars: Vec<char> = line.spans.iter().flat_map(|s| s.text.chars()).collect();
-        if chars.is_empty() || chars.iter().all(|c| c.is_whitespace()) {
-            result.push(line.clone());
-            continue;
-        }
-
-        let has_art = line.spans.iter().any(|s| {
-            !s.text.trim().is_empty()
-                && s.fg.is_some()
-                && s.text.chars().any(|c| !c.is_whitespace())
-        });
-        if !has_art {
-            result.push(line.clone());
-            continue;
-        }
-
-        // Rebuild with shifted ASCII ramp characters
-        let mut new_line = StyledLine::empty();
-        new_line.content_type = line.content_type;
-        let mut char_pos: usize = 0;
-        for span in &line.spans {
-            // For "image" targeting, only spin animatable spans
-            let span_should_spin = match target {
-                Some("image") => span.animatable,
-                _ => true,
+/// Shifts ASCII-art characters along a brightness ramp in a moving wave.
+fn spin(line: &StyledLine, row: usize, frame: u64, only_animatable: bool) -> StyledLine {
+    const RAMP: &[u8] = b" .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
+    let out: Vec<(char, &StyledSpan)> = cells(line)
+        .into_iter()
+        .enumerate()
+        .map(|(col, (c, s))| {
+            let pos = (!only_animatable || s.animatable)
+                .then(|| RAMP.iter().position(|&b| char::from(b) == c))
+                .flatten();
+            let Some(pos) = pos.filter(|_| !c.is_whitespace()) else {
+                return (c, s);
             };
-
-            if !span_should_spin {
-                // Clone span unchanged
-                new_line.push(span.clone());
-                char_pos += span.text.chars().count();
-                continue;
-            }
-
-            let span_chars: Vec<char> = span.text.chars().collect();
-            let mut new_text = String::with_capacity(span_chars.len());
-            for (i, &ch) in span_chars.iter().enumerate() {
-                let global_col = char_pos + i;
-                if ch.is_whitespace() || !ch.is_ascii() {
-                    new_text.push(ch);
-                    continue;
-                }
-                let ramp_pos = if (ch as u32) < 128 {
-                    let idx = ramp_lookup[ch as usize];
-                    if idx < 255 {
-                        Some(idx as usize)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some(ramp_pos) = ramp_pos {
-                    let cell_phase = (row as f64 * 0.3 + global_col as f64 * 0.2).sin();
-                    let wave = (frame as f64 * 0.12 + cell_phase * 3.0).sin();
-                    let shift = (wave * 4.0) as i32;
-                    let new_pos =
-                        (ramp_pos as i32 + shift).clamp(1, ASCII_RAMP.len() as i32 - 1) as usize;
-                    new_text.push(ASCII_RAMP[new_pos] as char);
-                } else {
-                    new_text.push(ch);
-                }
-            }
-            new_line.push(StyledSpan {
-                text: new_text,
-                ..span.clone()
-            });
-            char_pos += span_chars.len();
-        }
-        result.push(new_line);
-    }
-    result
+            let phase = (row as f64 * 0.3 + col as f64 * 0.2).sin();
+            let shift = ((frame as f64 * 0.12 + phase * 3.0).sin() * 4.0) as i64;
+            let next = (pos as i64 + shift).clamp(1, RAMP.len() as i64 - 1) as usize;
+            (char::from(RAMP[next]), s)
+        })
+        .collect();
+    from_cells(out, line)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::text::{LineContentType, StyledLine, StyledSpan};
-    use crossterm::style::Color;
 
-    const ACCENT: Color = Color::Rgb {
-        r: 100,
-        g: 200,
-        b: 255,
-    };
-    const BG: Color = Color::Rgb {
-        r: 20,
-        g: 20,
-        b: 30,
-    };
-    const W: usize = 40;
-    const H: usize = 10;
+    const ACCENT: Color = Color::Cyan;
+    const BG: Color = Color::Black;
 
-    /// Build a simple single-line buffer tagged with the given content type.
-    fn make_buffer_with_type(text: &str, ct: LineContentType) -> Vec<StyledLine> {
-        let mut line = StyledLine::empty();
-        line.content_type = ct;
-        line.push(StyledSpan::new(text).with_fg(ACCENT));
-        vec![line]
+    fn text(line: &StyledLine) -> String {
+        line.spans.iter().map(|s| s.text.as_str()).collect()
     }
 
-    /// Return all characters that appear in the rendered output buffer.
-    fn all_chars(buf: &[StyledLine]) -> String {
-        buf.iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect()
-    }
-
-    // --- render_loop_frame dispatcher ---
-
-    #[test]
-    fn matrix_produces_output_matching_height() {
-        let buf = vec![StyledLine::empty(); H];
-        let result = render_loop_frame(&buf, LoopAnimation::Matrix, 5, ACCENT, BG, W, H, None);
-        assert_eq!(result.len(), H, "matrix must produce exactly H rows");
+    fn tagged(text: &str, content_type: LineContentType) -> StyledLine {
+        StyledLine {
+            spans: vec![StyledSpan::new(text).with_fg(ACCENT)],
+            content_type,
+        }
     }
 
     #[test]
-    fn bounce_produces_output_matching_height() {
-        let buf = vec![StyledLine::empty(); H];
-        let result = render_loop_frame(&buf, LoopAnimation::Bounce, 5, ACCENT, BG, W, H, None);
-        assert_eq!(result.len(), H);
-    }
-
-    #[test]
-    fn pulse_output_length_equals_input_length() {
-        let buf = (0..H)
-            .map(|_| StyledLine::plain("hello"))
-            .collect::<Vec<_>>();
-        let result = render_loop_frame(&buf, LoopAnimation::Pulse, 10, ACCENT, BG, W, H, None);
-        assert_eq!(result.len(), buf.len());
-    }
-
-    #[test]
-    fn sparkle_output_length_equals_input_length() {
-        let buf = (0..5)
-            .map(|_| StyledLine::plain("sparkle"))
-            .collect::<Vec<_>>();
-        let result = render_loop_frame(&buf, LoopAnimation::Sparkle, 0, ACCENT, BG, W, 5, None);
-        assert_eq!(result.len(), 5);
-    }
-
-    #[test]
-    fn spin_output_length_equals_input_length() {
-        let buf = (0..5)
-            .map(|_| StyledLine::plain("abcde"))
-            .collect::<Vec<_>>();
-        let result = render_loop_frame(&buf, LoopAnimation::Spin, 0, ACCENT, BG, W, 5, None);
-        assert_eq!(result.len(), 5);
-    }
-
-    // --- targeting: spin with target "figlet" ---
-
-    #[test]
-    fn spin_with_figlet_target_only_animates_figlet_lines() {
-        let figlet_line = {
-            let mut l = StyledLine::empty();
-            l.content_type = LineContentType::FigletTitle;
-            // Use ASCII ramp chars so spin has something to shift
-            l.push(StyledSpan::new("ABCabc###").with_fg(ACCENT));
-            l
-        };
-        let text_line = StyledLine::plain("unchanged text");
-
-        let buf = vec![figlet_line, text_line.clone()];
-        let result = render_loop_frame(
-            &buf,
-            LoopAnimation::Spin,
-            20,
-            ACCENT,
-            BG,
-            W,
-            2,
-            Some("figlet"),
-        );
-
-        // The text line (index 1) must be passed through unchanged
-        assert_eq!(
-            result[1]
-                .spans
-                .iter()
-                .map(|s| s.text.as_str())
-                .collect::<String>(),
-            text_line
-                .spans
-                .iter()
-                .map(|s| s.text.as_str())
-                .collect::<String>(),
-            "non-figlet lines must not be modified by spin(figlet)"
-        );
-    }
-
-    // --- targeting: spin with target "image" ---
-
-    #[test]
-    fn spin_with_image_target_passes_non_animatable_lines_through() {
-        // An AsciiImage line but with no animatable spans → should be passed through
-        let img_line = make_buffer_with_type("@@@", LineContentType::AsciiImage);
-        let result = render_loop_frame(
-            &img_line,
-            LoopAnimation::Spin,
-            0,
-            ACCENT,
-            BG,
-            W,
-            1,
-            Some("image"),
-        );
-        // Output should have same length
-        assert_eq!(result.len(), 1);
-    }
-
-    // --- sparkle targeting ---
-
-    #[test]
-    fn sparkle_with_figlet_target_leaves_non_figlet_lines_unchanged() {
-        let normal_line = StyledLine::plain("normal content here");
-        let figlet_line = {
-            let mut l = StyledLine::empty();
-            l.content_type = LineContentType::FigletTitle;
-            l.push(StyledSpan::new("BIGTEXT").with_fg(ACCENT));
-            l
-        };
-        let buf = vec![normal_line.clone(), figlet_line];
-        let result = render_loop_frame(
-            &buf,
+    fn every_loop_keeps_content_rows_and_their_tags() {
+        let buffer: Vec<StyledLine> = (0..30)
+            .map(|i| {
+                tagged(
+                    &format!("line {i}"),
+                    if i == 0 {
+                        LineContentType::FigletTitle
+                    } else {
+                        LineContentType::Text
+                    },
+                )
+            })
+            .collect();
+        for animation in [
+            LoopAnimation::Matrix,
+            LoopAnimation::Bounce,
+            LoopAnimation::Pulse,
             LoopAnimation::Sparkle,
-            0,
-            ACCENT,
-            BG,
-            W,
-            2,
-            Some("figlet"),
-        );
-        // Normal line must be identical (cloned through)
-        let orig_text: String = normal_line.spans.iter().map(|s| s.text.as_str()).collect();
-        let out_text: String = result[0].spans.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(
-            orig_text, out_text,
-            "non-figlet line must be unchanged by sparkle(figlet)"
-        );
+            LoopAnimation::Spin,
+        ] {
+            let out = render_loop_frame(&buffer, animation, 7, ACCENT, BG, 40, 10, None);
+            assert!(out.len() >= buffer.len(), "{animation:?} dropped rows");
+            assert_eq!(
+                out[0].content_type,
+                LineContentType::FigletTitle,
+                "{animation:?}"
+            );
+            if animation == LoopAnimation::Matrix {
+                assert!(text(&out[29]).contains("line 29"), "matrix hid content");
+            }
+        }
     }
 
-    // --- bounce inserts a ball character ---
-
     #[test]
-    fn bounce_inserts_ball_character_into_output() {
-        let buf = vec![StyledLine::empty(); H];
-        let result = render_loop_frame(&buf, LoopAnimation::Bounce, 5, ACCENT, BG, W, H, None);
-        let chars = all_chars(&result);
-        // The ball is U+25CF (●)
-        assert!(
-            chars.contains('\u{25CF}'),
-            "bounce must place the ball character somewhere in the output"
-        );
-    }
-
-    // --- matrix fills empty buffer with rain ---
-
-    #[test]
-    fn matrix_fills_empty_buffer_with_non_empty_spans() {
-        let buf = vec![StyledLine::empty(); 3];
-        let result = render_loop_frame(&buf, LoopAnimation::Matrix, 1, ACCENT, BG, W, 3, None);
-        let total_spans: usize = result.iter().map(|l| l.spans.len()).sum();
-        assert!(
-            total_spans > 0,
-            "matrix must produce spans even for an empty input buffer"
-        );
-    }
-
-    // --- pulse preserves content_type ---
-
-    #[test]
-    fn pulse_preserves_content_type_on_lines() {
-        let mut line = StyledLine::plain("text");
-        line.content_type = LineContentType::FigletTitle;
-        let buf = vec![line];
-        let result = render_loop_frame(&buf, LoopAnimation::Pulse, 0, ACCENT, BG, W, 1, None);
-        assert_eq!(result[0].content_type, LineContentType::FigletTitle);
-    }
-
-    // --- frame counter advances results ---
-
-    #[test]
-    fn matrix_output_changes_across_frames() {
-        let buf = vec![StyledLine::empty(); 5];
-        let frame_a = render_loop_frame(&buf, LoopAnimation::Matrix, 0, ACCENT, BG, W, 5, None);
-        let frame_b = render_loop_frame(&buf, LoopAnimation::Matrix, 100, ACCENT, BG, W, 5, None);
-        let text_a: String = frame_a
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        let text_b: String = frame_b
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        // Different frames should produce different rain patterns
-        assert_ne!(text_a, text_b, "matrix output must differ across frames");
+    fn targeted_loops_leave_other_lines_alone() {
+        let buffer = vec![
+            tagged("|||||||||||||||", LineContentType::FigletTitle),
+            tagged("|||||||||||||||", LineContentType::Text),
+        ];
+        let changed = (0..200).any(|f| {
+            let out = render_loop_frame(
+                &buffer,
+                LoopAnimation::Spin,
+                f,
+                ACCENT,
+                BG,
+                40,
+                2,
+                Some("figlet"),
+            );
+            assert_eq!(out[1], buffer[1]);
+            out[0] != buffer[0]
+        });
+        assert!(changed, "the targeted line never animated");
     }
 }

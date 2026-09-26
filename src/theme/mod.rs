@@ -55,21 +55,6 @@ impl ThemeRegistry {
     pub fn list(&self) -> Vec<String> {
         self.themes.iter().map(|t| t.slug.clone()).collect()
     }
-
-    /// Get the light or dark variant of a theme, if it has one.
-    ///
-    /// Themes can declare `light_variant` or `dark_variant` slugs in their YAML.
-    /// When the user presses `D` to toggle dark/light mode, this method finds the
-    /// companion theme. Returns `None` if the theme has no variant in the
-    /// requested direction.
-    pub fn get_variant(&self, theme: &Theme, want_light: bool) -> Option<Theme> {
-        let variant_slug = if want_light {
-            theme.light_variant.as_deref()
-        } else {
-            theme.dark_variant.as_deref()
-        };
-        variant_slug.and_then(|slug| self.get(slug))
-    }
 }
 
 #[cfg(test)]

@@ -3,7 +3,6 @@
 pub mod animation;
 mod engine;
 pub mod layout;
-mod progress;
 pub mod text;
 
 pub use engine::Presenter;

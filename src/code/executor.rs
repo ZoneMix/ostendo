@@ -81,10 +81,10 @@ pub fn spawn(
     if code.len() > MAX_CODE_LENGTH {
         bail!("code exceeds {} KB limit", MAX_CODE_LENGTH / 1024);
     }
-    let lang = normalize_language(language);
-    if !SUPPORTED.contains(&lang) {
+    if !is_supported(language) {
         bail!("unsupported language '{language}'");
     }
+    let lang = normalize_language(language);
 
     let (tx, rx) = mpsc::sync_channel(512);
     let cancel = Arc::new(AtomicBool::new(false));
@@ -110,6 +110,11 @@ pub fn spawn(
         let _ = job.sink.tx.send(None);
     });
     Ok(Execution { rx, cancel })
+}
+
+/// Whether `language` (or an alias like `py`, `js`, `c++`) can be run.
+pub fn is_supported(language: &str) -> bool {
+    SUPPORTED.contains(&normalize_language(language))
 }
 
 const SUPPORTED: [&str; 9] = [
