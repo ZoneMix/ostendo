@@ -67,6 +67,7 @@ struct Cli {
     #[arg(long)]
     remote: bool,
 
+    /// Port for --remote
     #[arg(long, value_name = "PORT", default_value_t = 8765, requires = "remote")]
     remote_port: u16,
 
@@ -125,8 +126,17 @@ enum ExportFormat {
     Pdf,
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn main() -> std::process::ExitCode {
+    match run(Cli::parse()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     let registry = ThemeRegistry::load();
 
     if cli.list_themes {

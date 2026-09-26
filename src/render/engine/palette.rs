@@ -21,7 +21,8 @@ pub(crate) struct Palette {
 }
 
 impl Palette {
-    /// `accent` overrides the theme accent (front-matter `accent:`).
+    /// `accent` overrides the theme accent (front-matter `accent:`) when it
+    /// meets the same 3:1 contrast every built-in theme accent does.
     pub fn new(theme: &Theme, accent: Option<Color>) -> Self {
         let color = |hex: &str, fallback| hex_to_color(hex).unwrap_or(fallback);
         let bg = color(&theme.colors.background, Color::Black);
@@ -34,7 +35,9 @@ impl Palette {
         Self {
             bg,
             text,
-            accent: accent.unwrap_or_else(|| color(&theme.colors.accent, Color::Green)),
+            accent: accent
+                .filter(|&a| contrast_ratio(a, bg) >= 3.0)
+                .unwrap_or_else(|| color(&theme.colors.accent, Color::Green)),
             code_bg,
             muted: interpolate_color(text, bg, 0.45),
             // A panel a notch off the page: the code background when it stands
@@ -77,5 +80,19 @@ mod tests {
         let light = Palette::new(&registry.get("paper").unwrap(), None);
         assert!(dark.is_dark());
         assert!(!light.is_dark());
+    }
+
+    #[test]
+    fn accent_override_must_stay_readable() {
+        let registry = ThemeRegistry::load();
+        let cyan = Color::Rgb {
+            r: 0,
+            g: 229,
+            b: 255,
+        };
+        let dark = registry.get("terminal_green").unwrap();
+        let light = registry.get("paper").unwrap();
+        assert_eq!(Palette::new(&dark, Some(cyan)).accent, cyan);
+        assert_ne!(Palette::new(&light, Some(cyan)).accent, cyan);
     }
 }
