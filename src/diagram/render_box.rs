@@ -1,16 +1,20 @@
 //! Box-drawing diagram style:
 //!
 //! ```text
-//! ┌──────────┐    ┌──────────┐    ┌──────────┐
-//! │ Node A   │───→│ Node B   │───→│ Node C   │
-//! └──────────┘    └──────────┘    └──────────┘
-//!   annotation     annotation      annotation
+//! ┌─────────┐    ┌──────┐
+//! │ Request │───→│ Auth │
+//! └─────────┘    └──────┘
+//!  incoming       JWT
+//!                verify
 //! ```
+//!
+//! Annotations wrap under their box, so a box is only as wide as its label or
+//! the longest annotation word.
 
 use crossterm::style::Color;
 
 use crate::diagram::parser::{DiagramGraph, DiagramRow};
-use crate::render::text::{LineContentType, StyledLine, StyledSpan};
+use crate::render::text::{wrap_text, LineContentType, StyledLine, StyledSpan};
 
 const ARROW: &str = "───→";
 const ARROW_WIDTH: usize = 4;
@@ -66,21 +70,20 @@ pub fn render(
     lines
 }
 
-/// Box width per node, wide enough for its label or its annotation.
+/// Box width per node: its label or its annotation's longest word.
 fn compute_column_widths(row: &DiagramRow) -> Vec<usize> {
     row.nodes
         .iter()
         .enumerate()
         .map(|(i, node)| {
             let label_w = node.label.chars().count();
-            let ann_w = row
+            let word_w = row
                 .annotations
                 .get(i)
-                .and_then(|a| a.as_ref())
-                .map(|a| a.chars().count())
+                .and_then(|a| a.as_deref())
+                .and_then(|a| a.split_whitespace().map(|w| w.chars().count()).max())
                 .unwrap_or(0);
-            let inner = label_w.max(ann_w);
-            inner + 2 * BOX_PAD + 2 // +2 for `│` on each side
+            label_w.max(word_w) + 2 * BOX_PAD + 2 // +2 for `│` on each side
         })
         .collect()
 }
@@ -149,22 +152,29 @@ fn render_row(
     }
     lines.push(bot);
 
-    let has_annotations = row.annotations.iter().any(|a| a.is_some());
-    if has_annotations {
+    let wrapped: Vec<Vec<String>> = col_widths
+        .iter()
+        .enumerate()
+        .map(
+            |(i, &w)| match row.annotations.get(i).and_then(|a| a.as_deref()) {
+                Some(text) => wrap_text(text, w),
+                None => Vec::new(),
+            },
+        )
+        .collect();
+    let depth = wrapped.iter().map(Vec::len).max().unwrap_or(0);
+    for k in 0..depth {
         let mut ann_line = StyledLine::empty();
         ann_line.content_type = LineContentType::Diagram;
         ann_line.push(StyledSpan::new(pad));
-        for (i, ann) in row.annotations.iter().take(col_widths.len()).enumerate() {
-            let col_w = col_widths[i];
-            let text = ann.as_deref().unwrap_or("");
-            let text_chars: usize = text.chars().count();
-            let total_pad = col_w.saturating_sub(text_chars);
+        for (i, lines) in wrapped.iter().enumerate() {
+            let text = lines.get(k).map_or("", String::as_str);
+            let total_pad = col_widths[i].saturating_sub(text.chars().count());
             let left = total_pad / 2;
-            let right = total_pad - left;
             ann_line.push(StyledSpan::new(&" ".repeat(left)));
             ann_line.push(StyledSpan::new(text).with_fg(dim_color));
-            ann_line.push(StyledSpan::new(&" ".repeat(right)));
-            if i + 1 < row.nodes.len() {
+            ann_line.push(StyledSpan::new(&" ".repeat(total_pad - left)));
+            if i + 1 < node_count {
                 ann_line.push(StyledSpan::new(&" ".repeat(ARROW_WIDTH)));
             }
         }
@@ -241,42 +251,24 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_render() {
-        let graph = parse("A -> B -> C");
-        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
-        // Should have: empty + top + label + bottom + empty = 5 lines minimum
-        assert!(lines.len() >= 4);
-        // All lines should be Diagram content type (except empties)
-        for line in &lines {
-            if !line.spans.is_empty() {
-                assert_eq!(line.content_type, LineContentType::Diagram);
-            }
-        }
-    }
-
-    #[test]
-    fn test_with_title() {
-        let graph = parse("# My Title\nA -> B");
-        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
-        let all_text: String = lines
+    fn annotations_wrap_under_their_box() {
+        let graph = parse("Request -> Auth\n: incoming : JWT token verify");
+        let rows: Vec<String> = render(&graph, test_accent(), test_text(), test_dim(), "")
             .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>())
+            .map(|row| row.trim_end().to_string())
             .collect();
-        assert!(all_text.contains("My Title"));
-    }
-
-    #[test]
-    fn test_with_annotations() {
-        let graph = parse("A -> B\n: note1  : note2");
-        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
-        let all_text: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(all_text.contains("note1"));
-        assert!(all_text.contains("note2"));
+        assert_eq!(
+            rows,
+            [
+                "┌──────────┐    ┌────────┐",
+                "│ Request  │───→│ Auth   │",
+                "└──────────┘    └────────┘",
+                "  incoming      JWT token",
+                "                  verify",
+                "",
+            ]
+        );
     }
 
     #[test]

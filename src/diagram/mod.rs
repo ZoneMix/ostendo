@@ -100,7 +100,17 @@ fn truncate_graph_labels_for_style(
                     .annotations
                     .iter()
                     .take(n)
-                    .map(|ann| ann.as_deref().map(|text| truncate(text, max_label)))
+                    .map(|ann| {
+                        ann.as_deref().map(|text| match style {
+                            // Box annotations wrap, so only single words must fit.
+                            DiagramStyle::Box => text
+                                .split_whitespace()
+                                .map(|word| truncate(word, max_label))
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            _ => truncate(text, max_label),
+                        })
+                    })
                     .collect(),
             }
         })

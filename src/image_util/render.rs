@@ -97,7 +97,7 @@ pub fn render_slide_image(
         None => RenderedImage::Lines(Vec::new()),
     };
     match protocol {
-        ImageProtocol::Ascii => render_ascii(img, image, max_cols, max_rows, text_color),
+        ImageProtocol::Ascii => render_ascii(img, image, max_cols, max_rows, text_color, bg_color),
         ImageProtocol::Blocks => {
             render_blocks(img, image, max_cols, max_rows, text_color, bg_color)
         }
@@ -131,11 +131,13 @@ fn render_ascii(
     max_cols: usize,
     max_rows: usize,
     text_color: Color,
+    bg_color: Color,
 ) -> RenderedImage {
     let color_override = crate::theme::colors::hex_to_color(&image.color_override);
+    let bg = crate::theme::colors::color_to_rgb(bg_color).unwrap_or((0, 0, 0));
     let rows = max_rows.saturating_sub(usize::from(!image.alt_text.is_empty()));
     let ascii_rows =
-        crate::terminal::ascii_art::render_ascii_art(img, max_cols, rows, color_override);
+        crate::terminal::ascii_art::render_ascii_art(img, max_cols, rows, color_override, bg);
     let mut lines = Vec::with_capacity(ascii_rows.len() + 1);
     for row in &ascii_rows {
         let mut line = StyledLine::empty();

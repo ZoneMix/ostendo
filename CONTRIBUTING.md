@@ -18,6 +18,8 @@ cargo run --release -- --validate presentations/examples/test_presentation.md
 CI runs the same checks on Linux, macOS, and Windows; all must pass.
 For visual changes, page through `presentations/examples/test_presentation.md`
 in Kitty or Ghostty and in a terminal without graphics support.
+`tests/integration/run_all.sh` drives the release build through tmux and
+checks navigation, toggles, and exports (needs tmux).
 
 ## Code
 
