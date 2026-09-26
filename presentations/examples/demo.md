@@ -39,9 +39,9 @@ A **Rust-powered** presentation engine that renders *beautiful slide decks* dire
 - *29 built-in themes* with live switching via `:theme slug`
 - Executable code blocks in `Python`, `Rust`, `Go`, `C`, `C++`, `Ruby`, `Bash`, and `JavaScript`
 - ~~PowerPoint~~ -- no GUI dependencies, no browser, no Electron
-- Image rendering: Kitty, iTerm2, Sixel, and ASCII fallback
+- Images: Kitty, iTerm2, Sixel, or true-color half blocks anywhere
 - Column layouts, tables, diagrams, and block quotes
-- Speaker notes, pace tracking, and WebSocket remote control
+- Speaker notes, a timer, and WebSocket remote control
 
 > Everything you see is rendered in the terminal. It works over SSH, in tmux, and in containers.
 
@@ -167,7 +167,6 @@ The +exec badge appears in the top-right corner of the code block.
 # Code: Rust (Auto-Wrap)
 <!-- section: Code Execution -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 No `fn main()` needed -- Ostendo auto-wraps bare Rust code:
 
@@ -203,7 +202,6 @@ This lets you write concise code examples without boilerplate.
 # Multi-Language Columns
 <!-- section: Code Execution -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 <!-- column_layout: [1, 1] -->
 <!-- column: 0 -->
@@ -333,7 +331,6 @@ the left column twice the width of the right).
 # Weighted Columns
 <!-- section: Layouts -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 Asymmetric layouts with `column_layout: [2, 1]`:
 
@@ -388,7 +385,7 @@ Ostendo detects the best image protocol for your terminal:
 - **Kitty**: Native graphics protocol (best quality)
 - **iTerm2**: Inline image protocol
 - **Sixel**: Bitmap protocol (wide support)
-- **ASCII**: Universal text fallback
+- **Blocks**: True-color half blocks in every other terminal
 
 <!-- notes:
 The image renderer probes the terminal at startup to determine which image
@@ -405,7 +402,6 @@ sets the initial size as a percentage of terminal width.
 <!-- image_color: #00FF88 -->
 <!-- image_scale: 70 -->
 <!-- font_size: -2 -->
-<!-- font_transition: none -->
 <!-- fullscreen: true -->
 
 ![Opus - green ASCII art](../../images/opus.png)
@@ -426,7 +422,6 @@ text terminals and serial consoles.
 <!-- align: center -->
 <!-- image_scale: 70 -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 ![Cat GIF](../../images/cat.gif)
 
@@ -448,7 +443,6 @@ happens within synchronized update blocks to prevent flicker.
 <!-- section: Diagrams -->
 <!-- title_decoration: banner -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
 Native ASCII diagrams with the built-in diagram engine (no external tools):
 
@@ -655,7 +649,6 @@ This is a continuous animation that runs as long as the slide is displayed.
 <!-- ascii_title -->
 <!-- font_size: 2 -->
 <!-- loop_animation: sparkle(figlet) -->
-<!-- font_transition: none -->
 
 Twinkling stars on the ASCII art title above
 
@@ -719,7 +712,6 @@ attention-grabbing title cards.
 <!-- ascii_title -->
 <!-- font_size: 0 -->
 <!-- loop_animation: spin(figlet) -->
-<!-- font_transition: none -->
 
 Characters cycle through the ASCII density ramp
 
@@ -743,7 +735,7 @@ title appears to shimmer and evolve continuously.
 
 This slide uses `<!-- font_size: 7 -->` for maximum readability.
 
-- Font size range: -3 to 7
+- Range -20 to 20; 1 is your normal size, each step is 4 pt
 - Requires Kitty or Ghostty terminal
 - Gracefully ignored on other terminals
 
@@ -751,37 +743,34 @@ This slide uses `<!-- font_size: 7 -->` for maximum readability.
 
 <!-- notes:
 Font sizing uses the Kitty terminal's remote control protocol to change
-the terminal font size. The range extends from -3 (smaller than base) to 7
-(much larger). By default, font size changes include a dissolve transition
-animation. Use font_transition: none for instant changes.
+the terminal font size (Ghostty on macOS works too). 1 is the normal size and
+each step adds or removes 4 pt; the change happens in the same frame as the
+slide, so there is no flash.
 -->
 
 ---
 
 # Font Sizing: Small Detail
 <!-- section: Display -->
-<!-- font_size: 3 -->
-<!-- font_transition: none -->
+<!-- font_size: 0 -->
 
-This slide uses `<!-- font_size: 3 -->` with `<!-- font_transition: none -->` for instant change.
+This slide uses `<!-- font_size: 0 -->`, one step below your normal size.
 
-- Negative font sizes shrink below the terminal's base size
+- Sizes below 1 shrink below the terminal's base size
 - Perfect for dense content, code listings, and data tables
-- `font_transition: none` skips the dissolve animation
+- `]` / `[` adjust any slide; `0` resets
 
 | Terminal     | Font Sizing | Image Protocol | Best For        |
 |:-------------|:-----------:|:--------------:|:----------------|
 | Kitty        | Full        | Native         | Development     |
-| Ghostty      | Full        | Kitty          | Development     |
+| Ghostty      | macOS       | Kitty          | Development     |
 | iTerm2       | None        | Inline         | macOS users     |
-| WezTerm      | None        | Sixel          | Cross-platform  |
-| Any terminal | None        | ASCII          | Remote/SSH      |
+| WezTerm      | None        | Inline         | Cross-platform  |
+| Any terminal | None        | Half blocks    | Remote/SSH      |
 
 <!-- notes:
 Small font sizes are useful for slides with dense content like tables
-or code listings. The font_transition: none directive makes the size
-change instant instead of using the default dissolve animation.
-This avoids the brief blank screen during font transitions.
+or code listings.
 -->
 
 ---
@@ -884,7 +873,7 @@ is sticky until the next slide is reached.
 
 # Footer Bar
 <!-- section: Display -->
-<!-- footer: Ostendo Demo | March 2026 | Slide 32/37 -->
+<!-- footer: Ostendo Demo | March 2026 -->
 <!-- footer_align: center -->
 <!-- font_size: 6 -->
 
@@ -892,13 +881,13 @@ Per-slide footer displayed at the bottom of the screen:
 
 - Set text with `<!-- footer: Your text here -->`
 - Align with `<!-- footer_align: left|center|right -->`
-- Independent of the top status bar
+- Independent of the status bar
 
 > Look at the bottom of this slide for the footer
 
 <!-- notes:
 The per-slide footer bar appears at the very bottom of the terminal,
-below all content. It is separate from the top status bar and can be
+below all content. It is separate from the status bar and can be
 customized per-slide. Footer alignment defaults to left but can be
 set to center or right via the footer_align directive.
 -->
@@ -913,9 +902,9 @@ set to center or right via the footer_align directive.
 
 Slides are grouped into sections with `<!-- section: Name -->`:
 
-- **Shift+Right** / **Shift+Left**: Jump to next/previous section
+- **J** / **K**: Jump to the next/previous section
 - **J** / **K**: Also jump between sections
-- Section name visible in the status bar (toggle with **s**)
+- Section name in the status bar; **S** also shows it above titles
 - This presentation has sections: Introduction, Formatting, Code Execution, Layouts, Images, Diagrams, Animations, Display, Navigation, Advanced, Closing
 
 > Sections make large presentations navigable
@@ -923,7 +912,7 @@ Slides are grouped into sections with `<!-- section: Name -->`:
 <!-- notes:
 Sections provide logical grouping for slides. The section directive
 sets the section name that appears in the status bar. Section navigation
-keys (Shift+arrows or J/K) skip directly to the first slide of the
+keys (J/K) skip directly to the first slide of the
 next or previous section, making it easy to jump between topics.
 -->
 
@@ -973,8 +962,8 @@ ostendo presentation.md --remote
 ostendo presentation.md --remote --remote-token SECRET
 ```
 
-- WebSocket server on port 9090
-- Web UI at `http://127.0.0.1:9090`
+- WebSocket server on port 8765
+- Web UI at `http://127.0.0.1:8765`
 - Full control: navigation, theme switching, code execution
 - Speaker notes visible in the remote UI
 - Token-based authentication for security
@@ -1002,7 +991,7 @@ code execution entirely.
 **Navigation**
 - `h`/`l` or arrows: prev/next slide
 - `j`/`k`: scroll content up/down
-- `J`/`K` or Shift+arrows: section jump
+- `J`/`K`: section jump
 - `g` + number + Enter: go to slide N
 - `Ctrl+D`/`Ctrl+U`: half-page scroll
 - `o`: slide overview grid
@@ -1036,16 +1025,15 @@ Mouse clicks advance slides, scroll wheel scrolls content, right-click goes back
 # Presenter Notes
 <!-- section: Advanced -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 
-Press `s` to toggle speaker notes during your presentation:
+Press `n` to toggle speaker notes during your presentation:
 
 - Notes are defined with `<!-- notes: ... -->` in markdown
 - Visible only to the presenter, not the audience
 - Notes panel scrolls independently from slide content
 - Remote control UI also shows notes
 
-> Try pressing `s` now to see the notes for this slide
+> Try pressing `n` now to see the notes for this slide
 
 <!-- notes:
 These are the speaker notes for this slide. They are visible when you
@@ -1064,7 +1052,6 @@ Key talking points:
 # Vertical Centering
 <!-- section: Advanced -->
 <!-- font_size: 4 -->
-<!-- font_transition: none -->
 <!-- align: vcenter -->
 
 This slide uses `<!-- align: vcenter -->` to vertically center all content.
@@ -1093,7 +1080,7 @@ These can be set per-slide or globally in front matter.
 
 Built with Rust. Rendered in your terminal. Driven by Markdown.
 
-- `cargo install ostendo` to get started
+- `cargo install --git https://github.com/ZoneMix/ostendo`
 - Press `?` for the full keyboard shortcut reference
 - Explore all 29 themes with `:theme <slug>`
 
