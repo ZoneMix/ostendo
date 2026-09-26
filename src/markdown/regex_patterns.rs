@@ -20,8 +20,7 @@ pub(crate) static FENCE_LABEL_RE: LazyLock<Regex> =
     LazyLock::new(|| re(r#"\{label:\s*"([^"]*)"\s*\}"#));
 
 /// ATX heading: (1) `#` markers, (2) text.
-pub(crate) static HEADING_RE: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^(#{1,6})\s+(.*?)\s*$"));
+pub(crate) static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^(#{1,6})\s+(.*?)\s*$"));
 
 /// `![alt](path)`: (1) alt, (2) path.
 pub(crate) static IMAGE_RE: LazyLock<Regex> =

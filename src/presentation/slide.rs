@@ -37,7 +37,6 @@ pub struct PresentationMeta {
     pub default_alignment: Option<SlideAlignment>,
     /// Transition name (`fade`, `slide`, `dissolve`) for slides without their own.
     pub transition: String,
-    /// Theme slug.
     pub theme: Option<String>,
 }
 
