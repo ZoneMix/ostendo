@@ -49,6 +49,8 @@ impl Highlighter {
     }
 
     fn syntax(&self, language: &str) -> &SyntaxReference {
+        // Info strings like `rust,ignore` name the language first.
+        let language = language.split([',', ' ']).next().unwrap_or_default();
         let token = match language.to_lowercase().as_str() {
             "c++" | "cxx" => "cpp".to_string(),
             "shell" | "zsh" | "console" | "shell-session" => "bash".to_string(),

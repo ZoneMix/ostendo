@@ -130,6 +130,7 @@ const SUPPORTED: [&str; 9] = [
 ];
 
 fn normalize_language(lang: &str) -> &'static str {
+    let lang = lang.split([',', ' ']).next().unwrap_or_default();
     match lang.to_lowercase().as_str() {
         "python" | "python3" | "py" => "python",
         "bash" | "shell" | "zsh" => "bash",
@@ -687,6 +688,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_language_and_oversized_code() {
         assert!(spawn("yaml", "a: 1", ExecMode::Exec, None, 80).is_err());
+        assert!(is_supported("rust,ignore") && is_supported("C++"));
         let huge = "x".repeat(MAX_CODE_LENGTH + 1);
         assert!(spawn("sh", &huge, ExecMode::Exec, None, 80).is_err());
     }
