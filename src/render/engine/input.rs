@@ -51,14 +51,7 @@ impl Presenter {
             }
 
             // Dynamic poll timeout: 33ms when animation/GIF active (~30fps), 100ms otherwise.
-            // Kitty native animation: terminal drives GIF, so no app-side polling needed.
-            let has_active_gif = self.current_slide_has_gif();
-            let kitty_drives_gif = has_active_gif
-                && self.kitty_animation_cap == crate::terminal::protocols::KittyAnimationCapability::Supported
-                && self.slides[self.current].image.as_ref()
-                    .map(|img| self.kitty_gif_ids.contains_key(&img.path))
-                    .unwrap_or(false);
-            let needs_gif_polling = has_active_gif && !kitty_drives_gif;
+            let needs_gif_polling = self.current_slide_has_gif();
             let poll_ms = if self.active_animation.is_some() || !self.active_loop.is_empty() || needs_gif_polling { 33 } else { 100 };
             let mut had_input = false;
             if event::poll(std::time::Duration::from_millis(poll_ms))? {

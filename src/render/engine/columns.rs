@@ -252,7 +252,7 @@ impl Presenter {
 
                         // Render as ASCII art
                         let ascii_rows = crate::terminal::ascii_art::render_ascii_art(
-                            &img, render_width, color_override, Some(self.bg_color),
+                            &img, render_width, color_override,
                         );
 
                         // Add a blank line before the image if there is preceding content
@@ -268,9 +268,6 @@ impl Presenter {
                             let spans: Vec<StyledSpan> = row.iter().map(|cell| {
                                 let mut span = StyledSpan::new(&cell.ch.to_string())
                                     .with_fg(cell.fg);
-                                if let Some(bg) = cell.bg {
-                                    span = span.with_bg(bg);
-                                }
                                 span.animatable = true;
                                 span
                             }).collect();

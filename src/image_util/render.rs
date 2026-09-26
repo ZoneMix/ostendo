@@ -97,7 +97,7 @@ pub fn render_slide_image(
         None => RenderedImage::Lines(Vec::new()),
     };
     match protocol {
-        ImageProtocol::Ascii => render_ascii(img, image, max_cols, text_color, bg_color),
+        ImageProtocol::Ascii => render_ascii(img, image, max_cols, text_color),
         ImageProtocol::Kitty => {
             let (scaled, cols, rows) = fit();
             let image_id = super::kitty::next_image_id();
@@ -127,25 +127,14 @@ fn render_ascii(
     image: &SlideImage,
     max_cols: usize,
     text_color: Color,
-    bg_color: Color,
 ) -> RenderedImage {
-    use crate::terminal::ascii_art;
-
-    let color_override = if image.color_override.is_empty() {
-        None
-    } else {
-        crate::theme::colors::hex_to_color(&image.color_override)
-    };
-    let ascii_rows = ascii_art::render_ascii_art(img, max_cols, color_override, Some(bg_color));
+    let color_override = crate::theme::colors::hex_to_color(&image.color_override);
+    let ascii_rows = crate::terminal::ascii_art::render_ascii_art(img, max_cols, color_override);
     let mut lines = Vec::with_capacity(ascii_rows.len() + 1);
     for row in &ascii_rows {
         let mut line = StyledLine::empty();
         for cell in row {
-            let mut span = StyledSpan::new(&cell.ch.to_string()).with_fg(cell.fg);
-            if let Some(bg) = cell.bg {
-                span = span.with_bg(bg);
-            }
-            line.push(span);
+            line.push(StyledSpan::new(&cell.ch.to_string()).with_fg(cell.fg));
         }
         line.content_type = LineContentType::AsciiImage;
         lines.push(line);
