@@ -96,8 +96,6 @@ pub struct Slide {
     pub diagram_blocks: Vec<DiagramBlock>,
     /// `<!-- theme: slug -->` for this slide only.
     pub theme_override: Option<String>,
-    /// `<!-- font_transition: none -->` applies font size changes without animation.
-    pub font_transition: Option<String>,
 }
 
 /// One body element of a slide; indexes point into the matching `Slide` vector.

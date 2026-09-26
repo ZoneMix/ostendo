@@ -87,9 +87,6 @@ fn slide_directives() {
         ("<!-- font_size: 99 -->", |s| s.font_size == Some(20)),
         ("<!-- text_scale: 3 -->", |s| s.text_scale == Some(3)),
         ("<!-- text_scale: 99 -->", |s| s.text_scale == Some(7)),
-        ("<!-- font_transition: none -->", |s| {
-            s.font_transition.as_deref() == Some("none")
-        }),
         ("<!-- footer: Custom Footer -->", |s| {
             s.footer.as_deref() == Some("Custom Footer")
         }),
@@ -142,7 +139,7 @@ fn sections_carry_over_to_later_slides() {
 #[test]
 fn comments_and_legacy_directives_are_hidden() {
     let slides = parse(
-        "# T\n<!-- some random comment -->\n<!-- timing: 2.0 -->\n<!-- title_scale: 3 -->\n<!--\nTODO\n-->\n<!-- notes: first\nsecond\n-->\n- bullet",
+        "# T\n<!-- some random comment -->\n<!-- timing: 2.0 -->\n<!-- title_scale: 3 -->\n<!-- font_transition: none -->\n<!--\nTODO\n-->\n<!-- notes: first\nsecond\n-->\n- bullet",
     );
     let s = &slides[0];
     assert!(s.subtitle.is_empty());

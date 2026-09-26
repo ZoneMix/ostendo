@@ -33,7 +33,7 @@ pub fn parse_presentation(
     let meta = front_matter.map(parse_front_matter).unwrap_or_default();
 
     let mut slides: Vec<Slide> = Vec::new();
-    let mut section = "opening".to_string();
+    let mut section = String::new();
     for block in split_slides(body) {
         if block.iter().all(|l| l.trim().is_empty()) {
             continue;
@@ -100,7 +100,6 @@ fn slide_directive(s: &mut Slide, name: &str, value: Option<&str>) {
         "section" if !v.is_empty() => s.section = v.to_string(),
         "ascii_title" => s.ascii_title = true,
         "font_size" => set(&mut s.font_size, parse_clamped(v, -20, 20).map(|n| n as i8)),
-        "font_transition" => set(&mut s.font_transition, text()),
         "text_scale" => set(&mut s.text_scale, parse_clamped(v, 1, 7).map(|n| n as u8)),
         "footer" => s.footer = Some(v.to_string()),
         "footer_align" => match v {
