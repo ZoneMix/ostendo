@@ -405,7 +405,7 @@ impl Presenter {
         let (gradient_from, gradient_to, gradient_vertical) = if let Some(ref grad) = theme.gradient {
             let from = hex_to_color(&grad.from);
             let to = hex_to_color(&grad.to);
-            let vertical = grad.direction != "horizontal";
+            let vertical = true;
             (from, to, vertical)
         } else {
             (None, None, true)

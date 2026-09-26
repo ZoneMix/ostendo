@@ -5,10 +5,4 @@ colors:
   accent: "#00FF88"
   text: "#E0E0E0"
   code_background: "#252525"
-fonts:
-  heading: "JetBrains Mono"
-  body: "JetBrains Mono"
-  code: "JetBrains Mono"
-layout: "left"
-visual_style: "bold"
 light_variant: "terminal_green_light"

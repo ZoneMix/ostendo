@@ -120,7 +120,7 @@ impl Presenter {
         if let Some(ref grad) = new_theme.gradient {
             self.gradient_from = hex_to_color(&grad.from);
             self.gradient_to = hex_to_color(&grad.to);
-            self.gradient_vertical = grad.direction != "horizontal";
+            self.gradient_vertical = true;
         } else {
             self.gradient_from = None;
             self.gradient_to = None;
