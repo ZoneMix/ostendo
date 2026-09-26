@@ -214,11 +214,7 @@ fn main() -> Result<()> {
                 println!("Exported HTML to {:?}", output_path);
             }
             "pdf" => {
-                // First export to HTML, then convert to PDF
-                let html_path = std::env::temp_dir().join("ostendo_export.html");
-                export::html::export_html(&slides, &theme, &html_path)?;
-                export::pdf::export_pdf(&html_path, &output_path)?;
-                let _ = std::fs::remove_file(&html_path);
+                export::pdf::export_pdf(&slides, &theme, &output_path)?;
                 println!("Exported PDF to {:?}", output_path);
             }
             _ => {
