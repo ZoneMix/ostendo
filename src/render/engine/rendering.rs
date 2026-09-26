@@ -106,8 +106,7 @@ impl Presenter {
             let stdout_raw = io::stdout();
             let mut raw = stdout_raw.lock();
             for img_id in &self.kitty_transmitted {
-                let del = format!("\x1b_Ga=d,d=I,i={},q=2;AAAA\x1b\\", img_id);
-                raw.write_all(del.as_bytes())?;
+                raw.write_all(crate::image_util::kitty::delete_image(*img_id).as_bytes())?;
             }
             raw.write_all(KITTY_CLEAR_IMAGES)?;
             raw.flush()?;
@@ -508,21 +507,24 @@ impl Presenter {
                         };
                         let effective_protocol = self.image_protocol;
                         let img_max_height = th / 2;
-                        let preloaded = self.preloaded_images.get(&mermaid_img.path);
-                        let rendered = render_slide_image(
-                            &mermaid_img, content_width, img_max_height, &pad,
-                            self.accent_color, self.text_color,
-                            effective_protocol, self.bg_color,
-                            &self.window_size, preloaded,
-                        );
+                        let rendered = match crate::image_util::load_image(&mermaid_img.path) {
+                            Ok(png) => render_slide_image(
+                                &png, &mermaid_img, content_width.saturating_sub(pad.len()), img_max_height,
+                                effective_protocol, self.text_color, self.bg_color, &self.window_size,
+                            ),
+                            Err(_) => RenderedImage::Lines(Vec::new()),
+                        };
                         match rendered {
-                            RenderedImage::Lines(l) => lines.extend(l),
-                            RenderedImage::Protocol { escape_data, placeholder_height } => {
+                            RenderedImage::Lines(l) => lines.extend(l.into_iter().map(|mut line| {
+                                line.spans.insert(0, StyledSpan::new(&pad));
+                                line
+                            })),
+                            RenderedImage::Protocol { escape_data, cols, rows } => {
                                 let image_line_offset = lines.len();
-                                for _ in 0..placeholder_height {
+                                for _ in 0..rows {
                                     lines.push(StyledLine::empty());
                                 }
-                                pending_protocol_images.push((escape_data, image_line_offset, 0, ImagePosition::Below));
+                                pending_protocol_images.push((escape_data, image_line_offset, cols, ImagePosition::Below));
                             }
                             RenderedImage::KittyPlacement { cols, rows, transmit_escape, image_id } => {
                                 // Transmit mermaid image to Kitty if not already sent
@@ -535,7 +537,7 @@ impl Presenter {
                                 for _ in 0..rows {
                                     lines.push(StyledLine::empty());
                                 }
-                                let placement = crate::image_util::kitty::placement_escape(image_id, cols, rows);
+                                let placement = crate::image_util::kitty::placement_escape(image_id, image_id, cols, rows);
                                 pending_protocol_images.push((placement, image_line_offset, cols, ImagePosition::Below));
                             }
                         }
@@ -646,18 +648,33 @@ impl Presenter {
                 // img_extra_margin centers within content when img < content_width)
                 let img_extra_margin = content_width.saturating_sub(img_width) / 2;
                 let img_pad = " ".repeat(margin + img_extra_margin);
-                // Pass img_width + pad so render_slide_image computes
-                // display_width = (img_width + pad) - pad = img_width correctly.
-                let rendered = render_slide_image(
-                    img, img_width + img_pad.len(), img_max_height, &img_pad,
-                    self.accent_color, self.text_color,
-                    effective_protocol, self.bg_color,
-                    &self.window_size, preloaded,
-                );
+                let loaded;
+                let source = match preloaded {
+                    Some(source) => Some(source),
+                    None => {
+                        loaded = crate::image_util::load_image(&img.path).ok();
+                        loaded.as_ref()
+                    }
+                };
+                let rendered = match source {
+                    Some(source) => render_slide_image(
+                        source, img, img_width, img_max_height,
+                        effective_protocol, self.text_color, self.bg_color, &self.window_size,
+                    ),
+                    None => {
+                        let problem = if img.path.exists() { "Failed to load image" } else { "Image not found" };
+                        let mut line = StyledLine::empty();
+                        line.push(StyledSpan::new(&format!("[{}: {}]", problem, img.path.display())).with_fg(self.accent_color));
+                        RenderedImage::Lines(vec![line])
+                    }
+                };
                 match rendered {
-                    RenderedImage::Lines(l) => CachedImage::Lines(l),
-                    RenderedImage::Protocol { escape_data, placeholder_height } => {
-                        CachedImage::Protocol { escape_data, placeholder_height }
+                    RenderedImage::Lines(l) => CachedImage::Lines(l.into_iter().map(|mut line| {
+                        line.spans.insert(0, StyledSpan::new(&img_pad));
+                        line
+                    }).collect()),
+                    RenderedImage::Protocol { escape_data, cols, rows } => {
+                        CachedImage::Protocol { escape_data, cols, placeholder_height: rows }
                     }
                     RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
                         // Transmit image data to Kitty NOW if not already sent
@@ -683,7 +700,7 @@ impl Presenter {
                             self.kitty_transmitted.insert(*image_id);
                         }
                     }
-                    let placement = crate::image_util::kitty::placement_escape(*image_id, *cols, *rows);
+                    let placement = crate::image_util::kitty::placement_escape(*image_id, *image_id, *cols, *rows);
                     if img_pos == ImagePosition::Right {
                         // Right: overlay on existing content from the top
                         pending_protocol_images.push((placement, 0, *cols, ImagePosition::Right));
@@ -696,15 +713,15 @@ impl Presenter {
                         pending_protocol_images.push((placement, image_line_offset, *cols, ImagePosition::Below));
                     }
                 }
-                CachedImage::Protocol { escape_data, placeholder_height } => {
+                CachedImage::Protocol { escape_data, cols, placeholder_height } => {
                     if img_pos == ImagePosition::Right {
-                        pending_protocol_images.push((escape_data.clone(), 0, 0, ImagePosition::Right));
+                        pending_protocol_images.push((escape_data.clone(), 0, *cols, ImagePosition::Right));
                     } else {
                         let image_line_offset = lines.len();
                         for _ in 0..*placeholder_height {
                             lines.push(StyledLine::empty());
                         }
-                        pending_protocol_images.push((escape_data.clone(), image_line_offset, 0, ImagePosition::Below));
+                        pending_protocol_images.push((escape_data.clone(), image_line_offset, *cols, ImagePosition::Below));
                     }
                 }
             }

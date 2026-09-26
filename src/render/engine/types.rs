@@ -74,7 +74,7 @@ pub(crate) enum CachedImage {
     Lines(Vec<StyledLine>),
     /// Raw protocol escape data (iTerm2/Sixel) plus the number of
     /// terminal rows the image occupies (used for placeholder spacing).
-    Protocol { escape_data: String, placeholder_height: usize },
+    Protocol { escape_data: String, cols: usize, placeholder_height: usize },
     /// Kitty v2: reference to a Kitty image. Contains the transmit escape
     /// for lazy transmission on first use, then only `a=p` placement (~50 bytes).
     KittyRef {
