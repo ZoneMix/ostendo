@@ -5,5 +5,4 @@ lean-code rules every change must follow.
 
 - Skills: [`.claude/skills/`](.claude/skills/) (`lean-audit`, `presentation-format`,
   `theme-authoring`, `demo-scripts`)
-- Reference: [`.claude/docs/`](.claude/docs/) (directives, keyboard shortcuts, CLI
-  flags, animations, themes)
+- Reference: [`docs/`](docs/) (presentation format, themes)

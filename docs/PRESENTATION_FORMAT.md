@@ -24,7 +24,8 @@ align: top
 | Key | Effect |
 |---|---|
 | `title` | Shown in the status bar and used as the exported document title |
-| `author`, `date` | Stored with the deck |
+| `author` | Shown after the title in the status bar |
+| `date` | Shown with the title and author in the overview (`o`) |
 | `theme` | Theme slug (`ostendo --list-themes`); `--theme` overrides it |
 | `accent` | Hex accent color for the deck's theme; ignored if it would be unreadable (below 3:1 contrast) |
 | `transition` | Default transition for every slide: `fade`, `slide`, `dissolve` |
@@ -35,7 +36,7 @@ align: top
 Elements render in the order they appear in the file.
 
 - `# Title` — the slide title (first `#` heading). Other headings (`##`, `###`)
-  render as bold text lines.
+  render as bold text.
 - The first line of text right after the title is the subtitle; later text
   becomes paragraphs (consecutive lines join into one paragraph).
 - Lists: `-`, `*`, or `+` followed by a space; indent two spaces per level

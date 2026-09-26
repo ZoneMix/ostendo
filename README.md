@@ -1,222 +1,182 @@
 # Ostendo
 
-*Latin: ostendo — to show, to display, to exhibit.*
+*Latin: to show, to display.*
 
-AI-native terminal presentations from markdown.
+Markdown slides, presented in your terminal. Write a deck in any editor, run
+it with one command, and present live code, images, diagrams, and speaker
+notes without leaving the shell.
 
-![Ostendo demo](demo.gif)
+![Ostendo presenting a code slide](docs/screenshots/code.png)
 
 ## Features
 
-- **29 built-in themes** — all WCAG 2.0 compliant contrast ratios
-- **Native image protocols** — Kitty, iTerm2, Sixel, and ASCII fallback with auto-detection
-- **Live code execution** — `+exec` and `+pty` blocks with real-time streaming output
-- **Per-slide font sizing** — via Kitty remote control protocol
-- **Smart redraw** — no flicker, even in tmux (synchronized updates)
-- **Hot reload** — edit your markdown, slides update live
-- **WebSocket remote control** — navigate from any browser or mobile device
-- **Rich content** — column layouts, tables, blockquotes, FIGlet ASCII art titles
-- **Scrollable speaker notes** — toggle with `n`, scroll with `Shift+N`/`Shift+P`
-- **Slide state persistence** — remembers last slide and scale per presentation
-- **Image pre-rendering** — cached by path, width, and protocol
+- **Plain markdown.** Slides are separated by `---`; directives are HTML
+  comments, so decks still read well on GitHub.
+- **Live code.** Run Python, Bash, JavaScript, Ruby, Rust, C, C++, or Go
+  blocks with Ctrl+E and watch the output stream in, with colors.
+- **Images everywhere.** Kitty, Ghostty, iTerm2, WezTerm, and Sixel graphics,
+  true-color half blocks in every other terminal, and animated GIFs.
+- **Diagrams.** A small arrow syntax renders box, bracket, or vertical flow
+  diagrams; Mermaid renders when `mmdc` is installed.
+- **Layout.** Columns, tables, quotes, FIGlet titles, footers, and per-slide
+  themes, centered and wrapped to any terminal size.
+- **Animations.** Fade, slide, and dissolve transitions; typewriter and fade-in
+  entrances; matrix, sparkle, pulse, bounce, and spin loops.
+- **Presenter tools.** Speaker notes, a timer, a slide overview, sections,
+  hot reload on save, and a phone remote over WebSocket.
+- **Themes.** Every built-in theme passes WCAG contrast checks, with
+  dark/light pairs you can switch on stage.
+- **Fast.** Only the rows that change are redrawn, inside synchronized
+  updates: no flicker, even over SSH and tmux.
+- **Export.** Self-contained HTML, or PDF through headless Chrome.
 
-## Quick Start
+| | |
+|:-:|:-:|
+| ![Two code blocks side by side in columns, one with its output](docs/screenshots/columns.png) | ![The slide overview grid](docs/screenshots/overview.png) |
+| Columns with live code | Overview (`o`) |
+
+## Install
 
 ```bash
-# Quickstart
-cargo run -- presentations/examples/demo.md --remote
-
-# Build Release Version
-cargo build --release
-./target/release/ostendo presentations/examples/demo.md
-./target/release/ostendo presentations/examples/demo.md --theme dracula
+cargo install --git https://github.com/ZoneMix/ostendo
 ```
 
-## Usage
+Or build from a clone with `cargo build --release` (Rust 1.89 or newer).
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `<file>` | Path to markdown presentation file | (required) |
-| `-t, --theme <slug>` | Theme slug | `terminal_green` |
-| `-s, --slide <N>` | Start at slide N | `1` |
-| `--image-mode <mode>` | `auto\|kitty\|iterm\|sixel\|ascii` | `auto` |
-| `--list-themes` | List themes and exit | |
-| `--remote` | Enable WebSocket remote control | |
-| `--remote-port <N>` | Remote control port | `8765` |
-| `--validate` | Validate presentation and exit | |
-| `--count` | Print slide count and exit | |
-| `--export-titles` | Print slide titles and exit | |
-| `--detect-protocol` | Print detected image protocol and exit | |
-| `--scale <N>` | Content scale (50-200) | `80` |
-| `--fullscreen` | Start without status bar | |
-| `--timer` | Start with timer running | |
+## Quick start
 
-## Keyboard Shortcuts
+```bash
+ostendo presentations/examples/quick_start.md
+```
+
+A minimal deck:
+
+````markdown
+---
+title: Shipping Rust
+author: Ada Lovelace
+theme: nord
+transition: fade
+---
+
+# Shipping Rust
+<!-- ascii_title -->
+<!-- align: center -->
+
+From prototype to production
+
+---
+
+# Why it works
+<!-- section: Background -->
+
+- Fearless refactoring
+- One binary to deploy
+
+```python +exec
+print("hello from the slide")
+```
+
+<!-- notes: Ask who has shipped Rust before. -->
+````
+
+Run `ostendo --validate talk.md` before presenting. The full syntax is in
+[docs/PRESENTATION_FORMAT.md](docs/PRESENTATION_FORMAT.md); every feature is
+demonstrated in `presentations/examples/test_presentation.md`.
+
+## Keys
 
 | Key | Action |
-|-----|--------|
-| `h` / `Left` / `Backspace` | Previous slide |
-| `l` / `Right` / `Space` | Next slide |
-| `j` / `Down` | Scroll down |
-| `k` / `Up` | Scroll up |
-| `J` / `K` (shift) | Next/previous section |
-| `Ctrl+D` / `Ctrl+U` | Half page down/up |
-| `g` + N + `Enter` | Go to slide N |
-| `n` | Toggle speaker notes |
-| `Shift+N` / `Shift+P` | Scroll speaker notes down/up |
-| `f` | Toggle fullscreen |
-| `T` | Toggle theme name |
-| `?` | Help screen |
-| `o` | Slide overview |
-| `+` / `-` | Scale up/down |
-| `]` / `[` | Font size up/down (Kitty remote control) |
-| `Ctrl/Cmd+0` | Reset font size |
-| `Ctrl+E` | Execute code block |
-| `:` | Command mode |
-| `q` | Quit |
+|---|---|
+| `→` `l` `Space` `Enter` `PgDn` | Next slide |
+| `←` `h` `Backspace` `PgUp` | Previous slide |
+| `Home` / `End` | First / last slide |
+| `↓` `j` / `↑` `k` | Scroll the slide |
+| `Ctrl+D` / `Ctrl+U` | Scroll half a page |
+| `J` / `K` | Next / previous section |
+| `g` then a number, `Enter` | Go to slide |
+| `o` | Overview of all slides |
+| `n` | Speaker notes (`N` / `P` scroll them) |
+| `Ctrl+E` | Run the code block (again: next block) |
+| `f` | Hide the status bar |
+| `t` | Start / pause the timer |
+| `T` | Show the theme name |
+| `S` | Section labels above titles |
+| `D` | Switch between a theme's dark and light versions |
+| `+` / `-` | Content width |
+| `>` / `<` | Image size |
+| `]` / `[` / `0` | Font size up / down / reset (Kitty, Ghostty) |
+| `:` | Command: `theme <slug>`, `goto <n>`, `timer reset`, `notes`, `overview`, `reload`, `q` |
+| `?` | Help |
+| `q` / `Ctrl+C` | Quit |
 
-## Writing Presentations
+Ostendo remembers the slide, theme, and font adjustments for each
+presentation.
 
-Ostendo uses standard markdown with HTML comment directives for slide control. Slides are separated by `---`. See [AGENTS.md](AGENTS.md) for the complete format specification and directive reference.
+## Command line
 
-## AI-Driven Presentations
+| Option | Effect |
+|---|---|
+| `-t, --theme <slug>` | Theme (overrides the front matter) |
+| `-s, --slide <n>` | Start on slide *n* (default: where you left off) |
+| `--image-mode <mode>` | `auto`, `kitty`, `iterm`, `sixel`, `blocks`, `ascii` |
+| `--scale <percent>` | Content width, 40–100 (default 80) |
+| `--fullscreen` | Start without the status bar |
+| `--timer` | Start the timer immediately |
+| `--no-exec` | Never run code blocks |
+| `--remote` | Serve a remote control page on `127.0.0.1` |
+| `--remote-port <port>` | Remote port (default 8765) |
+| `--remote-token <token>` | Require a token for the remote |
+| `--remote-exec` | Let the remote run code blocks |
+| `--validate` | Check the deck and exit |
+| `--export html\|pdf` | Export and exit (`-o` sets the path) |
+| `--list-themes` | List themes with swatches |
+| `--count`, `--export-titles` | Print the slide count or titles |
+| `--detect-protocol` | Print the image protocol for this terminal |
 
-Ostendo is designed for AI agents to build presentations automatically:
+## Terminals
 
-1. Point your AI agent at [`AGENTS.md`](AGENTS.md) — it contains the full format spec
-2. Provide your instructions, data, and any image assets
-3. The agent generates a complete presentation in `presentations/<name>/presentation.md`
-4. Hot reload lets you preview changes as the AI writes them
+| | Kitty | Ghostty | iTerm2 / WezTerm | Others |
+|---|:-:|:-:|:-:|:-:|
+| Images | Kitty graphics | Kitty graphics | Inline images | Half blocks (Sixel with `--image-mode sixel`) |
+| Per-slide font size | Yes¹ | macOS² | – | – |
+| Large titles (`text_scale`) | Yes | – | – | – |
 
-Ostendo itself was built with Claude Code Max (Opus 4.6) in a weekend — over 14,600 lines of Rust source code, 29 themes, and full image protocol support, all generated through AI-driven development.
+1. Needs `allow_remote_control yes` in `kitty.conf`.
+2. Sends Ghostty's zoom shortcuts; macOS asks for Accessibility permission
+   the first time.
+
+Inside tmux, Kitty and Ghostty images fall back to half blocks and font sizing
+is off; iTerm2 images still work.
 
 ## Themes
 
-| Slug | Name | Background | Accent |
-|------|------|------------|--------|
-| `terminal_green` | Terminal Green | #0D0D0D | #00FF88 |
-| `amber_warning` | Amber Warning | #0D0D0D | #FFB000 |
-| `arctic_blue` | Arctic Blue | #0A0E17 | #00D4FF |
-| `blood_moon` | Blood Moon | #1A0000 | #CC0000 |
-| `blueprint` | Blueprint | #0A1628 | #5BA4CF |
-| `catppuccin` | Catppuccin | #1E1E2E | #CBA6F7 |
-| `clean_light` | Clean Light | #F5F5F0 | #2563EB |
-| `cyber_red` | Cyber Red | #1A1A2E | #FF4444 |
-| `dracula` | Dracula | #282A36 | #BD93F9 |
-| `frost_glass` | Frost Glass | #0F172A | #38BDF8 |
-| `matrix` | Matrix | #000000 | #00FF41 |
-| `military_green` | Military Green | #1C2418 | #4A7C3F |
-| `minimal_mono` | Minimal Mono | #FFFFFF | #E63946 |
-| `neon_purple` | Neon Purple | #13111C | #A855F7 |
-| `nord` | Nord | #2E3440 | #88C0D0 |
-| `outrun` | Outrun | #1A0A2E | #FF2975 |
-| `paper` | Paper | #FAF8F5 | #6B4C3B |
-| `solarized` | Solarized | #002B36 | #B58900 |
-| `sunset_warm` | Sunset Warm | #1A0A0A | #FF6B35 |
-| `vaporwave` | Vaporwave | #1A0033 | #FF6EC7 |
+`ostendo --list-themes` shows them all. Choose one with `--theme`, `theme:` in
+the front matter, or `:theme <slug>` while presenting. To make your own, see
+[docs/THEME_GUIDE.md](docs/THEME_GUIDE.md).
 
-Switch themes at runtime with `:theme <slug>` or press `T` to show the current theme name.
-
-## Image Protocols
-
-Ostendo auto-detects the best image protocol for your terminal:
-
-- **Kitty** — native graphics protocol, best quality and performance (recommended)
-- **iTerm2** — inline image protocol (iTerm2, WezTerm)
-- **Sixel** — bitmap graphics (xterm, mlterm, foot)
-- **ASCII** — character-based rendering (any terminal)
-
-Override with `--image-mode <protocol>` or per-slide with `<!-- image_render: ascii -->`.
-
-Valid `image_render` directive values: `ascii`, `kitty`, `iterm`, `sixel`.
-
-## Terminal Compatibility
-
-| Feature | Kitty | iTerm2 | WezTerm | tmux | Other |
-|---------|:-----:|:------:|:-------:|:----:|:-----:|
-| Native images | Yes | Yes | Yes | DCS passthrough | Sixel/ASCII |
-| Per-slide font sizing | Yes (OSC 66) | No | No | No | No |
-| Synchronized updates | Yes | Yes | Yes | Yes | Most |
-| Hot reload | Yes | Yes | Yes | Yes | Yes |
-| Remote control | Yes | Yes | Yes | Yes | Yes |
-
-**Note:** OSC 66 font sizing theoretically works in any terminal that supports it, but has only been tested in Kitty.
-
-**tmux caveat:** A stale `KITTY_WINDOW_ID` environment variable can cause issues. Unset it or start a fresh tmux session.
-
-## Known Limitations
-
-- Inline formatting markers spanning a wrap boundary will break (blockquotes and bullets)
-- FIGlet ASCII titles overflow on narrow terminals with long text
-- Font sizing via Kitty remote control protocol — Kitty terminal only
-- Protocol images in tmux may have latency on first display
-
-## Code Execution
-
-Mark code blocks as executable:
-
-````markdown
-```python +exec {label: "demo"}
-print("Hello!")
-```
-````
-
-- `+exec` — capture stdout and display below the block
-- `+pty` — run in a PTY for interactive programs
-- Press `Ctrl+E` to execute
-
-## Remote Control
+## Remote control
 
 ```bash
-ostendo presentation.md --remote --remote-port 8765
+ostendo talk.md --remote --remote-token "$(openssl rand -hex 16)"
 ```
 
-Opens a WebSocket server. Connect from any browser or mobile device to control slide navigation remotely.
+Open the printed URL to get a page with navigation buttons and the current
+slide's notes. It listens on `127.0.0.1` only; forward the port (for example
+with `ssh -L`) to use it from a phone. See [SECURITY.md](SECURITY.md) before
+presenting decks you did not write.
 
-## Source Tree
-
-```
-src/
-  main.rs              CLI entry point
-  markdown/
-    parser.rs           Markdown + directive parser
-  presentation/
-    slide.rs            Slide data structures
-    state.rs            Persistent state management
-  render/
-    engine.rs           TUI rendering engine
-    layout.rs           Window size / layout math
-    text.rs             Styled text spans
-    progress.rs         Progress bar
-  theme/
-    schema.rs           Theme YAML schema
-    builtin.rs          Built-in theme loader
-    colors.rs           Hex color parsing
-  image_util/
-    mod.rs              Image utility module
-    render.rs           Image rendering (all protocols)
-  terminal/
-    protocols.rs        Image protocol detection
-    ascii_art.rs        ASCII art renderer
-  code/
-    highlight.rs        Syntax highlighting (syntect)
-    executor.rs         Code execution
-    pty.rs              PTY execution
-  remote/
-    server.rs           WebSocket server
-    html.rs             Remote control web UI
-```
-
-## Building
+## Export
 
 ```bash
-cargo build              # Debug build
-cargo build --release    # Release build
-cargo test               # Run tests
+ostendo talk.md --export html            # talk.html, images embedded
+ostendo talk.md --export pdf -o talk.pdf # needs Chrome/Chromium or wkhtmltopdf
 ```
 
-Requires Rust 1.75+ (uses `LazyLock`).
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [WISHLIST.md](WISHLIST.md).
 
 ## License
 
-Licensed under the [GNU General Public License v3.0](LICENSE). You are free to use, modify, and distribute this software, but all derivative works must also be open source under GPLv3.
+[GPL-3.0-only](LICENSE)

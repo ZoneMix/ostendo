@@ -36,72 +36,81 @@ code, tests, comments, or docs. Its gate, in short:
 
 ```
 markdown source
-  -> markdown::parse_presentation()         -> (PresentationMeta, Vec<Slide>)
-  -> Presenter::run()                       event loop (render/engine/input.rs)
-  -> Presenter::render_frame()              render/engine/rendering.rs
-       1. pending font change (Kitty RC / Ghostty)
-       2. Help / Overview modes render and return
-       3. smart redraw: nothing changed -> status bar only
-       4. build Vec<StyledLine> virtual buffer from the slide
-       5. alignment (vertical / horizontal centering)
-       6. animation overlays: transition -> entrance -> loop
-       7. clamp scroll, flush inside Begin/EndSynchronizedUpdate
-       8. emit protocol images (Kitty / iTerm2 / Sixel) after text
+  -> markdown::parse_presentation()      (PresentationMeta, Vec<Slide>)
+  -> Presenter::run()                    event loop: render/engine/input.rs
+  -> Presenter::slide_frame()            frame.rs: lay out the slide once into a
+                                         SlideFrame, cached by FrameKey
+  -> compose()                           compose.rs: scroll, animations, status
+                                         bar, notes, footer, prompt -> Screen
+  -> Display::present()                  display.rs: rewrite only changed rows,
+                                         diff image placements, inside a
+                                         synchronized update
 ```
+
+Help and overview are Screens built by `chrome.rs` and go through the same
+`Display`.
 
 ## Module map
 
 | Path | Owns |
 |---|---|
-| `main.rs` | CLI (clap), early-exit flags, export, launching the presenter |
-| `markdown/parser.rs` | Markdown -> slides; directive handling |
-| `markdown/regex_patterns.rs` | Every directive regex (`LazyLock<Regex>`) |
+| `main.rs` | CLI (clap), `--validate`, `--list-themes`, export, launching the presenter |
+| `markdown/split.rs`, `parser.rs` | Front matter and slide boundaries; markdown -> `Slide` |
+| `markdown/regex_patterns.rs` | Line patterns (`LazyLock<Regex>`) |
 | `markdown/inline.rs`, `tables.rs` | Inline formatting, table cells |
-| `presentation/slide.rs` | `Slide` and content types |
-| `presentation/state.rs` | Persisted per-presentation state (JSON) |
-| `render/engine/mod.rs` | `Presenter` struct and lifecycle |
-| `render/engine/rendering.rs` | `render_frame()`, smart redraw, viewport |
-| `render/engine/input.rs` | Event loop, keys, mouse, remote commands |
-| `render/engine/content.rs` | FIGlet / decorated titles, exec output |
-| `render/engine/columns.rs`, `table_render.rs` | Column layouts, tables |
-| `render/engine/ui.rs` | Status bar, help overlay, overview grid |
-| `render/engine/font.rs` | Kitty RC / Ghostty font size and transitions |
-| `render/engine/{state,navigation,types,output,line_writer}.rs` | Toggles, slide movement, shared types, span output |
+| `presentation/slide.rs` | `Slide`, `Block`, column and content types |
+| `presentation/state.rs` | Per-presentation state saved between runs (JSON) |
+| `render/engine/mod.rs` | `Presenter` struct, `run()` |
+| `render/engine/input.rs` | Event loop, tick rate, key bindings, `:` commands |
+| `render/engine/navigation.rs`, `state.rs` | Slide changes; themes, toggles, persistence |
+| `render/engine/actions.rs` | Code execution, hot reload, remote control |
+| `render/engine/frame.rs` | Slide layout and cache, alignment, image placement |
+| `render/engine/blocks.rs`, `columns.rs` | Element builders: titles, bullets, code, tables, quotes, columns |
+| `render/engine/compose.rs`, `chrome.rs` | Full-screen assembly; status bar, notes, help, overview |
+| `render/engine/display.rs` | Row-diffing terminal writer, image placement |
+| `render/engine/images.rs` | Image loading, rendering cache, GIF frames, Mermaid |
+| `render/engine/palette.rs` | Colors derived from the theme |
+| `render/engine/ansi.rs` | Program output (SGR) -> styled spans |
+| `render/engine/font.rs` | Per-slide font size (Kitty RC, Ghostty) |
+| `render/engine/terminal.rs` | Terminal setup and restore, panic hook |
 | `render/animation/` | Transitions, entrances, loop animations |
-| `render/text.rs` | `StyledLine` / `StyledSpan` virtual buffer |
+| `render/text.rs` | `StyledLine` / `StyledSpan`, width-aware wrap and truncate |
 | `terminal/protocols.rs` | Image protocol and font capability detection |
-| `terminal/ascii_art.rs` | Half-block ASCII image renderer |
-| `image_util/` | Image loading, protocol rendering, Kitty protocol, Mermaid |
-| `diagram/` | ASCII diagram DSL and renderers (box, bracket, vertical) |
-| `code/` | Code execution sandbox, PTY, syntax highlighting |
+| `terminal/ascii_art.rs` | Half-block and character-art image rendering |
+| `image_util/` | Image decoding, protocol encoders, Kitty protocol, Mermaid CLI |
+| `diagram/` | Diagram DSL and renderers (box, bracket, vertical) |
+| `code/` | Execution sandbox, PTY, syntax highlighting |
 | `export/` | HTML and PDF export |
 | `remote/` | WebSocket remote control server and embedded UI |
-| `theme/` | Theme registry, schema, colors, WCAG checks; themes are `themes/*.yaml`, embedded by `build.rs` |
+| `theme/` | Theme registry, schema, color math; themes are `themes/*.yaml`, embedded by `build.rs` |
 | `watch.rs` | Hot-reload file watcher |
 
 ## Invariants
 
-- The frame is built as `Vec<StyledLine>` and flushed once; never write to the
-  terminal mid-frame.
+- Never write to the terminal outside `Display::present` (and the font change
+  that precedes it in the same synchronized update).
+- Anything that changes how a slide lays out must be in `FrameKey` or call
+  `invalidate()`, which bumps `generation`; otherwise a stale cached frame is
+  shown.
 - Animation functions take `&[StyledLine]` and return a new buffer.
-- Horizontal centering must preserve `line.content_type`, or `sparkle(figlet)`
-  / `spin(image)` targeting silently breaks.
-- Protocol images must check `line_offset >= visible_start`, and Kitty images
-  must be cleared when the scroll offset changes, not only on slide change.
-- `prerender_images` must build the same `ImageCacheKey` (including per-image
-  `image_scale`) that `render_frame` looks up.
+- Alignment must preserve `line.content_type`, or `sparkle(figlet)` /
+  `spin(image)` targeting silently breaks.
+- Images are placed in the `Screen`, never written directly; `Display` owns
+  Kitty placements and re-sends inline images only when their rows change.
 - Text width is display width (`unicode-width`), and slicing is char-based.
   Never byte-slice user text.
-- `font_size` directive range is -20..=20 (negative = smaller than base).
-- Exec output keeps ANSI escapes.
-- Code execution: own process group, 30s timeout, 64 KB input, 1 MB output,
-  `--no-exec` disables it, `--remote-exec` gates WebSocket execution.
+- `font_size` directive: -20..=20, 1 = the terminal's own size, 4 pt per step.
+  `]`/`[` adjustments are saved per presentation, separately.
+- Program output is untrusted: `ansi.rs` keeps SGR and drops every other
+  escape.
+- Code execution: own process group, 30 s timeout, 64 KB input, 1 MB output,
+  no stdin; `--no-exec` disables it, `--remote-exec` gates WebSocket execution.
 
 ## Conventions
 
 - `anyhow::Result` for fallible paths; no `.unwrap()` on anything derived from
   user markdown, the terminal, the filesystem, or the network.
-- Prefer `pub(crate)`; regex statics live in `regex_patterns.rs`.
+- Prefer `pub(crate)`.
 - Tests live in `#[cfg(test)] mod tests` next to the code (parser tests in
   `markdown/parser_tests.rs`).
 - Themes must pass WCAG 2.0: text:bg >= 4.5, accent:bg >= 3.0.
@@ -110,17 +119,20 @@ markdown source
 
 | Task | Start here |
 |---|---|
-| New directive | `regex_patterns.rs` -> `parser.rs` -> `slide.rs` -> `.claude/docs/DIRECTIVE_REFERENCE.md` |
+| New directive | `markdown/parser.rs` (`slide_directive`) -> `presentation/slide.rs` -> `docs/PRESENTATION_FORMAT.md` |
+| New slide element | `presentation/slide.rs` (`Block`) -> `render/engine/blocks.rs` -> `frame.rs` -> `export/html.rs` |
 | New animation | `render/animation/` |
-| Key binding | `render/engine/input.rs` -> `.claude/docs/KEYBOARD_SHORTCUTS.md` |
-| Status bar | `render/engine/ui.rs` |
-| Image protocol | `terminal/protocols.rs`, `image_util/render.rs` |
+| Key binding | `render/engine/input.rs` (`normal_key`) -> help in `chrome.rs` -> README |
+| Status bar | `render/engine/chrome.rs` (`status_bar`) |
+| Image protocol | `terminal/protocols.rs`, `image_util/render.rs`, `render/engine/display.rs` |
 | New theme | `themes/*.yaml` (see the `theme-authoring` skill) |
 | Export format | `export/` |
 
 ## Reference
 
-- `.claude/docs/`: directives, keyboard shortcuts, CLI flags, animations, themes
+- `docs/PRESENTATION_FORMAT.md`: every directive and syntax rule
+- `docs/THEME_GUIDE.md`: theme schema and contrast rules
+- `README.md`: keys and CLI flags
 - Skills: `lean-audit`, `presentation-format`, `theme-authoring`, `demo-scripts`
 - `presentations/examples/test_presentation.md`: exercises every feature;
   speaker notes carry `FEATURE:` / `EXPECTED:` / `VERIFY:` checks

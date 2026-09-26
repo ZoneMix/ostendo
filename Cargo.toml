@@ -2,6 +2,7 @@
 name = "ostendo"
 version = "0.4.2"
 edition = "2021"
+rust-version = "1.89"
 description = "AI-native terminal presentation tool — markdown to slides in your terminal"
 license = "GPL-3.0-only"
 repository = "https://github.com/ZoneMix/ostendo"
