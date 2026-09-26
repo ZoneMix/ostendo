@@ -1,6 +1,9 @@
-# Presentation Format
+---
+name: presentation-format
+description: "Use when creating or editing Ostendo markdown presentations: front matter, slide elements, directives, columns, code execution."
+---
 
-Use when creating or editing Ostendo markdown presentations.
+# Presentation Format
 
 ## Quick Start
 

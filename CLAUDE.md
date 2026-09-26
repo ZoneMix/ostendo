@@ -1,170 +1,127 @@
-# Ostendo Development Guide
+# Ostendo
 
-**Version**: v0.4.1 | **LOC**: ~16,298 | **Tests**: 158 | **Themes**: 29
+Terminal presentation tool: markdown in, slides out. Rust, GPL-3.0-only.
 
-## Build & Test
+## Commands
 
 ```bash
-cargo build --release          # Release build (LTO enabled)
-cargo test                     # Run all 158 tests
-cargo clippy --all-targets     # Lint (must be 0 warnings)
+cargo build --release
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 cargo run --release -- --validate presentations/examples/test_presentation.md
 ```
 
-## Architecture
+CI (`.github/workflows/ci.yml`) runs fmt, clippy, and tests on every push and PR.
+All four must pass before a commit lands.
+
+## Lean code (mandatory)
+
+Invoke the `lean-audit` skill before writing, changing, reviewing, or sweeping
+code, tests, comments, or docs. Its gate, in short:
+
+- **Code**: only what a current caller or user-visible behavior needs. Reuse the
+  existing helper before writing a new one. No `#[allow(dead_code)]`, no
+  "for completeness" variants, no `pub(crate)` that only a test uses.
+- **Tests**: each one protects a named contract, fails on a credible regression,
+  and is not already covered at a stronger boundary. Test through
+  `parse_presentation()`, the public render/export functions, or the CLI rather
+  than private helpers. Bug fixes get one regression test that fails before the
+  fix.
+- **Comments**: explain *why*, never *what*. No history, no version notes, no
+  banners, no doc comments that restate the signature.
+- **Docs**: no hard-coded counts (lines, tests, files). One source per fact.
+
+## Rendering pipeline
 
 ```
-src/                              # 16,298 lines across 58 files
-  main.rs                         # CLI (clap), entry point (268 lines)
-  render/engine/                  # Core renderer (13 submodules, ~5,266 lines)
-    mod.rs                        # Presenter struct, lifecycle, tests (1,132 lines) ⚠️ over 800 cap
-    rendering.rs                  # render_frame(), smart redraw (1,004 lines) ⚠️ over 800 cap
-    input.rs                      # Event loop, key/mouse handling, remote polling (537 lines)
-    content.rs                    # FIGlet titles, decorated titles, exec output (409 lines)
-    ui.rs                         # Status bar, help overlay, overview grid (407 lines)
-    font.rs                       # Kitty RC / Ghostty AppleScript font control (619 lines)
-    state.rs                      # Toggles, scale, theme, persistence (176 lines)
-    navigation.rs                 # Slide movement, scrolling, animations (156 lines)
-    types.rs                      # Mode, ImageCacheKey, FontTransitionMode, PresenterConfig (111 lines)
-    output.rs                     # parse_ansi_styled_spans, write_span_text, textwrap (172 lines)
-    line_writer.rs                # queue_styled_line, queue_styled_line_with_bg (83 lines)
-    columns.rs                    # Multi-column layout rendering (322 lines)
-    table_render.rs               # Markdown table rendering, box-drawing borders (138 lines)
-  render/animation/               # Animation system (4 files, ~1,390 lines)
-    mod.rs                        # Animation dispatch, types, tests (344 lines)
-    transitions.rs                # Fade, slide-left, dissolve (285 lines)
-    entrance.rs                   # Typewriter, fade_in, slide_down (104 lines)
-    loops.rs                      # Matrix, bounce, pulse, sparkle, spin (657 lines)
-  render/layout.rs                # WindowSize, terminal dimensions (103 lines)
-  render/text.rs                  # StyledLine/StyledSpan (virtual buffer) (433 lines)
-  render/progress.rs              # Progress bar rendering (60 lines)
-  markdown/                       # Presentation parser (~1,872 lines)
-    parser.rs                     # Markdown -> Vec<Slide> (830 lines) ⚠️ over 800 cap
-    parser_tests.rs               # Parser unit tests (419 lines)
-    regex_patterns.rs             # Centralized directive regexes (242 lines)
-    inline.rs                     # Bold/italic/code/strikethrough parser (311 lines)
-    tables.rs                     # Table cell parsing, alignment (72 lines)
-  presentation/                   # Data structures (~926 lines)
-    slide.rs                      # Slide struct, content types (676 lines)
-    state.rs                      # StateManager (JSON persistence) (250 lines)
-  terminal/                       # Terminal protocols (~732 lines)
-    protocols.rs                  # Image protocol & font capability detection (409 lines)
-    ascii_art.rs                  # ASCII art image renderer (323 lines)
-  theme/                          # Theme system (~547 lines)
-    mod.rs                        # Registry, WCAG contrast validation (159 lines)
-    colors.rs                     # Hex parsing, interpolation, HSV (234 lines)
-    builtin.rs                    # Compile-time embedded themes (generated by build.rs) (31 lines)
-    schema.rs                     # YAML schema definitions for themes (123 lines)
-  code/                           # Code execution (~798 lines)
-    executor.rs                   # Language execution, timeout, sandbox (636 lines)
-    highlight.rs                  # Syntax highlighting (syntect) (102 lines)
-    pty.rs                        # PTY execution for interactive blocks (60 lines)
-  image_util/                     # Image handling (~1,011 lines)
-    render.rs                     # Protocol-specific rendering (Kitty/iTerm2/Sixel/ASCII) (390 lines)
-    kitty.rs                      # Kitty graphics protocol transmit/display split (262 lines)
-    mermaid.rs                    # Mermaid diagram rendering via mmdc CLI (122 lines)
-    mod.rs                        # Image loading and protocol detection (237 lines)
-  diagram/                        # ASCII diagram rendering (~1,076 lines)
-    mod.rs                        # Adaptive renderer, style selection (224 lines)
-    parser.rs                     # Graph DSL parser (198 lines)
-    render_box.rs                 # Box-drawing style (Unicode borders) (305 lines)
-    render_bracket.rs             # Bracket style (compact) (189 lines)
-    render_vertical.rs            # Vertical flow style (pipes) (160 lines)
-  export/                         # Export functionality (~441 lines)
-    html.rs                       # Self-contained HTML export (314 lines)
-    pdf.rs                        # PDF via headless Chrome/wkhtmltopdf (127 lines)
-  remote/                         # WebSocket remote control (~1,270 lines)
-    mod.rs                        # Commands, state types (230 lines)
-    server.rs                     # WS server, auth, rate limiting (317 lines)
-    html.rs                       # Embedded HTML remote control UI (723 lines)
-  watch.rs                        # File watcher for hot reload (65 lines)
+markdown source
+  -> markdown::parse_presentation()         -> (PresentationMeta, Vec<Slide>)
+  -> Presenter::run()                       event loop (render/engine/input.rs)
+  -> Presenter::render_frame()              render/engine/rendering.rs
+       1. pending font change (Kitty RC / Ghostty)
+       2. Help / Overview modes render and return
+       3. smart redraw: nothing changed -> status bar only
+       4. build Vec<StyledLine> virtual buffer from the slide
+       5. alignment (vertical / horizontal centering)
+       6. animation overlays: transition -> entrance -> loop
+       7. clamp scroll, flush inside Begin/EndSynchronizedUpdate
+       8. emit protocol images (Kitty / iTerm2 / Sixel) after text
 ```
 
-## Key Patterns
+## Module map
 
-- **Virtual buffer**: `render_frame()` builds `Vec<StyledLine>` in memory, then flushes atomically within `BeginSynchronizedUpdate`/`EndSynchronizedUpdate`
-- **Smart redraw**: Tracks `last_rendered_buffer`/`last_rendered_slide`/`last_rendered_scroll`; timer-only ticks only update the status bar
-- **Image cache**: `ImageCacheKey` struct keyed by `{path, render_width, protocol, gif_frame_index, color_override}`. Uses Entry API for O(1) lookups
-- **GIF frames**: Stored as `Arc<Vec<GifFrame>>` — prerender thread gets O(1) clone, not deep copy
-- **Animation targeting**: `LineContentType` system enables selective animation (e.g., `sparkle(figlet)` only affects FIGlet lines)
-- **Regex extraction**: All ~20 directive regexes centralized in `regex_patterns.rs`, compiled once via `LazyLock`
-- **Hot reload**: Background `FileWatcher` polls every 500ms, triggers `try_reload()` preserving slide position
-- **Immutable rendering**: Animation functions take `&lines` not `&mut lines`; new buffer built each frame
+| Path | Owns |
+|---|---|
+| `main.rs` | CLI (clap), early-exit flags, export, launching the presenter |
+| `markdown/parser.rs` | Markdown -> slides; directive handling |
+| `markdown/regex_patterns.rs` | Every directive regex (`LazyLock<Regex>`) |
+| `markdown/inline.rs`, `tables.rs` | Inline formatting, table cells |
+| `presentation/slide.rs` | `Slide` and content types |
+| `presentation/state.rs` | Persisted per-presentation state (JSON) |
+| `render/engine/mod.rs` | `Presenter` struct and lifecycle |
+| `render/engine/rendering.rs` | `render_frame()`, smart redraw, viewport |
+| `render/engine/input.rs` | Event loop, keys, mouse, remote commands |
+| `render/engine/content.rs` | FIGlet / decorated titles, exec output |
+| `render/engine/columns.rs`, `table_render.rs` | Column layouts, tables |
+| `render/engine/ui.rs` | Status bar, help overlay, overview grid |
+| `render/engine/font.rs` | Kitty RC / Ghostty font size and transitions |
+| `render/engine/{state,navigation,types,output,line_writer}.rs` | Toggles, slide movement, shared types, span output |
+| `render/animation/` | Transitions, entrances, loop animations |
+| `render/text.rs` | `StyledLine` / `StyledSpan` virtual buffer |
+| `terminal/protocols.rs` | Image protocol and font capability detection |
+| `terminal/ascii_art.rs` | Half-block ASCII image renderer |
+| `image_util/` | Image loading, protocol rendering, Kitty protocol, Mermaid |
+| `diagram/` | ASCII diagram DSL and renderers (box, bracket, vertical) |
+| `code/` | Code execution sandbox, PTY, syntax highlighting |
+| `export/` | HTML and PDF export |
+| `remote/` | WebSocket remote control server and embedded UI |
+| `theme/` | Theme registry, schema, colors, WCAG checks; themes are `themes/*.yaml`, embedded by `build.rs` |
+| `watch.rs` | Hot-reload file watcher |
 
-## Developer Pitfalls
+## Invariants
 
-- **`mod.rs` is 1,132 lines** — exceeds the 800-line soft cap. Be aware when navigating
-- **Horizontal centering must preserve `line.content_type`** — breaking this silently breaks sparkle/spin targeting
-- **Protocol images must check `line_offset >= visible_start`** — forgetting causes images outside scroll viewport
-- **Kitty images need clear on scroll offset change** — not just on slide change
-- **`prerender_images` must apply per-image `image_scale`** — cache keys must match `render_frame`'s lookups
-- **`font_size` range is -3 to 7** (not 1-7). Negative = smaller than base font
-- **`truncate_str` uses char-based slicing** — safe for non-ASCII titles; don't change to byte slicing
+- The frame is built as `Vec<StyledLine>` and flushed once; never write to the
+  terminal mid-frame.
+- Animation functions take `&[StyledLine]` and return a new buffer.
+- Horizontal centering must preserve `line.content_type`, or `sparkle(figlet)`
+  / `spin(image)` targeting silently breaks.
+- Protocol images must check `line_offset >= visible_start`, and Kitty images
+  must be cleared when the scroll offset changes, not only on slide change.
+- `prerender_images` must build the same `ImageCacheKey` (including per-image
+  `image_scale`) that `render_frame` looks up.
+- Text width is display width (`unicode-width`), and slicing is char-based.
+  Never byte-slice user text.
+- `font_size` directive range is -20..=20 (negative = smaller than base).
+- Exec output keeps ANSI escapes.
+- Code execution: own process group, 30s timeout, 64 KB input, 1 MB output,
+  `--no-exec` disables it, `--remote-exec` gates WebSocket execution.
 
-## Where to Look
+## Conventions
+
+- `anyhow::Result` for fallible paths; no `.unwrap()` on anything derived from
+  user markdown, the terminal, the filesystem, or the network.
+- Prefer `pub(crate)`; regex statics live in `regex_patterns.rs`.
+- Tests live in `#[cfg(test)] mod tests` next to the code (parser tests in
+  `markdown/parser_tests.rs`).
+- Themes must pass WCAG 2.0: text:bg >= 4.5, accent:bg >= 3.0.
+
+## Where to look
 
 | Task | Start here |
-|------|-----------|
-| New directive | `regex_patterns.rs` → `parser.rs` → `slide.rs` |
-| New animation | `render/animation/` (add to appropriate submodule) |
-| New export format | `export/` (follow html.rs pattern) |
-| Status bar changes | `ui.rs` → `build_status_bar()` |
-| New theme | `themes/*.yaml` + run WCAG contrast tests |
-| Key binding | `input.rs` → `handle_key()` |
-| New image protocol | `terminal/protocols.rs` + `image_util/render.rs` |
-| Font control | `font.rs` |
-| New diagram style | `diagram/` (add render_*.rs + register in mod.rs) |
+|---|---|
+| New directive | `regex_patterns.rs` -> `parser.rs` -> `slide.rs` -> `.claude/docs/DIRECTIVE_REFERENCE.md` |
+| New animation | `render/animation/` |
+| Key binding | `render/engine/input.rs` -> `.claude/docs/KEYBOARD_SHORTCUTS.md` |
+| Status bar | `render/engine/ui.rs` |
+| Image protocol | `terminal/protocols.rs`, `image_util/render.rs` |
+| New theme | `themes/*.yaml` (see the `theme-authoring` skill) |
+| Export format | `export/` |
 
-## Key Dependencies
+## Reference
 
-- **crossterm** (0.29): TUI framework, terminal I/O
-- **syntect** (5): Code syntax highlighting
-- **image** (0.25): Image processing, GIF decoding
-- **tokio** + **tokio-tungstenite**: Async WebSocket server
-- **resvg** (0.47): SVG rendering (Mermaid diagrams)
-- **clap** (4): CLI argument parsing
-- **serde_yml**: Theme YAML parsing
-- **figlet-rs**: ASCII art title generation
-- **libc**: Process group management for sandbox
-
-## Terminal Requirements
-
-- **Recommended**: Kitty — native image protocol, per-slide font sizing (Kitty RC), OSC 66 text scaling
-- **iTerm2**: Images via inline protocol; no font sizing
-- **tmux**: DCS passthrough for images; unset stale `KITTY_WINDOW_ID`
-- **Other**: Sixel or ASCII fallback for images; font sizing gracefully degrades
-
-## Theme System
-
-- 29 built-in themes in `themes/*.yaml` (embedded at compile time via `build.rs`)
-- WCAG 2.0 contrast validation: text:bg >= 4.5:1, accent:bg >= 3.0:1
-- Runtime switching: `:theme <slug>` or `D` for dark/light toggle
-
-## Test Presentation
-
-`presentations/examples/test_presentation.md` — 89 slides covering every feature.
-Speaker notes contain `FEATURE:`, `EXPECTED:`, `VERIFY:` for systematic testing.
-
-## Security
-
-- Code execution sandboxed with process groups (`setsid`), 30s timeout, 64KB input / 1MB output limits
-- `--no-exec` disables all execution; `--remote-exec` gates WebSocket execute_code
-- WebSocket auth via `--remote-token` with constant-time comparison
-- Connection rate limiting (max 8 concurrent WebSocket connections)
-- See `SECURITY.md` for full details
-
-## Known Limitations
-
-- Inline formatting markers spanning a wrap boundary will break (blockquotes/bullets)
-- FIGlet ASCII titles overflow on narrow terminals with long text
-- Font sizing via Kitty remote control protocol — Kitty terminal only
-- Protocol images in tmux may have latency on first display
-- GIFs downscaled to 800px max dimension for memory efficiency
-
-## Code Quality
-
-- Immutable data patterns (never mutate existing objects)
-- Files under 800 lines, functions under 50 lines (3 files over cap — flagged above)
-- 0 clippy warnings required
-- Validate all inputs at system boundaries
-- No hardcoded secrets
+- `.claude/docs/`: directives, keyboard shortcuts, CLI flags, animations, themes
+- Skills: `lean-audit`, `presentation-format`, `theme-authoring`, `demo-scripts`
+- `presentations/examples/test_presentation.md`: exercises every feature;
+  speaker notes carry `FEATURE:` / `EXPECTED:` / `VERIFY:` checks
+- `SECURITY.md`: threat model and sandbox details

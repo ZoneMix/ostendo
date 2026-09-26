@@ -1,6 +1,9 @@
-# Demo Scripts
+---
+name: demo-scripts
+description: "Use when adding live code demos (+exec / +pty blocks, preambles) to Ostendo presentations."
+---
 
-Use when creating live code demos in Ostendo presentations.
+# Demo Scripts
 
 ## Modes
 

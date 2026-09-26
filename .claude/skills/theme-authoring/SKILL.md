@@ -1,6 +1,9 @@
-# Theme Authoring
+---
+name: theme-authoring
+description: "Use when creating or modifying Ostendo themes in themes/*.yaml: schema, WCAG contrast rules, dark/light pairing, gradients."
+---
 
-Use when creating or modifying Ostendo themes.
+# Theme Authoring
 
 ## Theme File Location
 
@@ -12,7 +15,7 @@ After creating/modifying a theme, run `cargo build --release` to include it.
 ```yaml
 name: "My Theme"
 slug: "my_theme"
-dark_variant: "my_theme_light"     # optional: slug of the light variant
+light_variant: "my_theme_light"    # optional: slug of the paired light theme
 colors:
   background: "#1a1a2e"
   text: "#e0e0e0"
@@ -48,8 +51,8 @@ The theme system validates these at load time. Run `cargo test` to verify.
 To support the `D` toggle key:
 
 1. Create both variants: `my_theme.yaml` and `my_theme_light.yaml`
-2. Add `dark_variant: "my_theme_light"` to the dark theme
-3. The registry automatically pairs them for toggle
+2. Add `light_variant: "my_theme_light"` to the dark theme
+3. Add `dark_variant: "my_theme"` to the light theme
 
 ## Gradient Backgrounds
 
