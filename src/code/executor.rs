@@ -23,6 +23,10 @@ const MAX_CODE_LENGTH: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Lines waiting for the presenter, which drains them once per frame. Short
+/// lines from a chatty program would otherwise be throttled to this many per
+/// frame; memory stays bounded by `MAX_OUTPUT_BYTES`, charged before queuing.
+const OUTPUT_LINES_QUEUED: usize = 8192;
 /// How long to keep draining pipes after the process group is gone.
 const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
@@ -86,7 +90,7 @@ pub fn spawn(
     }
     let lang = normalize_language(language);
 
-    let (tx, rx) = mpsc::sync_channel(512);
+    let (tx, rx) = mpsc::sync_channel(OUTPUT_LINES_QUEUED);
     let cancel = Arc::new(AtomicBool::new(false));
     let job = Job {
         lang,

@@ -12,6 +12,8 @@ env:
 jobs:
   check:
     strategy:
+      # Report every OS; one failure should not hide another platform's.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
