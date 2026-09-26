@@ -41,40 +41,106 @@ fn test_bullet_depths() {
 }
 
 #[test]
-fn test_code_block_parsing() {
-    let src = "# Code\n```python\nprint('hello')\n```";
-    let slides = parse(src);
-    assert_eq!(slides[0].code_blocks.len(), 1);
-    assert_eq!(slides[0].code_blocks[0].language, "python");
-    assert_eq!(slides[0].code_blocks[0].code, "print('hello')");
+fn fence_info_string() {
+    let cases = [
+        ("```python", "python", None, ""),
+        ("```bash +exec", "bash", Some(ExecMode::Exec), ""),
+        ("```bash +pty", "bash", Some(ExecMode::Pty), ""),
+        (
+            "```rust {label: \"example.rs\"}",
+            "rust",
+            None,
+            "example.rs",
+        ),
+        ("```c++ +exec", "c++", Some(ExecMode::Exec), ""),
+        ("```rust,ignore", "rust,ignore", None, ""),
+        ("```objective-c", "objective-c", None, ""),
+        (
+            "```shell-session +pty {label: \"s\"}",
+            "shell-session",
+            Some(ExecMode::Pty),
+            "s",
+        ),
+        ("```+exec", "", Some(ExecMode::Exec), ""),
+        ("~~~python", "python", None, ""),
+    ];
+    for (open, language, exec_mode, label) in cases {
+        let close = &open[..3];
+        let slides = parse(&format!("# T\n{open}\n- body\n{close}"));
+        let block = &slides[0].code_blocks[0];
+        assert_eq!(block.language, language, "{open}");
+        assert_eq!(block.exec_mode, exec_mode, "{open}");
+        assert_eq!(block.label, label, "{open}");
+        assert_eq!(block.code, "- body", "{open}");
+    }
 }
 
 #[test]
-fn test_code_block_exec_mode() {
-    let src = "# Code\n```bash +exec\necho hi\n```";
-    let slides = parse(src);
-    assert_eq!(slides[0].code_blocks[0].exec_mode, Some(ExecMode::Exec));
+fn separator_inside_fence_or_comment_stays_in_slide() {
+    for (body, code) in [
+        ("```\na\n---\nb\n```", "a\n---\nb"),
+        ("~~~ yaml\na\n---\n~~~", "a\n---"),
+        ("````md\n```\n---\n```\n````", "```\n---\n```"),
+    ] {
+        let slides = parse(&format!("# T\n{body}\n---\n# Next"));
+        assert_eq!(slides.len(), 2, "{body}");
+        assert_eq!(slides[0].code_blocks[0].code, code, "{body}");
+    }
+    let slides =
+        parse("# T\n<!-- notes:\nbefore\n---\nafter\n-->\n<!--\nTODO\n---\n-->\n---\n# Next");
+    assert_eq!(slides.len(), 2);
+    assert_eq!(slides[0].notes, "before\n---\nafter");
 }
 
 #[test]
-fn test_code_block_pty_mode() {
-    let src = "# Code\n```bash +pty\nhtop\n```";
-    let slides = parse(src);
-    assert_eq!(slides[0].code_blocks[0].exec_mode, Some(ExecMode::Pty));
+fn unclosed_blocks_keep_content_and_end_with_the_slide() {
+    let slides = parse(
+        "# A\n```python\nprint(1)\n---\n# B\n```diagram\nX -> Y\n---\n# C\n<!-- preamble_start: python -->\nimport os",
+    );
+    let titles: Vec<&str> = slides.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles, ["A", "B", "C"]);
+    assert_eq!(slides[0].code_blocks[0].code, "print(1)");
+    assert_eq!(slides[1].diagram_blocks[0].source, "X -> Y");
+    assert_eq!(slides[2].code_preambles["python"], "import os");
 }
 
 #[test]
-fn test_code_block_label() {
-    let src = "# Code\n```rust {label: \"example.rs\"}\nfn main() {}\n```";
-    let slides = parse(src);
-    assert_eq!(slides[0].code_blocks[0].label, "example.rs");
+fn multi_line_comments_do_not_leak() {
+    let slides = parse("# T\n<!--\nTODO\n-->\n<!-- notes: first\nsecond\n-->");
+    assert!(slides[0].subtitle.is_empty());
+    assert!(slides[0].blocks.is_empty());
+    assert_eq!(slides[0].notes, "first\nsecond");
+}
+
+#[test]
+fn front_matter_only_for_leading_key_value_block() {
+    let cases: [(&str, &[&str], &str); 4] = [
+        ("---\ntitle: Deck\n---\n# One", &["One"], "Deck"),
+        ("\u{feff}---\ntitle: Deck\n---\n# One", &["One"], "Deck"),
+        ("---\n# One\n---\n# Two", &["One", "Two"], ""),
+        ("---\n---\n# One", &["One"], ""),
+    ];
+    for (src, titles, deck_title) in cases {
+        let (meta, slides) = parse_presentation(src, None).unwrap();
+        let got: Vec<&str> = slides.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(got, titles, "{src:?}");
+        assert_eq!(meta.title, deck_title, "{src:?}");
+    }
 }
 
 #[test]
 fn test_section_directive() {
-    let src = "<!-- section: intro -->\n# Welcome";
+    let src = "<!-- section: Code Execution -->\n# Welcome";
     let slides = parse(src);
-    assert_eq!(slides[0].section, "intro");
+    assert_eq!(slides[0].section, "Code Execution");
+}
+
+#[test]
+fn out_of_range_column_falls_back_to_slide_level() {
+    let slides =
+        parse("# T\n<!-- column_layout: [1, 1] -->\n<!-- column: 5 -->\n- kept\n```sh\necho\n```");
+    assert_eq!(slides[0].bullets[0].text, "kept");
+    assert_eq!(slides[0].code_blocks.len(), 1);
 }
 
 #[test]
@@ -83,19 +149,6 @@ fn test_section_inherits() {
     let slides = parse(src);
     assert_eq!(slides[0].section, "intro");
     assert_eq!(slides[1].section, "intro");
-}
-
-#[test]
-fn test_timing_directive() {
-    let src = "<!-- timing: 2.5 -->\n# Timed";
-    let slides = parse(src);
-    assert!((slides[0].timing_minutes - 2.5).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_default_timing() {
-    let slides = parse("# No Timing");
-    assert!((slides[0].timing_minutes - 1.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -142,6 +195,35 @@ fn test_subtitle_extraction() {
     let src = "# Title\nThis is a subtitle";
     let slides = parse(src);
     assert_eq!(slides[0].subtitle, "This is a subtitle");
+}
+
+#[test]
+fn blocks_record_source_order() {
+    let slides = parse(
+        "# T\nSubtitle\n\nIntro line one\nline two\n- a\n- b\n```sh\nls\n```\n> quote\n\n| h |\n|---|\n| r |\n\n- c",
+    );
+    let s = &slides[0];
+    assert_eq!(s.subtitle, "Subtitle");
+    assert_eq!(s.paragraphs, ["Intro line one line two"]);
+    assert_eq!(
+        s.blocks,
+        [
+            Block::Paragraph(0),
+            Block::Bullets(0),
+            Block::Code(0),
+            Block::Quote(0),
+            Block::Table(0),
+            Block::Bullets(1),
+        ]
+    );
+    assert_eq!(s.bullet_groups, [0..2, 2..3]);
+}
+
+#[test]
+fn text_without_title_is_kept() {
+    let slides = parse("# Deck\n---\nThank you!");
+    assert_eq!(slides[1].subtitle, "");
+    assert_eq!(slides[1].paragraphs, ["Thank you!"]);
 }
 
 #[test]
@@ -312,7 +394,7 @@ fn test_inline_plain_text() {
 
 #[test]
 fn test_front_matter_meta() {
-    let src = "---\ntitle: My Deck\nauthor: Alice\ndate: 2026-03-09\naccent: \"#FF5500\"\nalign: center\ntransition: fade\n---\n# First Slide";
+    let src = "---\ntitle: My Deck\nauthor: Alice\ndate: 2026-03-09\naccent: \"#FF5500\"\nalign: center\ntransition: fade\ntheme: nord\n---\n# First Slide";
     let (meta, slides) = parse_presentation(src, None).unwrap();
     assert_eq!(meta.title, "My Deck");
     assert_eq!(meta.author, "Alice");
@@ -323,6 +405,7 @@ fn test_front_matter_meta() {
         Some(crate::presentation::SlideAlignment::Center)
     );
     assert_eq!(meta.transition, "fade");
+    assert_eq!(meta.theme.as_deref(), Some("nord"));
     assert_eq!(slides.len(), 1);
     assert_eq!(slides[0].title, "First Slide");
 }
@@ -399,15 +482,6 @@ fn test_text_scale_directive() {
     let src = "<!-- text_scale: 3 -->\n# Scaled Title";
     let slides = parse(src);
     assert_eq!(slides[0].text_scale, Some(3));
-    assert_eq!(slides[0].title_scale, None);
-}
-
-#[test]
-fn test_title_scale_directive() {
-    let src = "<!-- title_scale: 5 -->\n# Big Title";
-    let slides = parse(src);
-    assert_eq!(slides[0].title_scale, Some(5));
-    assert_eq!(slides[0].text_scale, None);
 }
 
 #[test]
@@ -415,13 +489,6 @@ fn test_text_scale_clamped() {
     let src = "<!-- text_scale: 99 -->\n# Clamped";
     let slides = parse(src);
     assert_eq!(slides[0].text_scale, Some(7));
-}
-
-#[test]
-fn test_title_scale_clamped_min() {
-    let src = "<!-- title_scale: 0 -->\n# Zero";
-    let slides = parse(src);
-    assert_eq!(slides[0].title_scale, Some(1));
 }
 
 #[test]

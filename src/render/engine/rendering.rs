@@ -304,9 +304,9 @@ impl Presenter {
         }
 
         // Trailing text (plain text lines appearing after bullets)
-        if !slide.trailing_text.is_empty() {
+        if !slide.paragraphs.is_empty() {
             let sub_width = content_width.saturating_sub(2);
-            for text in &slide.trailing_text {
+            for text in &slide.paragraphs {
                 let wrapped = textwrap_simple(text, sub_width);
                 for wline in &wrapped {
                     let mut line = StyledLine::empty();

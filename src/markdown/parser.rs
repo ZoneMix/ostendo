@@ -1,863 +1,635 @@
-//! Markdown-to-slide parser. Converts a markdown file with YAML front matter and HTML comment
-//! directives into a vector of `Slide` structs. Supports 50+ directives for animations, layout,
-//! code execution, images, themes, and more.
-//!
-//! # Architecture
-//!
-//! This module sits at the very beginning of the pipeline: raw Markdown text goes in, structured
-//! `Slide` data comes out. The render engine (`src/render/`) consumes these slides to produce
-//! terminal output.
-//!
-//! # Parsing flow
-//!
-//! 1. `parse_presentation()` reads the full source string.
-//! 2. YAML-like front matter (between `---` fences at the top) is extracted via `parse_front_matter()`.
-//! 3. The remaining text is split on `---` line separators into per-slide blocks.
-//! 4. Each block is parsed by `parse_slide()`, which scans every line looking for HTML comment
-//!    directives (`<!-- directive: value -->`), Markdown headings, bullets, code fences, tables,
-//!    block quotes, and images.
-//! 5. Inline text formatting (bold, italic, code, strikethrough) is handled by
-//!    `parse_inline_formatting()` in the `inline` submodule, called later during rendering.
-//!
-//! # Submodules
-//!
-//! - `regex_patterns` — All `LazyLock<Regex>` statics used by the parser.
-//! - `tables` — `TableParseState`, `parse_table_cells`, `parse_table_alignments`.
-//! - `inline` — `parse_inline_formatting` for inline Markdown formatting (bold, italic, etc.).
+//! Markdown presentation parser: front matter, `---` slide separators, `<!-- name: value -->`
+//! directives, and the markdown subset the renderer draws.
 
 use anyhow::Result;
-use regex::Regex;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::presentation::{
-    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnLayout, DiagramBlock,
+    Block, BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnLayout, DiagramBlock,
     DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode, MermaidBlock,
     PresentationMeta, Slide, SlideAlignment, SlideImage, Table,
 };
+use crate::render::animation::{
+    parse_entrance, parse_loop_animation, parse_transition, LoopAnimation,
+};
 
 use super::regex_patterns::*;
+use super::split::{opens_comment, split_front_matter, split_slides, Fence};
 use super::tables::{parse_table_alignments, parse_table_cells, TableParseState};
 
-// Re-export parse_inline_formatting at this path for backward compatibility.
-// External callers use `crate::markdown::parser::parse_inline_formatting`.
 pub use super::inline::parse_inline_formatting;
 
-/// Parses YAML-like front matter into a `PresentationMeta` struct.
-///
-/// Front matter sits between two `---` lines at the very top of the file and contains
-/// key-value pairs like `title: My Deck`, `author: Alice`, `accent: "#FF5500"`, etc.
-/// This function does **not** use a full YAML parser; it matches simple `key: value` lines
-/// with a regex, which is sufficient for the small set of supported fields.
-///
-/// # Parameters
-/// - `block`: The raw text between the opening and closing `---` fences (no fences included).
-///
-/// # Returns
-/// A `PresentationMeta` with all recognized fields populated. Unknown keys are stored in
-/// `meta.pairs` for potential downstream use but otherwise ignored.
-fn parse_front_matter(block: &str) -> PresentationMeta {
-    let mut meta = PresentationMeta::default();
-    let kv_re = Regex::new(r"^(\w+)\s*:\s*(.+)$").unwrap();
-    for line in block.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+/// Guards against runaway memory use on malformed or generated input.
+const MAX_SLIDES: usize = 10_000;
+
+/// Parses a whole deck. `base_dir` resolves relative image paths.
+pub fn parse_presentation(
+    source: &str,
+    base_dir: Option<&Path>,
+) -> Result<(PresentationMeta, Vec<Slide>)> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    let lines: Vec<&str> = source.lines().collect();
+    let (front_matter, body) = split_front_matter(&lines);
+    let meta = front_matter.map(parse_front_matter).unwrap_or_default();
+
+    let mut slides: Vec<Slide> = Vec::new();
+    let mut section = "opening".to_string();
+    for block in split_slides(body) {
+        if block.iter().all(|l| l.trim().is_empty()) {
             continue;
         }
-        if let Some(caps) = kv_re.captures(line) {
-            let key = caps[1].to_string();
-            let val = caps[2].trim().trim_matches('"').to_string();
-            match key.as_str() {
-                "title" => meta.title = val.clone(),
-                "author" => meta.author = val.clone(),
-                "date" => meta.date = val.clone(),
-                "accent" => meta.accent = val.clone(),
-                "transition" => meta.transition = val.clone(),
-                "align" | "alignment" => {
-                    meta.default_alignment = match val.as_str() {
-                        "center" => Some(SlideAlignment::Center),
-                        "vcenter" => Some(SlideAlignment::VCenter),
-                        "hcenter" => Some(SlideAlignment::HCenter),
-                        "top" => Some(SlideAlignment::Top),
-                        _ => None,
-                    };
-                }
-                _ => {}
-            }
-            meta.pairs.push((key, val));
+        if slides.len() == MAX_SLIDES {
+            anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
+        }
+        let slide = parse_slide(block, slides.len() + 1, &section, base_dir);
+        section.clone_from(&slide.section);
+        slides.push(slide);
+    }
+    Ok((meta, slides))
+}
+
+fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
+    let mut meta = PresentationMeta::default();
+    for caps in lines
+        .iter()
+        .filter_map(|l| FRONT_MATTER_KV_RE.captures(l.trim()))
+    {
+        let val = caps[2].trim().trim_matches('"').to_string();
+        match &caps[1] {
+            "title" => meta.title = val,
+            "author" => meta.author = val,
+            "date" => meta.date = val,
+            "accent" => meta.accent = val,
+            "transition" => meta.transition = val,
+            "theme" if !val.is_empty() => meta.theme = Some(val),
+            "align" | "alignment" => meta.default_alignment = parse_alignment(&val),
+            _ => {}
         }
     }
     meta
 }
 
-/// Parses a single slide block into a `Slide` struct.
-///
-/// This is the main per-slide parser. It scans every line of the raw slide text looking for:
-///
-/// 1. **Multi-line state** (notes, code blocks, diagram blocks, preamble blocks) — tracked
-///    by boolean flags (`in_notes`, `in_code`, `in_diagram`). While inside one of these,
-///    lines are accumulated until the closing delimiter is found.
-/// 2. **HTML comment directives** — each `<!-- key: value -->` line is matched against the
-///    static regex patterns defined in `regex_patterns`. Recognized directives set fields on the slide.
-/// 3. **Markdown content** — headings (`#`), images (`![]()`), bullets (`- text`), tables
-///    (`| ... |`), and block quotes (`> text`) are parsed into their respective structs.
-/// 4. **Subtitle** — the first non-empty, non-directive line after the title heading.
-///
-/// # Parameters
-/// - `raw`: The text of one slide (everything between two `---` separators).
-/// - `number`: The 1-based slide number.
-/// - `last_section`: The section name inherited from the previous slide.
-/// - `base_dir`: Optional directory for resolving relative image paths.
-///
-/// # Returns
-/// A tuple of `(Slide, current_section)` where `current_section` is passed forward so the
-/// next slide can inherit it.
+fn parse_alignment(value: &str) -> Option<SlideAlignment> {
+    match value {
+        "top" => Some(SlideAlignment::Top),
+        "center" => Some(SlideAlignment::Center),
+        "vcenter" => Some(SlideAlignment::VCenter),
+        "hcenter" => Some(SlideAlignment::HCenter),
+        _ => None,
+    }
+}
+
+fn parse_clamped(value: &str, min: i64, max: i64) -> Option<i64> {
+    value.parse::<i64>().ok().map(|n| n.clamp(min, max))
+}
+
+/// `sparkle` or `sparkle(figlet)`.
+fn parse_loop_directive(value: &str) -> Option<(LoopAnimation, Option<String>)> {
+    let (name, target) = match value.split_once('(') {
+        Some((name, rest)) => (name, Some(rest.strip_suffix(')')?.to_string())),
+        None => (value, None),
+    };
+    Some((parse_loop_animation(name)?, target))
+}
+
+/// `Path::join` keeps absolute paths as they are.
+fn resolve_path(base_dir: Option<&Path>, path: &str) -> PathBuf {
+    base_dir.map_or_else(|| PathBuf::from(path), |base| base.join(path))
+}
+
+/// Info string: first word is the language (`diagram` selects the diagram engine), plus
+/// optional `+exec`/`+pty`, `style=<name>` and `{label: "..."}`.
+fn fence_kind(info: &str) -> FenceKind {
+    let mut language = "";
+    let mut exec_mode = None;
+    let mut style = DiagramStyle::Box;
+    for word in info.split('{').next().unwrap_or("").split_whitespace() {
+        match word {
+            "+exec" => exec_mode = Some(ExecMode::Exec),
+            "+pty" => exec_mode = Some(ExecMode::Pty),
+            "style=bracket" => style = DiagramStyle::Bracket,
+            "style=vertical" => style = DiagramStyle::Vertical,
+            _ if language.is_empty() => language = word,
+            _ => {}
+        }
+    }
+    if language == "diagram" {
+        return FenceKind::Diagram(style);
+    }
+    FenceKind::Code {
+        language: language.to_string(),
+        label: FENCE_LABEL_RE
+            .captures(info)
+            .map_or(String::new(), |c| c[1].to_string()),
+        exec_mode,
+    }
+}
+
 fn parse_slide(
-    raw: &str,
+    lines: &[&str],
     number: usize,
-    last_section: &str,
+    inherited_section: &str,
     base_dir: Option<&Path>,
-) -> (Slide, String) {
-    let mut title = String::new();
-    let mut subtitle = String::new();
-    let mut section = String::new();
-    let mut timing: Option<f64> = None;
-    let mut notes_lines: Vec<String> = Vec::new();
-    let mut bullets: Vec<Bullet> = Vec::new();
-    let mut code_blocks: Vec<CodeBlock> = Vec::new();
-    let mut image_alt = String::new();
-    let mut image_path = String::new();
-    let mut image_position = ImagePosition::Below;
-    let mut image_render = ImageRenderMode::Auto;
-    let mut image_scale: u8 = 100;
-    let mut image_color = String::new();
-    let mut ascii_title = false;
-    let mut font_size: Option<i8> = None;
-    let mut text_scale: Option<u8> = None;
-    let mut title_scale: Option<u8> = None;
-    let mut footer: Option<String> = None;
-    let mut footer_align = FooterAlign::Left;
-    let mut alignment: Option<SlideAlignment> = None;
-    let mut title_decoration: Option<String> = None;
-    let mut transition: Option<crate::render::animation::TransitionType> = None;
-    let mut entrance_animation: Option<crate::render::animation::EntranceAnimation> = None;
-    let mut loop_animations: Vec<(crate::render::animation::LoopAnimation, Option<String>)> =
-        Vec::new();
-    let mut fullscreen: Option<bool> = None;
-    let mut show_section: Option<bool> = None;
-    let mut code_preambles: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut preamble_lang: Option<String> = None;
-    let mut preamble_lines: Vec<String> = Vec::new();
-    let mut mermaid_blocks: Vec<MermaidBlock> = Vec::new();
-    let mut diagram_blocks: Vec<DiagramBlock> = Vec::new();
-    let mut theme_override: Option<String> = None;
-    let mut font_transition: Option<String> = None;
+) -> Slide {
+    let mut builder = SlideBuilder::new(number, base_dir);
+    for line in lines {
+        builder.line(line);
+    }
+    let mut slide = builder.finish();
+    if slide.section.is_empty() {
+        slide.section = inherited_section.to_string();
+    }
+    slide
+}
 
-    let mut in_notes = false;
-    let mut in_code = false;
-    let mut in_diagram = false;
-    let mut diagram_style = DiagramStyle::Box;
-    let mut diagram_lines: Vec<String> = Vec::new();
-    let mut code_lang = String::new();
-    let mut code_label = String::new();
-    let mut code_exec_mode: Option<ExecMode> = None;
-    let mut code_lines: Vec<String> = Vec::new();
-    let mut title_found = false;
-    let mut subtitle_found = false;
-    let mut column_ratios: Option<Vec<u8>> = None;
-    let mut column_contents: Vec<ColumnContent> = Vec::new();
-    let mut current_column: Option<usize> = None;
-    let mut column_separator: bool = true;
-    let mut column_text_scale: Option<u8> = None;
-    let mut tables: Vec<Table> = Vec::new();
-    let mut block_quotes: Vec<BlockQuote> = Vec::new();
-    let mut table_state: Option<TableParseState> = None;
-    let mut blockquote_lines: Vec<String> = Vec::new();
-    let mut trailing_text: Vec<String> = Vec::new();
+/// Multi-line constructs that consume lines until their closing marker. One left open at the
+/// end of the slide is closed there.
+enum OpenBlock {
+    Notes,
+    Comment,
+    Fence {
+        fence: Fence,
+        kind: FenceKind,
+        lines: Vec<String>,
+    },
+    Preamble {
+        lang: String,
+        lines: Vec<String>,
+    },
+}
 
-    for line in raw.lines() {
-        // ── Multi-line block state handling ──
-        // These checks run first because when we're inside a multi-line block (notes, code,
-        // or diagram), every line belongs to that block until the closing delimiter appears.
+enum FenceKind {
+    Code {
+        language: String,
+        label: String,
+        exec_mode: Option<ExecMode>,
+    },
+    Diagram(DiagramStyle),
+}
 
-        // Multi-line notes continuation
-        if in_notes {
-            if let Some(m) = NOTES_END_RE.find(line) {
-                let before = &line[..m.start()];
-                if !before.trim().is_empty() {
-                    notes_lines.push(before.trim_end().to_string());
-                }
-                in_notes = false;
-            } else {
-                notes_lines.push(line.to_string());
-            }
-            continue;
+struct SlideBuilder<'a> {
+    slide: Slide,
+    base_dir: Option<&'a Path>,
+    open: Option<OpenBlock>,
+    title_found: bool,
+    /// The previous line was paragraph text, so the next text line continues it.
+    paragraph_open: bool,
+    /// Image directives may precede the `![]()` line; kept only once a path is set.
+    image: SlideImage,
+    /// Column directives may precede `column_layout`; kept only once ratios are set.
+    columns: ColumnLayout,
+    column: Option<usize>,
+    notes: Vec<String>,
+    quote: Vec<String>,
+    table: Option<TableParseState>,
+}
+
+impl<'a> SlideBuilder<'a> {
+    fn new(number: usize, base_dir: Option<&'a Path>) -> Self {
+        Self {
+            slide: Slide {
+                number,
+                ..Slide::default()
+            },
+            base_dir,
+            open: None,
+            title_found: false,
+            paragraph_open: false,
+            image: SlideImage {
+                path: PathBuf::new(),
+                alt_text: String::new(),
+                position: ImagePosition::Below,
+                render_mode: ImageRenderMode::Auto,
+                scale: 100,
+                color_override: String::new(),
+            },
+            columns: ColumnLayout {
+                ratios: Vec::new(),
+                contents: Vec::new(),
+                separator: true,
+                text_scale: None,
+            },
+            column: None,
+            notes: Vec::new(),
+            quote: Vec::new(),
+            table: None,
         }
+    }
 
-        // Inside diagram block
-        if in_diagram {
-            if FENCE_CLOSE_RE.is_match(line) {
-                diagram_blocks.push(DiagramBlock {
-                    source: diagram_lines.join("\n"),
-                    style: diagram_style,
+    fn line(&mut self, line: &str) {
+        let continues_paragraph = std::mem::take(&mut self.paragraph_open);
+        if self.open.is_some() {
+            self.continue_open_block(line);
+        } else if let Some((fence, info)) = Fence::parse(line) {
+            self.flush_quote();
+            self.flush_table();
+            let kind = fence_kind(info);
+            let lines = Vec::new();
+            self.open = Some(OpenBlock::Fence { fence, kind, lines });
+        } else if opens_comment(line) {
+            self.open_comment(line);
+        } else if line.trim_start().starts_with("<!--") {
+            if let Some(caps) = DIRECTIVE_RE.captures(line) {
+                self.directive(&caps[1], caps.get(2).map(|m| m.as_str()));
+            }
+        } else {
+            self.content(line, continues_paragraph);
+        }
+    }
+
+    /// `<!-- notes:` starts multi-line notes (text may begin on the same line); any other
+    /// unclosed `<!--` hides lines up to `-->`.
+    fn open_comment(&mut self, line: &str) {
+        let body = line.trim_start().trim_start_matches("<!--").trim_start();
+        match body.strip_prefix("notes:") {
+            Some(first) => {
+                self.notes.clear();
+                if !first.trim().is_empty() {
+                    self.notes.push(first.trim().to_string());
+                }
+                self.open = Some(OpenBlock::Notes);
+            }
+            None => self.open = Some(OpenBlock::Comment),
+        }
+    }
+
+    fn continue_open_block(&mut self, line: &str) {
+        let closed = match &mut self.open {
+            Some(OpenBlock::Notes) => {
+                let end = line.find("-->");
+                let text = end.map_or(line, |i| line[..i].trim_end());
+                if end.is_none() || !text.trim().is_empty() {
+                    self.notes.push(text.to_string());
+                }
+                end.is_some()
+            }
+            Some(OpenBlock::Comment) => line.contains("-->"),
+            Some(OpenBlock::Fence { fence, lines, .. }) => {
+                let closed = fence.is_closed_by(line);
+                if !closed {
+                    lines.push(line.to_string());
+                }
+                closed
+            }
+            Some(OpenBlock::Preamble { lines, .. }) => {
+                let closed = DIRECTIVE_RE
+                    .captures(line)
+                    .is_some_and(|c| &c[1] == "preamble_end");
+                if !closed {
+                    lines.push(line.to_string());
+                }
+                closed
+            }
+            None => false,
+        };
+        if closed {
+            self.close_open_block();
+        }
+    }
+
+    fn close_open_block(&mut self) {
+        match self.open.take() {
+            Some(OpenBlock::Fence { kind, lines, .. }) => {
+                let source = lines.join("\n");
+                match kind {
+                    FenceKind::Diagram(style) => {
+                        self.push_block(Block::Diagram(self.slide.diagram_blocks.len()));
+                        self.slide
+                            .diagram_blocks
+                            .push(DiagramBlock { source, style });
+                    }
+                    FenceKind::Code { language, .. } if language == "mermaid" => {
+                        self.push_block(Block::Mermaid(self.slide.mermaid_blocks.len()));
+                        self.slide.mermaid_blocks.push(MermaidBlock { source });
+                    }
+                    FenceKind::Code {
+                        language,
+                        label,
+                        exec_mode,
+                    } => {
+                        let block = CodeBlock {
+                            language,
+                            code: source,
+                            label,
+                            exec_mode,
+                        };
+                        match self.column_mut() {
+                            Some(col) => col.code_blocks.push(block),
+                            None => {
+                                self.push_block(Block::Code(self.slide.code_blocks.len()));
+                                self.slide.code_blocks.push(block);
+                            }
+                        }
+                    }
+                }
+            }
+            Some(OpenBlock::Preamble { lang, lines }) => {
+                self.slide.code_preambles.insert(lang, lines.join("\n"));
+            }
+            Some(OpenBlock::Notes | OpenBlock::Comment) | None => {}
+        }
+    }
+
+    fn directive(&mut self, name: &str, value: Option<&str>) {
+        let v = value.unwrap_or("");
+        let s = &mut self.slide;
+        match name {
+            "section" if !v.is_empty() => s.section = v.to_string(),
+            "ascii_title" => s.ascii_title = true,
+            "font_size" => {
+                if let Some(n) = parse_clamped(v, -20, 20) {
+                    s.font_size = Some(n as i8);
+                }
+            }
+            "font_transition" if !v.is_empty() => s.font_transition = Some(v.to_string()),
+            "text_scale" => {
+                if let Some(n) = parse_clamped(v, 1, 7) {
+                    s.text_scale = Some(n as u8);
+                }
+            }
+            "footer" => s.footer = Some(v.to_string()),
+            "footer_align" => match v {
+                "left" => s.footer_align = FooterAlign::Left,
+                "center" => s.footer_align = FooterAlign::Center,
+                "right" => s.footer_align = FooterAlign::Right,
+                _ => {}
+            },
+            "align" => {
+                if let Some(a) = parse_alignment(v) {
+                    s.alignment = Some(a);
+                }
+            }
+            "title_decoration" if matches!(v, "underline" | "box" | "banner" | "none") => {
+                s.title_decoration = Some(v.to_string());
+            }
+            "transition" => {
+                if let Some(t) = parse_transition(v) {
+                    s.transition = Some(t);
+                }
+            }
+            "animation" => {
+                if let Some(a) = parse_entrance(v) {
+                    s.entrance_animation = Some(a);
+                }
+            }
+            "loop_animation" => {
+                if let Some(la) = parse_loop_directive(v) {
+                    s.loop_animations.push(la);
+                }
+            }
+            "fullscreen" => match value {
+                None | Some("true") => s.fullscreen = Some(true),
+                Some("false") => s.fullscreen = Some(false),
+                _ => {}
+            },
+            "show_section" => match v {
+                "true" => s.show_section = Some(true),
+                "false" => s.show_section = Some(false),
+                _ => {}
+            },
+            "theme" if !v.is_empty() => s.theme_override = Some(v.to_string()),
+            "notes" => self.notes = vec![v.to_string()],
+            "preamble_start" if !v.is_empty() => {
+                self.open = Some(OpenBlock::Preamble {
+                    lang: v.to_string(),
+                    lines: Vec::new(),
                 });
-                in_diagram = false;
-                diagram_lines.clear();
-            } else {
-                diagram_lines.push(line.to_string());
             }
-            continue;
-        }
-
-        // Inside code block
-        if in_code {
-            if FENCE_CLOSE_RE.is_match(line) {
-                if code_lang == "mermaid" {
-                    // Store as MermaidBlock instead of CodeBlock
-                    mermaid_blocks.push(MermaidBlock {
-                        source: code_lines.join("\n"),
-                    });
-                    code_lang.clear();
-                    code_label.clear();
-                    code_exec_mode = None;
-                } else {
-                    let block = CodeBlock {
-                        language: std::mem::take(&mut code_lang),
-                        code: code_lines.join("\n"),
-                        label: std::mem::take(&mut code_label),
-                        exec_mode: code_exec_mode.take(),
-                    };
-                    if let Some(col_idx) = current_column {
-                        if col_idx < column_contents.len() {
-                            column_contents[col_idx].code_blocks.push(block);
-                        }
-                    } else {
-                        code_blocks.push(block);
-                    }
-                }
-                in_code = false;
-                code_lines.clear();
-            } else {
-                code_lines.push(line.to_string());
+            "image_position" => match v {
+                "left" => self.image.position = ImagePosition::Left,
+                "right" => self.image.position = ImagePosition::Right,
+                _ => {}
+            },
+            "image_render" | "image_scale" | "image_color" if !v.is_empty() => {
+                self.image_directive(name, v);
             }
-            continue;
-        }
-
-        // ── Fence openings (code blocks and diagrams) ──
-
-        // Diagram fence opening (check before general code fence)
-        if let Some(caps) = DIAGRAM_FENCE_RE.captures(line) {
-            in_diagram = true;
-            diagram_style = match caps.get(1).map(|m| m.as_str()) {
-                Some("bracket") => DiagramStyle::Bracket,
-                Some("vertical") => DiagramStyle::Vertical,
-                _ => DiagramStyle::Box,
-            };
-            continue;
-        }
-
-        // Code fence opening
-        if let Some(caps) = FENCE_OPEN_RE.captures(line) {
-            in_code = true;
-            code_lang = caps.get(1).map_or("", |m| m.as_str()).to_string();
-            code_exec_mode = caps.get(2).map(|m| match m.as_str() {
-                "+exec" => ExecMode::Exec,
-                "+pty" => ExecMode::Pty,
-                _ => ExecMode::Exec,
-            });
-            code_label = caps.get(3).map_or("", |m| m.as_str()).to_string();
-            continue;
-        }
-
-        // ── Slide metadata directives (section, timing, title style) ──
-
-        // Section directive
-        if let Some(caps) = SECTION_RE.captures(line) {
-            section = caps[1].to_string();
-            continue;
-        }
-
-        // Timing directive
-        if let Some(caps) = TIMING_RE.captures(line) {
-            timing = caps[1].parse().ok();
-            continue;
-        }
-
-        // ASCII title directive
-        if ASCII_TITLE_RE.is_match(line) {
-            ascii_title = true;
-            continue;
-        }
-
-        // ── Font and scaling directives ──
-
-        // Font size directive
-        if let Some(caps) = FONT_SIZE_RE.captures(line) {
-            font_size = caps[1].parse::<i8>().ok().map(|s| s.clamp(-20, 20));
-            continue;
-        }
-
-        // Font transition directive
-        if let Some(caps) = FONT_TRANSITION_RE.captures(line) {
-            font_transition = Some(caps[1].to_string());
-            continue;
-        }
-
-        // Text scale directive (OSC 66 — scales title + subtitle)
-        if let Some(caps) = TEXT_SCALE_RE.captures(line) {
-            text_scale = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
-            continue;
-        }
-
-        // Title scale directive (OSC 66 — scales title only)
-        if let Some(caps) = TITLE_SCALE_RE.captures(line) {
-            title_scale = caps[1].parse::<u8>().ok().map(|s| s.clamp(1, 7));
-            continue;
-        }
-
-        // ── Layout and appearance directives (footer, alignment, decoration) ──
-
-        // Footer directive
-        if let Some(caps) = FOOTER_RE.captures(line) {
-            footer = Some(caps[1].to_string());
-            continue;
-        }
-
-        // Footer alignment directive
-        if let Some(caps) = FOOTER_ALIGN_RE.captures(line) {
-            footer_align = match &caps[1] {
-                "center" => FooterAlign::Center,
-                "right" => FooterAlign::Right,
-                _ => FooterAlign::Left,
-            };
-            continue;
-        }
-
-        // Alignment directive
-        if let Some(caps) = ALIGN_RE.captures(line) {
-            alignment = match &caps[1] {
-                "center" => Some(SlideAlignment::Center),
-                "vcenter" => Some(SlideAlignment::VCenter),
-                "hcenter" => Some(SlideAlignment::HCenter),
-                "top" => Some(SlideAlignment::Top),
-                _ => None,
-            };
-            continue;
-        }
-
-        // Title decoration directive
-        if let Some(caps) = TITLE_DECORATION_RE.captures(line) {
-            title_decoration = Some(caps[1].to_string());
-            continue;
-        }
-
-        // ── Animation directives (transitions, entrance effects, loops) ──
-
-        // Transition directive
-        if let Some(caps) = TRANSITION_RE.captures(line) {
-            transition = crate::render::animation::parse_transition(&caps[1]);
-            continue;
-        }
-
-        // Entrance animation directive
-        if let Some(caps) = ANIMATION_RE.captures(line) {
-            entrance_animation = crate::render::animation::parse_entrance(&caps[1]);
-            continue;
-        }
-
-        // Loop animation directive (multiple allowed per slide)
-        if let Some(caps) = LOOP_ANIMATION_RE.captures(line) {
-            if let Some(la) = crate::render::animation::parse_loop_animation(&caps[1]) {
-                let target = caps.get(2).map(|m| m.as_str().to_string());
-                loop_animations.push((la, target));
-            }
-            continue;
-        }
-
-        // ── Display mode directives (fullscreen, theme, section visibility) ──
-
-        // Fullscreen directive (<!-- fullscreen --> or <!-- fullscreen: true/false -->)
-        if let Some(caps) = FULLSCREEN_RE.captures(line) {
-            fullscreen = Some(caps.get(1).is_none_or(|m| m.as_str() != "false"));
-            continue;
-        }
-
-        // Theme override directive (<!-- theme: slug -->)
-        if let Some(caps) = THEME_OVERRIDE_RE.captures(line) {
-            theme_override = Some(caps[1].to_string());
-            continue;
-        }
-
-        // Show section directive (<!-- show_section: true/false -->)
-        if let Some(caps) = SHOW_SECTION_RE.captures(line) {
-            show_section = Some(caps[1].as_bytes()[0] == b't');
-            continue;
-        }
-
-        // ── Code preamble directives ──
-        // Preambles let authors define reusable import/setup code that gets prepended to
-        // executable code blocks of the same language.
-
-        // Preamble start/end directives
-        if let Some(caps) = PREAMBLE_START_RE.captures(line) {
-            preamble_lang = Some(caps[1].to_string());
-            preamble_lines.clear();
-            continue;
-        }
-        if PREAMBLE_END_RE.is_match(line) {
-            if let Some(lang) = preamble_lang.take() {
-                code_preambles.insert(lang, preamble_lines.join("\n"));
-                preamble_lines.clear();
-            }
-            continue;
-        }
-        // Accumulate preamble content
-        if preamble_lang.is_some() {
-            // Lines between preamble_start and preamble_end are raw content (not HTML comments)
-            preamble_lines.push(line.to_string());
-            continue;
-        }
-
-        // ── Image directives (position, render mode, scale, color) ──
-
-        // Image position directive
-        if let Some(caps) = IMAGE_POS_RE.captures(line) {
-            image_position = match &caps[1] {
-                "left" => ImagePosition::Left,
-                "right" => ImagePosition::Right,
-                _ => ImagePosition::Below,
-            };
-            continue;
-        }
-
-        // Image render mode directive
-        if let Some(caps) = IMAGE_RENDER_RE.captures(line) {
-            // When inside a column with an image, apply to the column image
-            if let Some(col_idx) = current_column {
-                if col_idx < column_contents.len() {
-                    if let Some(ref mut img) = column_contents[col_idx].image {
-                        img.render_mode = Some(caps[1].to_string());
-                        continue;
-                    }
+            "column_layout" => self.column_layout(v),
+            "column_separator" if v.eq_ignore_ascii_case("none") => self.columns.separator = false,
+            "column_text_scale" => {
+                if let Some(n) = v.parse::<u8>().ok().filter(|n| (2..=7).contains(n)) {
+                    self.columns.text_scale = Some(n);
                 }
             }
-            image_render = match &caps[1] {
-                "ascii" => ImageRenderMode::Ascii,
-                "kitty" => ImageRenderMode::Kitty,
-                "iterm" | "iterm2" => ImageRenderMode::Iterm,
-                "sixel" => ImageRenderMode::Sixel,
-                _ => ImageRenderMode::Auto,
-            };
-            continue;
-        }
-
-        // Image scale directive
-        if let Some(caps) = IMAGE_SCALE_RE.captures(line) {
-            // When inside a column with an image, apply to the column image
-            if let Some(col_idx) = current_column {
-                if col_idx < column_contents.len() {
-                    if let Some(ref mut img) = column_contents[col_idx].image {
-                        if let Ok(s) = caps[1].parse::<u8>() {
-                            img.scale = Some(s.clamp(1, 100));
-                        }
-                        continue;
-                    }
+            "column" => {
+                if let Ok(i) = v.parse() {
+                    self.column = Some(i);
                 }
             }
-            if let Ok(s) = caps[1].parse::<u8>() {
-                image_scale = s.clamp(1, 100);
-            }
-            continue;
+            "reset_layout" => self.column = None,
+            _ => {}
         }
+    }
 
-        // Image color directive
-        if let Some(caps) = IMAGE_COLOR_RE.captures(line) {
-            // When inside a column with an image, apply to the column image
-            if let Some(col_idx) = current_column {
-                if col_idx < column_contents.len() {
-                    if let Some(ref mut img) = column_contents[col_idx].image {
-                        img.color = Some(caps[1].to_string());
-                        continue;
-                    }
+    /// Image directives after a column image apply to that image.
+    fn image_directive(&mut self, name: &str, v: &str) {
+        let scale = parse_clamped(v, 1, 100).map(|n| n as u8);
+        if let Some(img) = self.column_mut().and_then(|c| c.image.as_mut()) {
+            match name {
+                "image_scale" if scale.is_some() => img.scale = scale,
+                "image_color" => img.color = Some(v.to_string()),
+                // Column images always render as ASCII.
+                _ => {}
+            }
+            return;
+        }
+        match name {
+            "image_render" => {
+                self.image.render_mode = match v {
+                    "ascii" => ImageRenderMode::Ascii,
+                    "kitty" => ImageRenderMode::Kitty,
+                    "iterm" | "iterm2" => ImageRenderMode::Iterm,
+                    "sixel" => ImageRenderMode::Sixel,
+                    _ => return,
+                };
+            }
+            "image_scale" => {
+                if let Some(scale) = scale {
+                    self.image.scale = scale;
                 }
             }
-            image_color = caps[1].to_string();
-            continue;
+            _ => self.image.color_override = v.to_string(),
         }
+    }
 
-        // ── Speaker notes directives ──
-
-        // Multi-line notes start
-        if NOTES_MULTI_START_RE.is_match(line) {
-            in_notes = true;
-            notes_lines.clear();
-            continue;
-        }
-
-        // Single-line notes
-        if let Some(caps) = NOTES_SINGLE_RE.captures(line) {
-            notes_lines = vec![caps[1].to_string()];
-            continue;
-        }
-
-        // ── Column layout directives ──
-
-        // Column layout directive
-        if let Some(caps) = COLUMN_LAYOUT_RE.captures(line) {
-            let ratios: Vec<u8> = caps[1]
-                .split(',')
-                .filter_map(|s| s.trim().parse::<u8>().ok())
-                .collect();
-            if !ratios.is_empty() {
-                column_contents = ratios
-                    .iter()
-                    .map(|_| ColumnContent {
-                        bullets: Vec::new(),
-                        code_blocks: Vec::new(),
-                        image: None,
-                        text_lines: Vec::new(),
-                    })
-                    .collect();
-                column_ratios = Some(ratios);
+    fn column_layout(&mut self, v: &str) {
+        let ratios: Vec<u8> = v
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .filter_map(|r| r.trim().parse().ok())
+            .collect();
+        if !ratios.is_empty() {
+            if !self.slide.blocks.contains(&Block::Columns) {
+                self.push_block(Block::Columns);
             }
-            continue;
+            self.columns.contents = vec![ColumnContent::default(); ratios.len()];
+            self.columns.ratios = ratios;
         }
+    }
 
-        // Column separator visibility directive
-        if let Some(caps) = COLUMN_SEPARATOR_RE.captures(line) {
-            if caps[1].eq_ignore_ascii_case("none") {
-                column_separator = false;
-            }
-            continue;
-        }
+    /// The selected column; `None` (slide level) also covers indexes past the layout.
+    fn column_mut(&mut self) -> Option<&mut ColumnContent> {
+        self.columns.contents.get_mut(self.column?)
+    }
 
-        // Column text scale directive (OSC 66 scaling for non-image columns)
-        if let Some(caps) = COLUMN_TEXT_SCALE_RE.captures(line) {
-            if let Ok(scale) = caps[1].parse::<u8>() {
-                if (2..=7).contains(&scale) {
-                    column_text_scale = Some(scale);
-                }
-            }
-            continue;
-        }
-
-        // Column switch directive
-        if let Some(caps) = COLUMN_RE.captures(line) {
-            if let Ok(idx) = caps[1].parse::<usize>() {
-                current_column = Some(idx);
-            }
-            continue;
-        }
-
-        // Reset layout directive
-        if RESET_LAYOUT_RE.is_match(line) {
-            current_column = None;
-            continue;
-        }
-
-        // ── Catch-all: skip any unrecognized HTML comments ──
-        if HTML_COMMENT_RE.is_match(line) {
-            continue;
-        }
-
-        // ── Markdown content: block quotes, tables, headings, images, bullets ──
-
-        // Block quotes
+    fn content(&mut self, line: &str, continues_paragraph: bool) {
         if let Some(caps) = BLOCKQUOTE_RE.captures(line) {
-            blockquote_lines.push(caps[1].to_string());
-            continue;
-        } else if !blockquote_lines.is_empty() {
-            // End of blockquote block
-            block_quotes.push(BlockQuote {
-                lines: std::mem::take(&mut blockquote_lines),
-            });
+            self.quote.push(caps[1].to_string());
+            return;
         }
+        self.flush_quote();
+        if TABLE_ROW_RE.is_match(line) {
+            self.table_row(line);
+            return;
+        }
+        self.flush_table();
 
-        // Table parsing
-        if let Some(_caps) = TABLE_ROW_RE.captures(line) {
-            if TABLE_SEP_RE.is_match(line) {
-                // This is the separator row
-                if let Some(ref mut state) = table_state {
-                    state.alignments = parse_table_alignments(line);
-                    state.has_separator = true;
-                }
-                continue;
+        if let Some(caps) = TITLE_RE.captures(line).filter(|_| !self.title_found) {
+            self.slide.title = caps[1].trim().to_string();
+            self.title_found = true;
+        } else if let Some(caps) = IMAGE_RE.captures(line) {
+            self.image_line(&caps[1], &caps[2]);
+        } else if let Some(caps) = BULLET_RE.captures(line) {
+            let text = caps[2].trim();
+            if !text.is_empty() {
+                self.bullet(caps[1].len(), text);
             }
-            let cells = parse_table_cells(line);
-            if let Some(ref mut state) = table_state {
-                if state.has_separator {
-                    state.rows.push(cells);
+        } else {
+            self.text(line.trim(), continues_paragraph);
+        }
+    }
+
+    fn image_line(&mut self, alt: &str, path: &str) {
+        let path = resolve_path(self.base_dir, path);
+        match self.column_mut() {
+            Some(col) => {
+                col.image = Some(ColumnImage {
+                    path: path.to_string_lossy().into_owned(),
+                    scale: None,
+                    color: None,
+                });
+            }
+            None => {
+                if !self.slide.blocks.contains(&Block::Image) {
+                    self.push_block(Block::Image);
                 }
-                // If no separator yet and we already have headers, this line
-                // might be a non-table pipe line — but we wait for separator
-            } else {
-                // First table row = headers
-                table_state = Some(TableParseState {
-                    headers: cells,
+                self.image.alt_text = alt.to_string();
+                self.image.path = path;
+            }
+        }
+    }
+
+    fn bullet(&mut self, indent: usize, text: &str) {
+        let depth = match indent {
+            0..=1 => 0,
+            2..=3 => 1,
+            _ => 2,
+        };
+        let bullet = Bullet {
+            text: text.to_string(),
+            depth,
+        };
+        if let Some(col) = self.column_mut() {
+            col.bullets.push(bullet);
+            return;
+        }
+        let s = &mut self.slide;
+        match (s.blocks.last(), s.bullet_groups.last_mut()) {
+            (Some(Block::Bullets(_)), Some(group)) => group.end += 1,
+            _ => {
+                let start = s.bullets.len();
+                s.blocks.push(Block::Bullets(s.bullet_groups.len()));
+                s.bullet_groups.push(start..start + 1);
+            }
+        }
+        s.bullets.push(bullet);
+    }
+
+    fn text(&mut self, text: &str, continues_paragraph: bool) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(col) = self.column_mut() {
+            col.text_lines.push(text.to_string());
+            return;
+        }
+        let s = &mut self.slide;
+        if continues_paragraph {
+            if let Some(paragraph) = s.paragraphs.last_mut() {
+                paragraph.push(' ');
+                paragraph.push_str(text);
+            }
+        } else if self.title_found && s.subtitle.is_empty() && s.blocks.is_empty() {
+            s.subtitle = text.to_string();
+            return;
+        } else {
+            s.blocks.push(Block::Paragraph(s.paragraphs.len()));
+            s.paragraphs.push(text.to_string());
+        }
+        self.paragraph_open = true;
+    }
+
+    fn table_row(&mut self, line: &str) {
+        let is_separator = TABLE_SEP_RE.is_match(line);
+        match &mut self.table {
+            Some(table) if is_separator => {
+                table.alignments = parse_table_alignments(line);
+                table.has_separator = true;
+            }
+            Some(table) if table.has_separator => table.rows.push(parse_table_cells(line)),
+            None if !is_separator => {
+                self.table = Some(TableParseState {
+                    headers: parse_table_cells(line),
                     alignments: Vec::new(),
                     rows: Vec::new(),
                     has_separator: false,
                 });
             }
-            continue;
-        } else if let Some(state) = table_state.take() {
-            // End of table block
-            if state.has_separator {
-                tables.push(Table {
-                    headers: state.headers,
-                    alignments: state.alignments,
-                    rows: state.rows,
-                });
-            }
-        }
-
-        // Title (# heading)
-        if let Some(caps) = TITLE_RE.captures(line) {
-            if !title_found {
-                title = caps[1].trim().to_string();
-                title_found = true;
-                continue;
-            }
-        }
-
-        // Image
-        if let Some(caps) = IMAGE_RE.captures(line) {
-            // When inside a column, store the image in the column content
-            // instead of at slide level so it renders inline within the column.
-            if let Some(col_idx) = current_column {
-                if col_idx < column_contents.len() {
-                    column_contents[col_idx].image = Some(ColumnImage {
-                        path: caps[2].to_string(),
-                        render_mode: None,
-                        scale: None,
-                        color: None,
-                    });
-                    continue;
-                }
-            }
-            image_alt = caps[1].to_string();
-            image_path = caps[2].to_string();
-            continue;
-        }
-
-        // Bullets
-        if let Some(caps) = BULLET_RE.captures(line) {
-            let indent = caps[1].len();
-            let text = caps[2].trim().to_string();
-            // Skip empty bullets (bare `-` or `*` with no text)
-            if text.is_empty() {
-                continue;
-            }
-            let depth = if indent >= 4 {
-                2
-            } else if indent >= 2 {
-                1
-            } else {
-                0
-            };
-            let bullet = Bullet { text, depth };
-            if let Some(col_idx) = current_column {
-                if col_idx < column_contents.len() {
-                    column_contents[col_idx].bullets.push(bullet);
-                }
-            } else {
-                bullets.push(bullet);
-            }
-            continue;
-        }
-
-        // Plain text: non-empty, non-directive lines after the title.
-        // - First such line (before any bullets) becomes the subtitle.
-        // - Inside a column context, pushed to that column's text_lines.
-        // - After bullets have started (outside columns), pushed to trailing_text.
-        let stripped = line.trim();
-        if !stripped.is_empty() && title_found {
-            if let Some(col_idx) = current_column {
-                if col_idx < column_contents.len() {
-                    column_contents[col_idx]
-                        .text_lines
-                        .push(stripped.to_string());
-                }
-            } else if !bullets.is_empty() {
-                trailing_text.push(stripped.to_string());
-            } else if !subtitle_found {
-                subtitle = stripped.to_string();
-                subtitle_found = true;
-            }
+            _ => {}
         }
     }
 
-    // Flush remaining blockquote
-    if !blockquote_lines.is_empty() {
-        block_quotes.push(BlockQuote {
-            lines: blockquote_lines,
-        });
+    fn flush_quote(&mut self) {
+        if !self.quote.is_empty() {
+            let lines = std::mem::take(&mut self.quote);
+            let s = &mut self.slide;
+            s.blocks.push(Block::Quote(s.block_quotes.len()));
+            s.block_quotes.push(BlockQuote { lines });
+        }
     }
-    // Flush remaining table
-    if let Some(state) = table_state {
-        if state.has_separator {
-            tables.push(Table {
-                headers: state.headers,
-                alignments: state.alignments,
-                rows: state.rows,
+
+    fn flush_table(&mut self) {
+        if let Some(t) = self.table.take().filter(|t| t.has_separator) {
+            let s = &mut self.slide;
+            s.blocks.push(Block::Table(s.tables.len()));
+            s.tables.push(Table {
+                headers: t.headers,
+                alignments: t.alignments,
+                rows: t.rows,
             });
         }
     }
 
-    // Resolve section
-    if section.is_empty() {
-        section = last_section.to_string();
+    /// Quotes and tables end at the next block, so they are recorded first.
+    fn push_block(&mut self, block: Block) {
+        self.flush_quote();
+        self.flush_table();
+        self.slide.blocks.push(block);
     }
-    let current_section = section.clone();
 
-    // Resolve timing
-    let timing_minutes = timing.unwrap_or(1.0);
-
-    // Resolve notes
-    let notes = notes_lines.join("\n").trim().to_string();
-
-    // Resolve image path
-    let image = if !image_path.is_empty() {
-        let path = if let Some(base) = base_dir {
-            let p = std::path::Path::new(&image_path);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                base.join(p)
-            }
-        } else {
-            std::path::PathBuf::from(&image_path)
-        };
-
-        Some(SlideImage {
-            path,
-            alt_text: image_alt,
-            position: image_position,
-            render_mode: image_render,
-            scale: image_scale,
-            color_override: image_color,
-        })
-    } else {
-        None
-    };
-
-    // Resolve column image paths (same logic as slide-level image path resolution)
-    for content in &mut column_contents {
-        if let Some(ref mut col_img) = content.image {
-            if !col_img.path.is_empty() {
-                let resolved = if std::path::Path::new(&col_img.path).is_absolute() {
-                    col_img.path.clone()
-                } else if let Some(base) = base_dir {
-                    base.join(&col_img.path).to_string_lossy().to_string()
-                } else {
-                    col_img.path.clone()
-                };
-                col_img.path = resolved;
-            }
+    fn finish(mut self) -> Slide {
+        self.close_open_block();
+        self.flush_quote();
+        self.flush_table();
+        self.slide.notes = self.notes.join("\n").trim().to_string();
+        if !self.image.path.as_os_str().is_empty() {
+            self.slide.image = Some(self.image);
         }
-    }
-
-    let columns = column_ratios.map(|ratios| ColumnLayout {
-        ratios,
-        contents: column_contents,
-        separator: column_separator,
-        text_scale: column_text_scale,
-    });
-
-    let slide = Slide {
-        number,
-        title,
-        section,
-        subtitle,
-        bullets,
-        code_blocks,
-        image,
-        ascii_title,
-        notes,
-        timing_minutes,
-        columns,
-        tables,
-        block_quotes,
-        font_size,
-        text_scale,
-        title_scale,
-        footer,
-        footer_align,
-        alignment,
-        title_decoration,
-        transition,
-        entrance_animation,
-        loop_animations,
-        fullscreen,
-        show_section,
-        code_preambles,
-        mermaid_blocks,
-        diagram_blocks,
-        theme_override,
-        font_transition,
-        trailing_text,
-    };
-
-    (slide, current_section)
-}
-
-/// Maximum number of slides allowed in a single presentation file.
-/// This limit prevents accidental memory exhaustion from malformed or enormous files.
-const MAX_SLIDES: usize = 10_000;
-
-/// Public entry point: parses an entire Markdown presentation source string into metadata and slides.
-///
-/// # Parsing steps
-/// 1. Split the source on `---` line separators.
-/// 2. If the file starts with `---`, treat the first block as YAML-like front matter and parse
-///    it via `parse_front_matter()`. Otherwise, use default metadata.
-/// 3. Each remaining non-empty block is parsed by `parse_slide()` into a `Slide` struct.
-///    Sections are inherited from the previous slide when not explicitly set.
-///
-/// # Parameters
-/// - `source`: The full Markdown source text (as read from a `.md` file).
-/// - `base_dir`: Optional directory used to resolve relative image paths. Typically the parent
-///   directory of the Markdown file.
-///
-/// # Returns
-/// `Ok((PresentationMeta, Vec<Slide>))` on success, or an error if the file exceeds `MAX_SLIDES`.
-///
-/// # Errors
-/// Returns an error if the number of `---`-delimited blocks exceeds `MAX_SLIDES + 2`.
-pub fn parse_presentation(
-    source: &str,
-    base_dir: Option<&Path>,
-) -> Result<(PresentationMeta, Vec<Slide>)> {
-    // Split on --- separators
-    let blocks: Vec<&str> = SLIDE_SEPARATOR_RE.split(source).collect();
-
-    if blocks.len() > MAX_SLIDES + 2 {
-        anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
-    }
-
-    let (meta, slide_blocks) = if blocks.len() >= 3 && blocks[0].trim().is_empty() {
-        // First block empty = file starts with ---, second is front matter
-        let meta = parse_front_matter(blocks[1]);
-        (meta, &blocks[2..])
-    } else {
-        (PresentationMeta::default(), &blocks[..])
-    };
-
-    let mut slides = Vec::new();
-    let mut last_section = "opening".to_string();
-    let mut number = 1;
-
-    for block in slide_blocks {
-        if block.trim().is_empty() {
-            continue;
+        if !self.columns.ratios.is_empty() {
+            self.slide.columns = Some(self.columns);
         }
-        let (slide, section) = parse_slide(block, number, &last_section, base_dir);
-        last_section = section;
-        slides.push(slide);
-        number += 1;
+        self.slide
     }
-
-    Ok((meta, slides))
 }
 
 #[cfg(test)]
