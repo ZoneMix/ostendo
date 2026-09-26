@@ -1,33 +1,23 @@
-//! Vertical flow diagram renderer using pipes and arrows.
+//! Vertical flow diagram style, the narrowest: each row's nodes on one line
+//! joined by ` → `, rows stacked and joined by `│`/`▼`.
+//!
+//! ```text
+//!   A → B
+//!     annotation
+//!     │
+//!     ▼
+//!   B → C
+//! ```
 
-/// Vertical flow renderer.
-///
-/// Produces top-to-bottom pipe diagrams:
-/// ```text
-///   Node A
-///     │
-///     ▼
-///   Node B
-///     annotation
-///     │
-///     ▼
-///   Node C
-/// ```
 use crossterm::style::Color;
 
 use crate::diagram::parser::DiagramGraph;
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 
-/// Indentation for node labels.
 const INDENT: &str = "  ";
 
-/// Render a `DiagramGraph` as vertical top-to-bottom flow.
-///
-/// In vertical mode, each row's nodes are laid out horizontally with ` → ` arrows,
-/// and rows are connected vertically with `│` and `▼`.
 pub fn render(
     graph: &DiagramGraph,
-    _content_width: usize,
     accent: Color,
     text_color: Color,
     dim_color: Color,
@@ -35,7 +25,6 @@ pub fn render(
 ) -> Vec<StyledLine> {
     let mut lines: Vec<StyledLine> = Vec::new();
 
-    // Title
     if let Some(ref title) = graph.title {
         lines.push(StyledLine::empty());
         let mut line = StyledLine::empty();
@@ -60,7 +49,6 @@ pub fn render(
         }
         lines.push(node_line);
 
-        // Annotations (if any non-None)
         let has_annotations = row.annotations.iter().any(|a| a.is_some());
         if has_annotations {
             for ann in &row.annotations {
@@ -132,7 +120,7 @@ mod tests {
     fn test_vertical_simple() {
         let (accent, text, dim) = test_colors();
         let graph = parse("A -> B\nB -> C");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
+        let lines = render(&graph, accent, text, dim, "  ");
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -149,7 +137,7 @@ mod tests {
     fn test_vertical_with_annotations() {
         let (accent, text, dim) = test_colors();
         let graph = parse("Step 1\n: details here\nStep 2");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
+        let lines = render(&graph, accent, text, dim, "  ");
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -162,7 +150,7 @@ mod tests {
     fn test_vertical_single_row() {
         let (accent, text, dim) = test_colors();
         let graph = parse("Just One");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
+        let lines = render(&graph, accent, text, dim, "  ");
         // Single row, no connectors
         let has_connector = lines
             .iter()

@@ -1,21 +1,17 @@
-//! Compact bracket-style diagram renderer.
+//! Compact bracket diagram style:
+//!
+//! ```text
+//! [Node A] → [Node B] → [Node C]
+//!  note A     note B     note C
+//! ```
 
-/// Bracket-style renderer.
-///
-/// Produces compact bracket diagrams:
-/// ```text
-/// [Node A] → [Node B] → [Node C]
-///  note A     note B     note C
-/// ```
 use crossterm::style::Color;
 
 use crate::diagram::parser::DiagramGraph;
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 
-/// Render a `DiagramGraph` as bracket-style lines.
 pub fn render(
     graph: &DiagramGraph,
-    _content_width: usize,
     accent: Color,
     text_color: Color,
     dim_color: Color,
@@ -23,7 +19,6 @@ pub fn render(
 ) -> Vec<StyledLine> {
     let mut lines: Vec<StyledLine> = Vec::new();
 
-    // Title
     if let Some(ref title) = graph.title {
         lines.push(StyledLine::empty());
         let mut line = StyledLine::empty();
@@ -73,7 +68,6 @@ pub fn render(
         }
         lines.push(node_line);
 
-        // Annotation line (if any)
         let has_annotations = row.annotations.iter().any(|a| a.is_some());
         if has_annotations {
             let mut ann_line = StyledLine::empty();
@@ -162,7 +156,7 @@ mod tests {
     fn test_simple_bracket() {
         let (accent, text, dim) = test_colors();
         let graph = parse("A -> B -> C");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
+        let lines = render(&graph, accent, text, dim, "  ");
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -180,22 +174,12 @@ mod tests {
     fn test_bracket_with_title() {
         let (accent, text, dim) = test_colors();
         let graph = parse("# Test\nX -> Y");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
+        let lines = render(&graph, accent, text, dim, "  ");
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.text.as_str())
             .collect();
         assert!(all_text.contains("Test"));
-    }
-
-    #[test]
-    fn test_bracket_compact() {
-        let (accent, text, dim) = test_colors();
-        let graph = parse("A -> B");
-        let lines = render(&graph, 80, accent, text, dim, "  ");
-        // Bracket style should be compact: fewer lines than box style
-        // At minimum: node_line + trailing_empty = 2
-        assert!(lines.len() >= 2);
     }
 }

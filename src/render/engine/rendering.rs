@@ -599,7 +599,6 @@ impl Presenter {
             let diagram_lines = crate::diagram::render_adaptive(
                 &graph,
                 diagram_block.style,
-                content_width,
                 tw,
                 self.accent_color,
                 self.text_color,
