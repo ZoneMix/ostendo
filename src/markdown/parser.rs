@@ -14,6 +14,7 @@ use crate::render::animation::{
 };
 
 use super::regex_patterns::*;
+use super::split::{opens_comment, split_front_matter, split_slides, Fence};
 use super::tables::{parse_table_alignments, parse_table_cells, TableParseState};
 
 pub use super::inline::parse_inline_formatting;
@@ -26,21 +27,20 @@ pub fn parse_presentation(
     source: &str,
     base_dir: Option<&Path>,
 ) -> Result<(PresentationMeta, Vec<Slide>)> {
-    let blocks: Vec<&str> = SLIDE_SEPARATOR_RE.split(source).collect();
-
-    if blocks.len() > MAX_SLIDES + 2 {
-        anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
-    }
-
-    let (meta, slide_blocks) = if blocks.len() >= 3 && blocks[0].trim().is_empty() {
-        (parse_front_matter(blocks[1]), &blocks[2..])
-    } else {
-        (PresentationMeta::default(), &blocks[..])
-    };
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    let lines: Vec<&str> = source.lines().collect();
+    let (front_matter, body) = split_front_matter(&lines);
+    let meta = front_matter.map(parse_front_matter).unwrap_or_default();
 
     let mut slides: Vec<Slide> = Vec::new();
     let mut section = "opening".to_string();
-    for block in slide_blocks.iter().filter(|b| !b.trim().is_empty()) {
+    for block in split_slides(body) {
+        if block.iter().all(|l| l.trim().is_empty()) {
+            continue;
+        }
+        if slides.len() == MAX_SLIDES {
+            anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
+        }
         let slide = parse_slide(block, slides.len() + 1, &section, base_dir);
         section.clone_from(&slide.section);
         slides.push(slide);
@@ -48,10 +48,10 @@ pub fn parse_presentation(
     Ok((meta, slides))
 }
 
-fn parse_front_matter(block: &str) -> PresentationMeta {
+fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
     let mut meta = PresentationMeta::default();
-    for caps in block
-        .lines()
+    for caps in lines
+        .iter()
         .filter_map(|l| FRONT_MATTER_KV_RE.captures(l.trim()))
     {
         let val = caps[2].trim().trim_matches('"').to_string();
@@ -96,14 +96,42 @@ fn resolve_path(base_dir: Option<&Path>, path: &str) -> PathBuf {
     base_dir.map_or_else(|| PathBuf::from(path), |base| base.join(path))
 }
 
+/// Info string: first word is the language (`diagram` selects the diagram engine), plus
+/// optional `+exec`/`+pty`, `style=<name>` and `{label: "..."}`.
+fn fence_kind(info: &str) -> FenceKind {
+    let mut language = "";
+    let mut exec_mode = None;
+    let mut style = DiagramStyle::Box;
+    for word in info.split('{').next().unwrap_or("").split_whitespace() {
+        match word {
+            "+exec" => exec_mode = Some(ExecMode::Exec),
+            "+pty" => exec_mode = Some(ExecMode::Pty),
+            "style=bracket" => style = DiagramStyle::Bracket,
+            "style=vertical" => style = DiagramStyle::Vertical,
+            _ if language.is_empty() => language = word,
+            _ => {}
+        }
+    }
+    if language == "diagram" {
+        return FenceKind::Diagram(style);
+    }
+    FenceKind::Code {
+        language: language.to_string(),
+        label: FENCE_LABEL_RE
+            .captures(info)
+            .map_or(String::new(), |c| c[1].to_string()),
+        exec_mode,
+    }
+}
+
 fn parse_slide(
-    raw: &str,
+    lines: &[&str],
     number: usize,
     inherited_section: &str,
     base_dir: Option<&Path>,
 ) -> Slide {
     let mut builder = SlideBuilder::new(number, base_dir);
-    for line in raw.lines() {
+    for line in lines {
         builder.line(line);
     }
     let mut slide = builder.finish();
@@ -113,11 +141,20 @@ fn parse_slide(
     slide
 }
 
-/// Multi-line constructs that consume lines until their closing marker.
+/// Multi-line constructs that consume lines until their closing marker. One left open at the
+/// end of the slide is closed there.
 enum OpenBlock {
     Notes,
-    Fence { kind: FenceKind, lines: Vec<String> },
-    Preamble { lang: String, lines: Vec<String> },
+    Comment,
+    Fence {
+        fence: Fence,
+        kind: FenceKind,
+        lines: Vec<String>,
+    },
+    Preamble {
+        lang: String,
+        lines: Vec<String>,
+    },
 }
 
 enum FenceKind {
@@ -182,30 +219,52 @@ impl<'a> SlideBuilder<'a> {
         let continues_paragraph = std::mem::take(&mut self.paragraph_open);
         if self.open.is_some() {
             self.continue_open_block(line);
-        } else if !self.open_fence(line) {
+        } else if let Some((fence, info)) = Fence::parse(line) {
+            self.flush_quote();
+            self.flush_table();
+            let kind = fence_kind(info);
+            let lines = Vec::new();
+            self.open = Some(OpenBlock::Fence { fence, kind, lines });
+        } else if opens_comment(line) {
+            self.open_comment(line);
+        } else if line.trim_start().starts_with("<!--") {
             if let Some(caps) = DIRECTIVE_RE.captures(line) {
                 self.directive(&caps[1], caps.get(2).map(|m| m.as_str()));
-            } else if NOTES_MULTI_START_RE.is_match(line) {
-                self.notes.clear();
-                self.open = Some(OpenBlock::Notes);
-            } else if !HTML_COMMENT_RE.is_match(line) {
-                self.content(line, continues_paragraph);
             }
+        } else {
+            self.content(line, continues_paragraph);
+        }
+    }
+
+    /// `<!-- notes:` starts multi-line notes (text may begin on the same line); any other
+    /// unclosed `<!--` hides lines up to `-->`.
+    fn open_comment(&mut self, line: &str) {
+        let body = line.trim_start().trim_start_matches("<!--").trim_start();
+        match body.strip_prefix("notes:") {
+            Some(first) => {
+                self.notes.clear();
+                if !first.trim().is_empty() {
+                    self.notes.push(first.trim().to_string());
+                }
+                self.open = Some(OpenBlock::Notes);
+            }
+            None => self.open = Some(OpenBlock::Comment),
         }
     }
 
     fn continue_open_block(&mut self, line: &str) {
         let closed = match &mut self.open {
             Some(OpenBlock::Notes) => {
-                let end = NOTES_END_RE.find(line);
-                let text = end.map_or(line, |m| line[..m.start()].trim_end());
+                let end = line.find("-->");
+                let text = end.map_or(line, |i| line[..i].trim_end());
                 if end.is_none() || !text.trim().is_empty() {
                     self.notes.push(text.to_string());
                 }
                 end.is_some()
             }
-            Some(OpenBlock::Fence { lines, .. }) => {
-                let closed = FENCE_CLOSE_RE.is_match(line);
+            Some(OpenBlock::Comment) => line.contains("-->"),
+            Some(OpenBlock::Fence { fence, lines, .. }) => {
+                let closed = fence.is_closed_by(line);
                 if !closed {
                     lines.push(line.to_string());
                 }
@@ -229,7 +288,7 @@ impl<'a> SlideBuilder<'a> {
 
     fn close_open_block(&mut self) {
         match self.open.take() {
-            Some(OpenBlock::Fence { kind, lines }) => {
+            Some(OpenBlock::Fence { kind, lines, .. }) => {
                 let source = lines.join("\n");
                 match kind {
                     FenceKind::Diagram(style) => {
@@ -266,36 +325,8 @@ impl<'a> SlideBuilder<'a> {
             Some(OpenBlock::Preamble { lang, lines }) => {
                 self.slide.code_preambles.insert(lang, lines.join("\n"));
             }
-            Some(OpenBlock::Notes) | None => {}
+            Some(OpenBlock::Notes | OpenBlock::Comment) | None => {}
         }
-    }
-
-    fn open_fence(&mut self, line: &str) -> bool {
-        let kind = if let Some(caps) = DIAGRAM_FENCE_RE.captures(line) {
-            FenceKind::Diagram(match caps.get(1).map(|m| m.as_str()) {
-                Some("bracket") => DiagramStyle::Bracket,
-                Some("vertical") => DiagramStyle::Vertical,
-                _ => DiagramStyle::Box,
-            })
-        } else if let Some(caps) = FENCE_OPEN_RE.captures(line) {
-            FenceKind::Code {
-                language: caps[1].to_string(),
-                label: caps.get(3).map_or("", |m| m.as_str()).to_string(),
-                exec_mode: caps.get(2).map(|m| match m.as_str() {
-                    "+pty" => ExecMode::Pty,
-                    _ => ExecMode::Exec,
-                }),
-            }
-        } else {
-            return false;
-        };
-        self.flush_quote();
-        self.flush_table();
-        self.open = Some(OpenBlock::Fence {
-            kind,
-            lines: Vec::new(),
-        });
-        true
     }
 
     fn directive(&mut self, name: &str, value: Option<&str>) {
@@ -586,6 +617,7 @@ impl<'a> SlideBuilder<'a> {
     }
 
     fn finish(mut self) -> Slide {
+        self.close_open_block();
         self.flush_quote();
         self.flush_table();
         self.slide.notes = self.notes.join("\n").trim().to_string();

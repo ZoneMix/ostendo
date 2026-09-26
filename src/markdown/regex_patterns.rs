@@ -11,28 +11,13 @@ fn re(pattern: &str) -> Regex {
 pub(crate) static DIRECTIVE_RE: LazyLock<Regex> =
     LazyLock::new(|| re(r"^\s*<!--\s*(\w+)\s*(?::\s*(.*?))?\s*-->"));
 
-/// `key: value` line in the front matter block.
+/// `key: value` line in the front matter block: (1) key, (2) value.
 pub(crate) static FRONT_MATTER_KV_RE: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^(\w+)\s*:\s*(.+)$"));
+    LazyLock::new(|| re(r"^([\w-]+)\s*:\s*(.*)$"));
 
-/// Code fence opener: (1) language, (2) `+exec`/`+pty`, (3) `{label: "..."}` text.
-pub(crate) static FENCE_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    re(r#"^```(\w*)\s*(\+exec|\+pty)?\s*(?:\{label:\s*"([^"]*)"\s*\})?\s*$"#)
-});
-
-/// ```` ```diagram style=<name> ````: (1) style.
-pub(crate) static DIAGRAM_FENCE_RE: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^```diagram\s*(?:style=(\w+))?\s*$"));
-
-pub(crate) static FENCE_CLOSE_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^```\s*$"));
-
-/// `<!-- notes:` with the text continuing on the following lines.
-pub(crate) static NOTES_MULTI_START_RE: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^\s*<!--\s*notes:\s*$"));
-
-pub(crate) static NOTES_END_RE: LazyLock<Regex> = LazyLock::new(|| re(r"-->\s*$"));
-
-pub(crate) static HTML_COMMENT_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*<!--.*-->\s*$"));
+/// `{label: "name"}` in a fence info string: (1) name.
+pub(crate) static FENCE_LABEL_RE: LazyLock<Regex> =
+    LazyLock::new(|| re(r#"\{label:\s*"([^"]*)"\s*\}"#));
 
 pub(crate) static TITLE_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^#\s+(.+)$"));
 
@@ -42,8 +27,6 @@ pub(crate) static IMAGE_RE: LazyLock<Regex> =
 
 /// (1) indentation, (2) item text.
 pub(crate) static BULLET_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^(\s*)[-*]\s*(.*)$"));
-
-pub(crate) static SLIDE_SEPARATOR_RE: LazyLock<Regex> = LazyLock::new(|| re(r"(?m)^---\s*$"));
 
 pub(crate) static TABLE_ROW_RE: LazyLock<Regex> = LazyLock::new(|| re(r"^\|(.+)\|\s*$"));
 
