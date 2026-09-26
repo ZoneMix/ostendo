@@ -211,6 +211,7 @@ pub enum ImageRenderMode {
 pub struct Table {
     pub headers: Vec<String>,
     pub alignments: Vec<TableAlign>,
+    /// Cells per row; empty cells are kept.
     pub rows: Vec<Vec<String>>,
 }
 

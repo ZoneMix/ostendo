@@ -381,14 +381,12 @@ fn test_inline_code() {
 
 #[test]
 fn test_table_parsing() {
-    let src = "# Slide\n| Name | Value |\n| --- | --- |\n| foo | 1 |\n| bar | 2 |";
+    let src = "# Slide\n| Name | Unit | Value |\n| --- | --- | --- |\n| foo | m | 1 |\n| bar |  | 2 |";
     let slides = parse(src);
     assert_eq!(slides[0].tables.len(), 1);
     let table = &slides[0].tables[0];
-    assert_eq!(table.headers, vec!["Name", "Value"]);
-    assert_eq!(table.rows.len(), 2);
-    assert_eq!(table.rows[0], vec!["foo", "1"]);
-    assert_eq!(table.rows[1], vec!["bar", "2"]);
+    assert_eq!(table.headers, ["Name", "Unit", "Value"]);
+    assert_eq!(table.rows, [["foo", "m", "1"], ["bar", "", "2"]]);
 }
 
 #[test]
