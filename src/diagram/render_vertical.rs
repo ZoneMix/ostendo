@@ -1,20 +1,17 @@
-//! Vertical flow diagram style, the narrowest: each row's nodes on one line
-//! joined by ` → `, rows stacked and joined by `│`/`▼`.
+//! Vertical flow diagram style, the narrowest: one node per line, joined by
+//! `↓`, with each node's annotation aligned to the right of the labels.
 //!
 //! ```text
-//!   A → B
-//!     annotation
-//!     │
-//!     ▼
-//!   B → C
+//!   Parse Input       serde_json
+//!    ↓
+//!   Validate Schema   jsonschema
 //! ```
 
 use crossterm::style::Color;
+use unicode_width::UnicodeWidthStr;
 
 use crate::diagram::parser::DiagramGraph;
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
-
-const INDENT: &str = "  ";
 
 pub fn render(
     graph: &DiagramGraph,
@@ -23,71 +20,37 @@ pub fn render(
     dim_color: Color,
     pad: &str,
 ) -> Vec<StyledLine> {
-    let mut lines: Vec<StyledLine> = Vec::new();
+    let line = |spans: Vec<StyledSpan>| StyledLine {
+        spans: std::iter::once(StyledSpan::new(pad)).chain(spans).collect(),
+        content_type: LineContentType::Diagram,
+    };
+    let steps: Vec<(&str, Option<&str>)> = graph
+        .rows
+        .iter()
+        .flat_map(|row| {
+            row.nodes.iter().enumerate().map(|(i, node)| {
+                let note = row.annotations.get(i).and_then(|a| a.as_deref()).filter(|a| !a.is_empty());
+                (node.label.as_str(), note)
+            })
+        })
+        .collect();
+    let label_w = steps.iter().map(|(l, _)| l.width()).max().unwrap_or(0);
 
-    if let Some(ref title) = graph.title {
-        lines.push(StyledLine::empty());
-        let mut line = StyledLine::empty();
-        line.content_type = LineContentType::Diagram;
-        line.push(StyledSpan::new(pad));
-        line.push(StyledSpan::new(title).with_fg(dim_color));
-        lines.push(line);
+    let mut lines = Vec::new();
+    if let Some(title) = &graph.title {
+        lines.push(line(vec![StyledSpan::new(title).with_fg(dim_color)]));
     }
-
-    for (row_idx, row) in graph.rows.iter().enumerate() {
-        // Node line: each row's nodes connected with →
-        let mut node_line = StyledLine::empty();
-        node_line.content_type = LineContentType::Diagram;
-        node_line.push(StyledSpan::new(pad));
-        node_line.push(StyledSpan::new(INDENT));
-
-        for (i, node) in row.nodes.iter().enumerate() {
-            node_line.push(StyledSpan::new(&node.label).with_fg(text_color).bold());
-            if i + 1 < row.nodes.len() {
-                node_line.push(StyledSpan::new(" → ").with_fg(accent));
-            }
+    for (i, (label, note)) in steps.iter().enumerate() {
+        if i > 0 {
+            lines.push(line(vec![StyledSpan::new("   "), StyledSpan::new("↓").with_fg(accent)]));
         }
-        lines.push(node_line);
-
-        let has_annotations = row.annotations.iter().any(|a| a.is_some());
-        if has_annotations {
-            for ann in &row.annotations {
-                if let Some(text) = ann.as_deref() {
-                    if !text.is_empty() {
-                        let mut ann_line = StyledLine::empty();
-                        ann_line.content_type = LineContentType::Diagram;
-                        ann_line.push(StyledSpan::new(pad));
-                        ann_line.push(StyledSpan::new(INDENT));
-                        ann_line.push(StyledSpan::new("  ")); // extra indent under node
-                        ann_line.push(StyledSpan::new(text).with_fg(dim_color));
-                        lines.push(ann_line);
-                    }
-                }
-            }
+        let mut spans = vec![StyledSpan::new("  "), StyledSpan::new(label).with_fg(text_color).bold()];
+        if let Some(note) = note {
+            spans.push(StyledSpan::new(&" ".repeat(label_w - label.width() + 3)));
+            spans.push(StyledSpan::new(note).with_fg(dim_color));
         }
-
-        // Vertical connector to next row
-        if row_idx + 1 < graph.rows.len() {
-            let connector_pad = format!("{}{}", pad, INDENT);
-            let connector_x = 2; // center under short labels
-
-            let mut pipe = StyledLine::empty();
-            pipe.content_type = LineContentType::Diagram;
-            pipe.push(StyledSpan::new(&connector_pad));
-            pipe.push(StyledSpan::new(&" ".repeat(connector_x)));
-            pipe.push(StyledSpan::new("│").with_fg(accent));
-            lines.push(pipe);
-
-            let mut arrow = StyledLine::empty();
-            arrow.content_type = LineContentType::Diagram;
-            arrow.push(StyledSpan::new(&connector_pad));
-            arrow.push(StyledSpan::new(&" ".repeat(connector_x)));
-            arrow.push(StyledSpan::new("▼").with_fg(accent));
-            lines.push(arrow);
-        }
+        lines.push(line(spans));
     }
-
-    lines.push(StyledLine::empty());
     lines
 }
 
@@ -96,65 +59,18 @@ mod tests {
     use super::*;
     use crate::diagram::parser::parse;
 
-    fn test_colors() -> (Color, Color, Color) {
-        (
-            Color::Rgb {
-                r: 189,
-                g: 147,
-                b: 249,
-            },
-            Color::Rgb {
-                r: 248,
-                g: 248,
-                b: 242,
-            },
-            Color::Rgb {
-                r: 98,
-                g: 114,
-                b: 164,
-            },
-        )
+    fn texts(source: &str) -> Vec<String> {
+        render(&parse(source), Color::Cyan, Color::White, Color::Grey, "")
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string())
+            .collect()
     }
 
     #[test]
-    fn test_vertical_simple() {
-        let (accent, text, dim) = test_colors();
-        let graph = parse("A -> B\nB -> C");
-        let lines = render(&graph, accent, text, dim, "  ");
-        let all_text: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(all_text.contains("A"));
-        assert!(all_text.contains("B"));
-        assert!(all_text.contains("C"));
-        assert!(all_text.contains("│"));
-        assert!(all_text.contains("▼"));
-    }
-
-    #[test]
-    fn test_vertical_with_annotations() {
-        let (accent, text, dim) = test_colors();
-        let graph = parse("Step 1\n: details here\nStep 2");
-        let lines = render(&graph, accent, text, dim, "  ");
-        let all_text: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(all_text.contains("details here"));
-    }
-
-    #[test]
-    fn test_vertical_single_row() {
-        let (accent, text, dim) = test_colors();
-        let graph = parse("Just One");
-        let lines = render(&graph, accent, text, dim, "  ");
-        // Single row, no connectors
-        let has_connector = lines
-            .iter()
-            .any(|l| l.spans.iter().any(|s| s.text.contains("│")));
-        assert!(!has_connector);
+    fn every_node_gets_its_own_line_with_its_annotation() {
+        assert_eq!(
+            texts("A -> Longer B\n: first : second\nC"),
+            ["  A          first", "   ↓", "  Longer B   second", "   ↓", "  C"]
+        );
     }
 }

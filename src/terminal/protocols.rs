@@ -20,6 +20,9 @@ pub enum ImageProtocol {
     Kitty,
     Iterm2,
     Sixel,
+    /// Colored half-block cells: works in any true-color terminal.
+    Blocks,
+    /// Character-ramp art (`image_render: ascii`).
     Ascii,
 }
 
@@ -102,8 +105,8 @@ pub fn detect_protocol() -> ImageProtocol {
     }
 
     // Unknown terminals (Alacritty, VTE, Windows Terminal, ...) would show
-    // nothing for a protocol they lack; ASCII art renders everywhere.
-    ImageProtocol::Ascii
+    // nothing for a protocol they lack; half blocks render everywhere.
+    ImageProtocol::Blocks
 }
 
 #[cfg(test)]
@@ -162,10 +165,10 @@ mod tests {
             (&[("TERM_PROGRAM", "ghostty")], ImageProtocol::Kitty),
             (&[("KITTY_WINDOW_ID", "5")], ImageProtocol::Kitty),
             (&[("TERM", "xterm-kitty")], ImageProtocol::Kitty),
-            (&[("KITTY_WINDOW_ID", "5"), tmux], ImageProtocol::Ascii),
-            (&[("TERM", "alacritty")], ImageProtocol::Ascii),
-            (&[("TERM", "xterm-256color")], ImageProtocol::Ascii),
-            (&[], ImageProtocol::Ascii),
+            (&[("KITTY_WINDOW_ID", "5"), tmux], ImageProtocol::Blocks),
+            (&[("TERM", "alacritty")], ImageProtocol::Blocks),
+            (&[("TERM", "xterm-256color")], ImageProtocol::Blocks),
+            (&[], ImageProtocol::Blocks),
         ];
         for (vars, expected) in cases {
             assert_eq!(with_env(vars, detect_protocol), *expected, "{vars:?}");

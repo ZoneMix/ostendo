@@ -113,6 +113,9 @@ enum ImageMode {
     Kitty,
     Iterm,
     Sixel,
+    /// Colored half blocks (any true-color terminal)
+    Blocks,
+    /// Character-ramp art
     Ascii,
 }
 
@@ -212,6 +215,7 @@ fn main() -> Result<()> {
             ImageMode::Kitty => Some(ImageProtocol::Kitty),
             ImageMode::Iterm => Some(ImageProtocol::Iterm2),
             ImageMode::Sixel => Some(ImageProtocol::Sixel),
+            ImageMode::Blocks => Some(ImageProtocol::Blocks),
             ImageMode::Ascii => Some(ImageProtocol::Ascii),
         },
         remote,

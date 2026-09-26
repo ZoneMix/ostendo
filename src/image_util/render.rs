@@ -97,7 +97,10 @@ pub fn render_slide_image(
         None => RenderedImage::Lines(Vec::new()),
     };
     match protocol {
-        ImageProtocol::Ascii => render_ascii(img, image, max_cols, text_color),
+        ImageProtocol::Ascii => render_ascii(img, image, max_cols, max_rows, text_color),
+        ImageProtocol::Blocks => {
+            render_blocks(img, image, max_cols, max_rows, text_color, bg_color)
+        }
         ImageProtocol::Kitty => {
             let (scaled, cols, rows) = fit();
             let image_id = super::kitty::next_image_id();
@@ -126,10 +129,13 @@ fn render_ascii(
     img: &RgbaImage,
     image: &SlideImage,
     max_cols: usize,
+    max_rows: usize,
     text_color: Color,
 ) -> RenderedImage {
     let color_override = crate::theme::colors::hex_to_color(&image.color_override);
-    let ascii_rows = crate::terminal::ascii_art::render_ascii_art(img, max_cols, color_override);
+    let rows = max_rows.saturating_sub(usize::from(!image.alt_text.is_empty()));
+    let ascii_rows =
+        crate::terminal::ascii_art::render_ascii_art(img, max_cols, rows, color_override);
     let mut lines = Vec::with_capacity(ascii_rows.len() + 1);
     for row in &ascii_rows {
         let mut line = StyledLine::empty();
@@ -150,6 +156,40 @@ fn render_ascii(
         lines.push(cap);
     }
 
+    RenderedImage::Lines(lines)
+}
+
+fn render_blocks(
+    img: &RgbaImage,
+    image: &SlideImage,
+    max_cols: usize,
+    max_rows: usize,
+    text_color: Color,
+    bg_color: Color,
+) -> RenderedImage {
+    let bg = crate::theme::colors::color_to_rgb(bg_color).unwrap_or((0, 0, 0));
+    let rows = max_rows.saturating_sub(usize::from(!image.alt_text.is_empty()));
+    let mut lines: Vec<StyledLine> =
+        crate::terminal::ascii_art::render_blocks(img, max_cols, rows, bg)
+            .into_iter()
+            .map(|cells| StyledLine {
+                spans: cells
+                    .into_iter()
+                    .map(|(top, bottom)| StyledSpan::new("▀").with_fg(top).with_bg(bottom))
+                    .collect(),
+                content_type: LineContentType::AsciiImage,
+            })
+            .collect();
+    if !image.alt_text.is_empty() {
+        let width = lines.first().map_or(0, StyledLine::width);
+        let caption = crate::render::text::ellipsize(&image.alt_text, width.max(1));
+        let pad = " ".repeat(
+            width.saturating_sub(unicode_width::UnicodeWidthStr::width(caption.as_str())) / 2,
+        );
+        lines.push(StyledLine::plain(&format!("{pad}{caption}")));
+        lines.last_mut().unwrap().spans[0].fg = Some(text_color);
+        lines.last_mut().unwrap().spans[0].dim = true;
+    }
     RenderedImage::Lines(lines)
 }
 

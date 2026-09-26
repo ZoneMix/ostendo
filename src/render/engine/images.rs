@@ -210,7 +210,7 @@ impl ImageStore {
         Some(self.render(&pixels, img, 0, cols, rows, protocol, colors, window))
     }
 
-    /// ASCII art for a column image.
+    /// A column image as text rows (half blocks, or ramp art when forced).
     pub fn column_image(
         &mut self,
         path: &str,
@@ -222,9 +222,14 @@ impl ImageStore {
             path: PathBuf::from(path),
             alt_text: String::new(),
             position: ImagePosition::Below,
-            render_mode: ImageRenderMode::Ascii,
+            render_mode: ImageRenderMode::Auto,
             scale: 100,
             color_override: color.unwrap_or_default().to_string(),
+        };
+        let protocol = if self.protocol == ImageProtocol::Ascii {
+            ImageProtocol::Ascii
+        } else {
+            ImageProtocol::Blocks
         };
         let Some(pixels) = self.loaded.get(&img.path).cloned() else {
             return Vec::new();
@@ -235,16 +240,7 @@ impl ImageStore {
             pixel_width: 0,
             pixel_height: 0,
         };
-        match self.render(
-            &pixels,
-            &img,
-            0,
-            cols,
-            usize::MAX,
-            ImageProtocol::Ascii,
-            colors,
-            &window,
-        ) {
+        match self.render(&pixels, &img, 0, cols, cols, protocol, colors, &window) {
             Rendered::Lines(lines) => lines,
             Rendered::Cells { .. } => Vec::new(),
         }
