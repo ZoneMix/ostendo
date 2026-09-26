@@ -140,6 +140,35 @@ fn test_subtitle_extraction() {
 }
 
 #[test]
+fn blocks_record_source_order() {
+    let slides = parse(
+        "# T\nSubtitle\n\nIntro line one\nline two\n- a\n- b\n```sh\nls\n```\n> quote\n\n| h |\n|---|\n| r |\n\n- c",
+    );
+    let s = &slides[0];
+    assert_eq!(s.subtitle, "Subtitle");
+    assert_eq!(s.paragraphs, ["Intro line one line two"]);
+    assert_eq!(
+        s.blocks,
+        [
+            Block::Paragraph(0),
+            Block::Bullets(0),
+            Block::Code(0),
+            Block::Quote(0),
+            Block::Table(0),
+            Block::Bullets(1),
+        ]
+    );
+    assert_eq!(s.bullet_groups, [0..2, 2..3]);
+}
+
+#[test]
+fn text_without_title_is_kept() {
+    let slides = parse("# Deck\n---\nThank you!");
+    assert_eq!(slides[1].subtitle, "");
+    assert_eq!(slides[1].paragraphs, ["Thank you!"]);
+}
+
+#[test]
 fn test_html_comments_ignored() {
     let src = "# Slide\n<!-- some random comment -->\n- bullet";
     let slides = parse(src);

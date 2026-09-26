@@ -5,7 +5,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::presentation::{
-    BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnLayout, DiagramBlock,
+    Block, BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnLayout, DiagramBlock,
     DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode, MermaidBlock,
     PresentationMeta, Slide, SlideAlignment, SlideImage, Table,
 };
@@ -134,7 +134,8 @@ struct SlideBuilder<'a> {
     base_dir: Option<&'a Path>,
     open: Option<OpenBlock>,
     title_found: bool,
-    subtitle_found: bool,
+    /// The previous line was paragraph text, so the next text line continues it.
+    paragraph_open: bool,
     /// Image directives may precede the `![]()` line; kept only once a path is set.
     image: SlideImage,
     /// Column directives may precede `column_layout`; kept only once ratios are set.
@@ -155,7 +156,7 @@ impl<'a> SlideBuilder<'a> {
             base_dir,
             open: None,
             title_found: false,
-            subtitle_found: false,
+            paragraph_open: false,
             image: SlideImage {
                 path: PathBuf::new(),
                 alt_text: String::new(),
@@ -178,6 +179,7 @@ impl<'a> SlideBuilder<'a> {
     }
 
     fn line(&mut self, line: &str) {
+        let continues_paragraph = std::mem::take(&mut self.paragraph_open);
         if self.open.is_some() {
             self.continue_open_block(line);
         } else if !self.open_fence(line) {
@@ -187,7 +189,7 @@ impl<'a> SlideBuilder<'a> {
                 self.notes.clear();
                 self.open = Some(OpenBlock::Notes);
             } else if !HTML_COMMENT_RE.is_match(line) {
-                self.content(line);
+                self.content(line, continues_paragraph);
             }
         }
     }
@@ -231,11 +233,13 @@ impl<'a> SlideBuilder<'a> {
                 let source = lines.join("\n");
                 match kind {
                     FenceKind::Diagram(style) => {
+                        self.push_block(Block::Diagram(self.slide.diagram_blocks.len()));
                         self.slide
                             .diagram_blocks
                             .push(DiagramBlock { source, style });
                     }
                     FenceKind::Code { language, .. } if language == "mermaid" => {
+                        self.push_block(Block::Mermaid(self.slide.mermaid_blocks.len()));
                         self.slide.mermaid_blocks.push(MermaidBlock { source });
                     }
                     FenceKind::Code {
@@ -251,7 +255,10 @@ impl<'a> SlideBuilder<'a> {
                         };
                         match self.column_mut() {
                             Some(col) => col.code_blocks.push(block),
-                            None => self.slide.code_blocks.push(block),
+                            None => {
+                                self.push_block(Block::Code(self.slide.code_blocks.len()));
+                                self.slide.code_blocks.push(block);
+                            }
                         }
                     }
                 }
@@ -282,6 +289,8 @@ impl<'a> SlideBuilder<'a> {
         } else {
             return false;
         };
+        self.flush_quote();
+        self.flush_table();
         self.open = Some(OpenBlock::Fence {
             kind,
             lines: Vec::new(),
@@ -418,6 +427,9 @@ impl<'a> SlideBuilder<'a> {
             .filter_map(|r| r.trim().parse().ok())
             .collect();
         if !ratios.is_empty() {
+            if !self.slide.blocks.contains(&Block::Columns) {
+                self.push_block(Block::Columns);
+            }
             self.columns.contents = vec![ColumnContent::default(); ratios.len()];
             self.columns.ratios = ratios;
         }
@@ -428,7 +440,7 @@ impl<'a> SlideBuilder<'a> {
         self.columns.contents.get_mut(self.column?)
     }
 
-    fn content(&mut self, line: &str) {
+    fn content(&mut self, line: &str, continues_paragraph: bool) {
         if let Some(caps) = BLOCKQUOTE_RE.captures(line) {
             self.quote.push(caps[1].to_string());
             return;
@@ -451,7 +463,7 @@ impl<'a> SlideBuilder<'a> {
                 self.bullet(caps[1].len(), text);
             }
         } else {
-            self.text(line.trim());
+            self.text(line.trim(), continues_paragraph);
         }
     }
 
@@ -466,6 +478,9 @@ impl<'a> SlideBuilder<'a> {
                 });
             }
             None => {
+                if !self.slide.blocks.contains(&Block::Image) {
+                    self.push_block(Block::Image);
+                }
                 self.image.alt_text = alt.to_string();
                 self.image.path = path;
             }
@@ -482,24 +497,44 @@ impl<'a> SlideBuilder<'a> {
             text: text.to_string(),
             depth,
         };
-        match self.column_mut() {
-            Some(col) => col.bullets.push(bullet),
-            None => self.slide.bullets.push(bullet),
+        if let Some(col) = self.column_mut() {
+            col.bullets.push(bullet);
+            return;
         }
+        let s = &mut self.slide;
+        match (s.blocks.last(), s.bullet_groups.last_mut()) {
+            (Some(Block::Bullets(_)), Some(group)) => group.end += 1,
+            _ => {
+                let start = s.bullets.len();
+                s.blocks.push(Block::Bullets(s.bullet_groups.len()));
+                s.bullet_groups.push(start..start + 1);
+            }
+        }
+        s.bullets.push(bullet);
     }
 
-    fn text(&mut self, text: &str) {
-        if text.is_empty() || !self.title_found {
+    fn text(&mut self, text: &str, continues_paragraph: bool) {
+        if text.is_empty() {
             return;
         }
         if let Some(col) = self.column_mut() {
             col.text_lines.push(text.to_string());
-        } else if !self.slide.bullets.is_empty() {
-            self.slide.trailing_text.push(text.to_string());
-        } else if !self.subtitle_found {
-            self.slide.subtitle = text.to_string();
-            self.subtitle_found = true;
+            return;
         }
+        let s = &mut self.slide;
+        if continues_paragraph {
+            if let Some(paragraph) = s.paragraphs.last_mut() {
+                paragraph.push(' ');
+                paragraph.push_str(text);
+            }
+        } else if self.title_found && s.subtitle.is_empty() && s.blocks.is_empty() {
+            s.subtitle = text.to_string();
+            return;
+        } else {
+            s.blocks.push(Block::Paragraph(s.paragraphs.len()));
+            s.paragraphs.push(text.to_string());
+        }
+        self.paragraph_open = true;
     }
 
     fn table_row(&mut self, line: &str) {
@@ -525,18 +560,29 @@ impl<'a> SlideBuilder<'a> {
     fn flush_quote(&mut self) {
         if !self.quote.is_empty() {
             let lines = std::mem::take(&mut self.quote);
-            self.slide.block_quotes.push(BlockQuote { lines });
+            let s = &mut self.slide;
+            s.blocks.push(Block::Quote(s.block_quotes.len()));
+            s.block_quotes.push(BlockQuote { lines });
         }
     }
 
     fn flush_table(&mut self) {
         if let Some(t) = self.table.take().filter(|t| t.has_separator) {
-            self.slide.tables.push(Table {
+            let s = &mut self.slide;
+            s.blocks.push(Block::Table(s.tables.len()));
+            s.tables.push(Table {
                 headers: t.headers,
                 alignments: t.alignments,
                 rows: t.rows,
             });
         }
+    }
+
+    /// Quotes and tables end at the next block, so they are recorded first.
+    fn push_block(&mut self, block: Block) {
+        self.flush_quote();
+        self.flush_table();
+        self.slide.blocks.push(block);
     }
 
     fn finish(mut self) -> Slide {

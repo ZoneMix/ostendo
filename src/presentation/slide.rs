@@ -2,6 +2,7 @@
 //! renderer and exporters. `Option` directive fields are `None` unless the slide sets them.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::PathBuf;
 
 use crate::render::animation::{EntranceAnimation, LoopAnimation, TransitionType};
@@ -46,10 +47,16 @@ pub struct Slide {
     pub title: String,
     /// Set by `<!-- section: name -->`; inherited from the previous slide otherwise.
     pub section: String,
-    /// First plain-text line after the title.
+    /// First plain-text line after the title, when nothing else precedes it.
     pub subtitle: String,
-    /// List items outside columns.
+    /// Body elements in source order (title, subtitle and directives excluded).
+    pub blocks: Vec<Block>,
+    /// Plain-text paragraphs other than the subtitle; consecutive lines are joined by a space.
+    pub paragraphs: Vec<String>,
+    /// List items outside columns, flattened across groups.
     pub bullets: Vec<Bullet>,
+    /// Ranges into `bullets`, one per run of list items not interrupted by another block.
+    pub bullet_groups: Vec<Range<usize>>,
     pub code_blocks: Vec<CodeBlock>,
     /// Last `![alt](path)` outside columns.
     pub image: Option<SlideImage>,
@@ -89,8 +96,21 @@ pub struct Slide {
     pub theme_override: Option<String>,
     /// `<!-- font_transition: none -->` applies font size changes without animation.
     pub font_transition: Option<String>,
-    /// Plain-text lines that follow the bullet list.
-    pub trailing_text: Vec<String>,
+}
+
+/// One body element of a slide; indexes point into the matching `Slide` vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Block {
+    Paragraph(usize),
+    /// Index into `bullet_groups`.
+    Bullets(usize),
+    Code(usize),
+    Table(usize),
+    Quote(usize),
+    Diagram(usize),
+    Mermaid(usize),
+    Image,
+    Columns,
 }
 
 #[derive(Debug, Clone)]
