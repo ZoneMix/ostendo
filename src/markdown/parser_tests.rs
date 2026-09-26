@@ -394,7 +394,7 @@ fn test_inline_plain_text() {
 
 #[test]
 fn test_front_matter_meta() {
-    let src = "---\ntitle: My Deck\nauthor: Alice\ndate: 2026-03-09\naccent: \"#FF5500\"\nalign: center\ntransition: fade\n---\n# First Slide";
+    let src = "---\ntitle: My Deck\nauthor: Alice\ndate: 2026-03-09\naccent: \"#FF5500\"\nalign: center\ntransition: fade\ntheme: nord\n---\n# First Slide";
     let (meta, slides) = parse_presentation(src, None).unwrap();
     assert_eq!(meta.title, "My Deck");
     assert_eq!(meta.author, "Alice");
@@ -405,6 +405,7 @@ fn test_front_matter_meta() {
         Some(crate::presentation::SlideAlignment::Center)
     );
     assert_eq!(meta.transition, "fade");
+    assert_eq!(meta.theme.as_deref(), Some("nord"));
     assert_eq!(slides.len(), 1);
     assert_eq!(slides[0].title, "First Slide");
 }

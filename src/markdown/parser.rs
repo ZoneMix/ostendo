@@ -61,6 +61,7 @@ fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
             "date" => meta.date = val,
             "accent" => meta.accent = val,
             "transition" => meta.transition = val,
+            "theme" if !val.is_empty() => meta.theme = Some(val),
             "align" | "alignment" => meta.default_alignment = parse_alignment(&val),
             _ => {}
         }
