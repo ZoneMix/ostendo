@@ -205,10 +205,6 @@ pub struct Presenter {
     // --- Image Rendering ---
     /// Detected (or CLI-overridden) terminal image protocol (Kitty, iTerm2, Sixel, ASCII).
     image_protocol: ImageProtocol,
-    /// Whether Kitty supports native animation frames (a=f).
-    kitty_animation_cap: crate::terminal::protocols::KittyAnimationCapability,
-    /// Kitty image IDs for GIF animations (path → image_id). Terminal drives playback.
-    kitty_gif_ids: HashMap<PathBuf, u32>,
     /// Cache of rendered image data keyed by (path, width, protocol, frame).
     /// Avoids re-rendering images on every frame.
     image_cache: HashMap<ImageCacheKey, CachedImage>,
@@ -517,8 +513,6 @@ impl Presenter {
             exec_block_index: 0,
             state,
             image_protocol,
-            kitty_animation_cap: crate::terminal::protocols::detect_kitty_animation(),
-            kitty_gif_ids: HashMap::new(),
             image_cache: HashMap::new(),
             kitty_transmitted: std::collections::HashSet::new(),
             preloaded_images,
@@ -582,7 +576,7 @@ impl Presenter {
             .iter()
             .any(|s| !s.mermaid_blocks.is_empty());
         if has_mermaid && crate::image_util::mermaid::MermaidRenderer::is_available() {
-            presenter.mermaid_renderer = Some(crate::image_util::mermaid::MermaidRenderer::new());
+            presenter.mermaid_renderer = crate::image_util::mermaid::MermaidRenderer::new().ok();
         }
         // Restore saved theme (unless CLI explicitly specified a non-default theme)
         if presenter.theme.slug == "terminal_green" {

@@ -1,15 +1,15 @@
-//! Diagram DSL parser for the graph description language.
-
-/// Diagram DSL parser.
-///
-/// Syntax:
-///   # Optional title
-///   Node A -> Node B -> Node C
-///   : annotation A  : annotation B  : annotation C
-///
-/// Lines starting with `#` are titles (rendered dimmed above the diagram).
-/// Lines starting with `:` are annotations (rendered dimmed below the previous row's nodes).
-/// All other non-empty lines are node rows, split on ` -> `.
+//! Parser for the ```` ```diagram ```` DSL:
+//!
+//! ```text
+//! # Optional title
+//! Node A -> Node B -> Node C
+//! : annotation A  : annotation B  : annotation C
+//! ```
+//!
+//! A `#` line is the title. A line starting with `:` annotates the nodes of
+//! the row above it, one `: ` segment per node, so a colon inside an
+//! annotation (`10:30`, `http://…`) is kept. Every other non-empty line is a
+//! row of nodes separated by `->`.
 
 #[derive(Debug, Clone)]
 pub struct DiagramGraph {
@@ -28,7 +28,6 @@ pub struct DiagramNode {
     pub label: String,
 }
 
-/// Parse diagram DSL source text into a `DiagramGraph`.
 pub fn parse(source: &str) -> DiagramGraph {
     let mut title: Option<String> = None;
     let mut rows: Vec<DiagramRow> = Vec::new();
@@ -39,28 +38,20 @@ pub fn parse(source: &str) -> DiagramGraph {
             continue;
         }
 
-        // Title line
         if trimmed.starts_with('#') {
             title = Some(trimmed.trim_start_matches('#').trim().to_string());
             continue;
         }
 
-        // Annotation line — applies to the most recent row
         if trimmed.starts_with(':') {
             if let Some(last_row) = rows.last_mut() {
-                let annotations = parse_annotations(trimmed);
-                // Merge: extend or replace
-                last_row.annotations = annotations;
-                // Clamp annotations to match node count
-                last_row.annotations.truncate(last_row.nodes.len());
-                while last_row.annotations.len() < last_row.nodes.len() {
-                    last_row.annotations.push(None);
-                }
+                // Renderers index annotations by node, so keep one per node.
+                last_row.annotations = parse_annotations(trimmed);
+                last_row.annotations.resize(last_row.nodes.len(), None);
             }
             continue;
         }
 
-        // Node row: split on ` -> `
         let nodes: Vec<DiagramNode> = trimmed
             .split("->")
             .map(|s| DiagramNode {
@@ -81,16 +72,9 @@ pub fn parse(source: &str) -> DiagramGraph {
     DiagramGraph { title, rows }
 }
 
-/// Parse a colon-separated annotation line.
-///
-/// Format: `: annotation 1  : annotation 2  : annotation 3`
-///
-/// Each segment is separated by `:` at the start or preceded by whitespace.
 fn parse_annotations(line: &str) -> Vec<Option<String>> {
-    // Split on `: ` pattern (colon followed by space), treating leading `:` as first delimiter
-    let stripped = line.trim_start_matches(':');
-    stripped
-        .split(':')
+    line.trim_start_matches(':')
+        .split(": ")
         .map(|s| {
             let trimmed = s.trim();
             if trimmed.is_empty() {
@@ -152,6 +136,13 @@ mod tests {
         assert_eq!(graph.rows.len(), 1);
         assert_eq!(graph.rows[0].nodes.len(), 1);
         assert_eq!(graph.rows[0].nodes[0].label, "Alone");
+    }
+
+    #[test]
+    fn test_annotations_keep_colons_inside_text() {
+        let graph = parse("A -> B\n: at 10:30  : http://host");
+        assert_eq!(graph.rows[0].annotations[0].as_deref(), Some("at 10:30"));
+        assert_eq!(graph.rows[0].annotations[1].as_deref(), Some("http://host"));
     }
 
     #[test]

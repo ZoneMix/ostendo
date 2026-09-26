@@ -1,33 +1,26 @@
-//! Box-drawing style diagram renderer using Unicode border characters.
+//! Box-drawing diagram style:
+//!
+//! ```text
+//! ┌──────────┐    ┌──────────┐    ┌──────────┐
+//! │ Node A   │───→│ Node B   │───→│ Node C   │
+//! └──────────┘    └──────────┘    └──────────┘
+//!   annotation     annotation      annotation
+//! ```
 
-/// Box-drawing style renderer.
-///
-/// Produces Unicode box-drawing diagrams:
-/// ```text
-/// ┌──────────┐    ┌──────────┐    ┌──────────┐
-/// │ Node A   │───→│ Node B   │───→│ Node C   │
-/// └──────────┘    └──────────┘    └──────────┘
-///   annotation     annotation      annotation
-/// ```
 use crossterm::style::Color;
 
 use crate::diagram::parser::{DiagramGraph, DiagramRow};
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
 
-/// Horizontal arrow connector between boxes.
 const ARROW: &str = "───→";
-/// Arrow display width.
 const ARROW_WIDTH: usize = 4;
-/// Minimum padding inside box on each side of the label.
+/// Spaces between each side of the box and its label.
 const BOX_PAD: usize = 1;
 
-/// Render a `DiagramGraph` as box-drawing styled lines.
-///
-/// `accent` colors box borders and arrows. `text_color` colors labels.
-/// `dim_color` colors annotations and titles.
+/// `accent` colors borders and arrows, `text_color` labels, and `dim_color`
+/// annotations and the title.
 pub fn render(
     graph: &DiagramGraph,
-    content_width: usize,
     accent: Color,
     text_color: Color,
     dim_color: Color,
@@ -35,7 +28,6 @@ pub fn render(
 ) -> Vec<StyledLine> {
     let mut lines: Vec<StyledLine> = Vec::new();
 
-    // Title
     if let Some(ref title) = graph.title {
         lines.push(StyledLine::empty());
         let mut line = StyledLine::empty();
@@ -47,7 +39,7 @@ pub fn render(
     }
 
     for (row_idx, row) in graph.rows.iter().enumerate() {
-        let col_widths = compute_column_widths(row, content_width);
+        let col_widths = compute_column_widths(row);
         render_row(
             &mut lines,
             row,
@@ -74,10 +66,8 @@ pub fn render(
     lines
 }
 
-/// Compute the display width for each column in a row.
-///
-/// Each column width = max(label_len, annotation_len) + 2 * BOX_PAD + 2 (for box border chars `│ │`).
-fn compute_column_widths(row: &DiagramRow, _content_width: usize) -> Vec<usize> {
+/// Box width per node, wide enough for its label or its annotation.
+fn compute_column_widths(row: &DiagramRow) -> Vec<usize> {
     row.nodes
         .iter()
         .enumerate()
@@ -159,7 +149,6 @@ fn render_row(
     }
     lines.push(bot);
 
-    // Annotations (if any non-None)
     let has_annotations = row.annotations.iter().any(|a| a.is_some());
     if has_annotations {
         let mut ann_line = StyledLine::empty();
@@ -212,14 +201,12 @@ fn compute_connector_offset(col_widths: &[usize], col_idx: usize) -> usize {
 fn render_vertical_connector(lines: &mut Vec<StyledLine>, offset: usize, accent: Color, pad: &str) {
     let pad_len = pad.len();
 
-    // Pipe line
     let mut pipe = StyledLine::empty();
     pipe.content_type = LineContentType::Diagram;
     pipe.push(StyledSpan::new(&" ".repeat(pad_len + offset)));
     pipe.push(StyledSpan::new("│").with_fg(accent));
     lines.push(pipe);
 
-    // Arrow down
     let mut arrow = StyledLine::empty();
     arrow.content_type = LineContentType::Diagram;
     arrow.push(StyledSpan::new(&" ".repeat(pad_len + offset)));
@@ -257,7 +244,7 @@ mod tests {
     #[test]
     fn test_simple_render() {
         let graph = parse("A -> B -> C");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
+        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
         // Should have: empty + top + label + bottom + empty = 5 lines minimum
         assert!(lines.len() >= 4);
         // All lines should be Diagram content type (except empties)
@@ -271,7 +258,7 @@ mod tests {
     #[test]
     fn test_with_title() {
         let graph = parse("# My Title\nA -> B");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
+        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
         // Should contain the title text
         let all_text: String = lines
             .iter()
@@ -284,7 +271,7 @@ mod tests {
     #[test]
     fn test_with_annotations() {
         let graph = parse("A -> B\n: note1  : note2");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
+        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -302,19 +289,21 @@ mod tests {
         // Parser already clamps, but manually force extra annotation to test renderer defense
         graph.rows[1].annotations.push(Some("extra".into()));
         // Should not panic
-        render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
+        render(&graph, test_accent(), test_text(), test_dim(), "  ");
     }
 
     #[test]
     fn test_multi_row_with_connector() {
         let graph = parse("A -> B\nB -> C");
-        let lines = render(&graph, 80, test_accent(), test_text(), test_dim(), "  ");
+        let lines = render(&graph, test_accent(), test_text(), test_dim(), "  ");
         let all_text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.text.as_str())
             .collect();
-        // Should have vertical connectors
-        assert!(all_text.contains("│") || all_text.contains("▼"));
+        assert!(
+            all_text.contains('▼'),
+            "rows sharing a node must be connected"
+        );
     }
 }

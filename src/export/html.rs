@@ -1,31 +1,19 @@
 //! Self-contained HTML export.
 //!
-//! Generates a single HTML file with embedded CSS and JavaScript that reproduces
-//! the presentation with theme colors, syntax highlighting, and slide navigation.
-//! All assets (images, styles, scripts) are inlined so the exported file can be
-//! opened in any browser without a server or external dependencies.
-//!
-//! The exported HTML supports:
-//! - Keyboard navigation (arrow keys, space, `h`/`l` for vim-style)
-//! - Speaker notes toggle (`N` key)
-//! - Progress bar and slide counter
-//! - Print/PDF via the browser's built-in print dialog (`@media print` rules)
-//! - Images embedded as base64 data URIs
+//! Produces one HTML file with inline CSS, JavaScript and base64 images that
+//! opens in any browser without a server. Code blocks are emitted as plain
+//! `<pre><code class="language-…">` without highlighting. Arrow keys, space
+//! and `h`/`l` navigate, `N` toggles speaker notes, and `@media print` rules
+//! lay out one slide per page for printing and PDF export.
 
 use anyhow::Result;
+use base64::Engine;
 use std::path::Path;
 
 use crate::presentation::Slide;
 use crate::theme::Theme;
 
-/// Export a presentation to a self-contained HTML file.
-///
-/// The HTML includes:
-/// - Embedded CSS derived from theme colors
-/// - Syntax-highlighted code blocks via syntect
-/// - Base64-encoded images as data URIs
-/// - Keyboard navigation (arrow keys, space)
-/// - Hidden speaker notes (toggled with 'N' key)
+/// Write `slides` styled with `theme` to `output_path` as a single HTML file.
 pub fn export_html(slides: &[Slide], theme: &Theme, output_path: &Path) -> Result<()> {
     let bg = &theme.colors.background;
     let text = &theme.colors.text;
@@ -38,7 +26,6 @@ pub fn export_html(slides: &[Slide], theme: &Theme, output_path: &Path) -> Resul
     html.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
     html.push_str("<title>Presentation</title>\n");
 
-    // Embedded CSS
     html.push_str("<style>\n");
     html.push_str(&format!(r#"
 :root {{
@@ -125,7 +112,6 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
 "#));
     html.push_str("</style>\n</head>\n<body>\n");
 
-    // Slides
     for (i, slide) in slides.iter().enumerate() {
         let active = if i == 0 { " active" } else { "" };
         html.push_str(&format!(
@@ -133,12 +119,10 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
             active, i
         ));
 
-        // Title
         if !slide.title.is_empty() {
             html.push_str(&format!("<h1>{}</h1>\n", escape_html(&slide.title)));
         }
 
-        // Subtitle
         if !slide.subtitle.is_empty() {
             html.push_str(&format!(
                 "<div class=\"subtitle\">{}</div>\n",
@@ -146,7 +130,6 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
             ));
         }
 
-        // Bullets
         if !slide.bullets.is_empty() {
             html.push_str("<ul>\n");
             for bullet in &slide.bullets {
@@ -160,7 +143,6 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
             html.push_str("</ul>\n");
         }
 
-        // Code blocks
         for cb in &slide.code_blocks {
             html.push_str(&format!(
                 "<pre><code class=\"language-{}\">{}</code></pre>\n",
@@ -169,7 +151,6 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
             ));
         }
 
-        // Block quotes
         for bq in &slide.block_quotes {
             html.push_str("<blockquote>\n");
             for line in &bq.lines {
@@ -178,7 +159,6 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
             html.push_str("</blockquote>\n");
         }
 
-        // Tables
         for table in &slide.tables {
             html.push_str("<table>\n<thead><tr>\n");
             for header in &table.headers {
@@ -195,36 +175,13 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
             html.push_str("</tbody></table>\n");
         }
 
-        // Image (base64 data URI)
-        if let Some(ref img) = slide.image {
-            if img.path.exists() {
-                if let Ok(data) = std::fs::read(&img.path) {
-                    let ext = img
-                        .path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("png")
-                        .to_lowercase();
-                    let mime = match ext.as_str() {
-                        "jpg" | "jpeg" => "image/jpeg",
-                        "gif" => "image/gif",
-                        "svg" => "image/svg+xml",
-                        "webp" => "image/webp",
-                        _ => "image/png",
-                    };
-                    let b64 =
-                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-                    html.push_str(&format!(
-                        "<img src=\"data:{};base64,{}\" alt=\"{}\">\n",
-                        mime,
-                        b64,
-                        escape_html(&img.alt_text)
-                    ));
-                }
+        if let Some(img) = &slide.image {
+            if let Some(uri) = image_data_uri(&img.path) {
+                let alt = escape_html(&img.alt_text);
+                html.push_str(&format!("<img src=\"{uri}\" alt=\"{alt}\">\n"));
             }
         }
 
-        // Speaker notes (hidden by default)
         if !slide.notes.is_empty() {
             html.push_str(&format!(
                 "<div class=\"notes\">{}</div>\n",
@@ -235,11 +192,9 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
         html.push_str("</div>\n");
     }
 
-    // Progress bar
     html.push_str("<div class=\"progress\" id=\"progress\"></div>\n");
     html.push_str("<div class=\"slide-counter\" id=\"counter\"></div>\n");
 
-    // Navigation JavaScript
     html.push_str("<script>\n");
     html.push_str(
         r#"
@@ -276,11 +231,23 @@ showSlide(0);
     Ok(())
 }
 
-/// Escape special HTML characters to prevent XSS in exported content.
-///
-/// Replaces `&`, `<`, `>`, and `"` with their HTML entity equivalents.
-/// This must be applied to all user-provided text (slide titles, bullets, code)
-/// before embedding in the HTML output.
+/// Inline an image file as a data URI. Anything that is not recognizably an
+/// image is skipped: markdown can point `![](…)` at any path, and embedding
+/// e.g. `~/.aws/credentials` would leak it into a file meant for sharing.
+fn image_data_uri(path: &Path) -> Option<String> {
+    let data = std::fs::read(path).ok()?;
+    let is_svg = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
+    let mime = if is_svg {
+        "image/svg+xml"
+    } else {
+        image::guess_format(&data).ok()?.to_mime_type()
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    Some(format!("data:{mime};base64,{encoded}"))
+}
+
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -291,42 +258,54 @@ fn escape_html(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::{ImagePosition, ImageRenderMode, SlideImage};
 
-    #[test]
-    fn test_escape_html() {
-        assert_eq!(escape_html("<script>"), "&lt;script&gt;");
-        assert_eq!(escape_html("a & b"), "a &amp; b");
+    fn export(slides: &[Slide]) -> String {
+        let theme = crate::theme::ThemeRegistry::load()
+            .get("terminal_green")
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.html");
+        export_html(slides, &theme, &path).unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    }
+
+    fn slide_with_image(path: &Path) -> Slide {
+        Slide {
+            image: Some(SlideImage {
+                path: path.to_path_buf(),
+                alt_text: String::new(),
+                position: ImagePosition::Below,
+                render_mode: ImageRenderMode::Auto,
+                scale: 100,
+                color_override: String::new(),
+            }),
+            ..Slide::default()
+        }
     }
 
     #[test]
     fn test_export_html_basic() {
-        let slides = vec![Slide {
+        let content = export(&[Slide {
             number: 1,
-            title: "Test Slide".to_string(),
+            title: "Test <script>alert(1)</script> & Slide".to_string(),
             ..Slide::default()
-        }];
-        let theme = Theme {
-            name: "test".to_string(),
-            slug: "test".to_string(),
-            colors: crate::theme::schema::ThemeColors {
-                background: "#000000".to_string(),
-                accent: "#00ff00".to_string(),
-                text: "#ffffff".to_string(),
-                code_background: "#1a1a1a".to_string(),
-            },
-            fonts: Default::default(),
-            layout: "left".to_string(),
-            visual_style: "bold".to_string(),
-            gradient: None,
-            title_decoration: None,
-            dark_variant: None,
-            light_variant: None,
-        };
+        }]);
+        assert!(content.starts_with("<!DOCTYPE html>"));
+        assert!(content.contains("Test &lt;script&gt;alert(1)&lt;/script&gt; &amp; Slide"));
+        assert!(!content.contains("<script>alert(1)"));
+    }
+
+    #[test]
+    fn embeds_images_but_not_arbitrary_files() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.html");
-        export_html(&slides, &theme, &path).unwrap();
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("Test Slide"));
-        assert!(content.contains("<!DOCTYPE html>"));
+        let png = dir.path().join("pixel.png");
+        image::RgbaImage::new(1, 1).save(&png).unwrap();
+        let secret = dir.path().join("credentials");
+        std::fs::write(&secret, "aws_secret_access_key=hunter2").unwrap();
+
+        let content = export(&[slide_with_image(&png), slide_with_image(&secret)]);
+        assert_eq!(content.matches("<img ").count(), 1);
+        assert!(content.contains("<img src=\"data:image/png;base64,"));
     }
 }

@@ -26,8 +26,7 @@ impl Presenter {
     /// so images are re-placed at correct positions on next render_frame().
     fn clear_kitty_placements(&self) {
         if self.image_protocol == ImageProtocol::Kitty {
-            // d=a: delete all visible placements, keep image data for re-placement
-            let clear = "\x1b_Ga=d,d=a,q=2;AAAA\x1b\\";
+            let clear = crate::image_util::kitty::DELETE_ALL_PLACEMENTS;
             let _ = std::io::Write::write_all(&mut std::io::stdout(), clear.as_bytes());
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
@@ -135,7 +134,7 @@ impl Presenter {
         self.theme = new_theme;
         // Clear Kitty images from terminal memory (bg color changed, compositing differs)
         if self.image_protocol == ImageProtocol::Kitty {
-            let delete = crate::image_util::kitty::delete_all_escape();
+            let delete = crate::image_util::kitty::DELETE_ALL_PLACEMENTS;
             let _ = std::io::Write::write_all(&mut std::io::stdout(), delete.as_bytes());
             let _ = std::io::Write::flush(&mut std::io::stdout());
             self.kitty_transmitted.clear();
