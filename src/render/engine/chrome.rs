@@ -79,6 +79,9 @@ impl Presenter {
             self.meta.title.clone()
         };
         let mut left_text = format!(" {title}");
+        if !self.meta.author.is_empty() {
+            left_text.push_str(&format!(" — {}", self.meta.author));
+        }
         if !slide.section.is_empty() {
             left_text.push_str(&format!("  ·  {}", slide.section));
         }
@@ -258,10 +261,19 @@ impl Presenter {
         let start = page * per_page;
 
         let mut out = vec![StyledLine::empty(); height];
+        let byline: Vec<&str> = [
+            self.meta.title.as_str(),
+            self.meta.author.as_str(),
+            self.meta.date.as_str(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
         let header = format!(
-            " Overview   {} / {}",
+            " Overview   {} / {}   {}",
             self.overview_sel + 1,
-            self.slides.len()
+            self.slides.len(),
+            byline.join(" · ")
         );
         out[0] = padded(
             vec![StyledSpan::new(&header).with_fg(pal.accent).bold()],

@@ -183,8 +183,8 @@ fn list_items_need_a_marker_and_whitespace() {
 fn headings_and_rules() {
     let slide = &parse("# T\n## Sub heading\ntext\n### Third\n***\n* * *\n___\n# Second")[0];
     assert_eq!(slide.title, "T");
-    assert_eq!(slide.subtitle, "Sub heading");
-    assert_eq!(slide.paragraphs, ["text", "Third", "Second"]);
+    assert_eq!(slide.subtitle, "**Sub heading**");
+    assert_eq!(slide.paragraphs, ["text", "**Third**", "**Second**"]);
     assert!(slide.bullets.is_empty());
 }
 

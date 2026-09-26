@@ -478,7 +478,7 @@ impl<'a> SlideBuilder<'a> {
                 self.title_found = true;
             } else {
                 // Other headings stand alone: shown without markers, never merged with text.
-                self.text(&caps[2], false);
+                self.text(&format!("**{}**", &caps[2]), false);
                 self.paragraph_open = false;
             }
         } else if let Some(caps) = IMAGE_RE.captures(line) {
