@@ -20,7 +20,6 @@ mod remote;
 mod terminal;
 mod theme;
 mod code;
-mod third_party;
 mod image_util;
 mod export;
 mod watch;
