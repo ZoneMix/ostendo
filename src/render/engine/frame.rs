@@ -42,16 +42,24 @@ impl Presenter {
                 return Rc::clone(frame);
             }
         }
-        let mut frame = self.build_frame(layout, false);
+        let mut frame = self.build_frame(layout, false, 0);
         if frame.lines.len() > layout.content_rows {
-            frame = self.build_frame(layout, true);
+            frame = self.build_frame(layout, true, 0);
+        }
+        // Images and diagrams give up rows so the text after them fits too.
+        let slide = &self.slides[self.current];
+        let shrinkable = slide.image.is_some() || !slide.mermaid_blocks.is_empty();
+        let extra = frame.lines.len().saturating_sub(layout.content_rows);
+        if extra > 0 && shrinkable {
+            frame = self.build_frame(layout, true, extra);
         }
         let frame = Rc::new(frame);
         self.frame_cache = Some((key, Rc::clone(&frame)));
         frame
     }
 
-    fn build_frame(&mut self, layout: &Layout, compact: bool) -> SlideFrame {
+    /// `shrink` takes that many rows from each image's budget.
+    fn build_frame(&mut self, layout: &Layout, compact: bool, shrink: usize) -> SlideFrame {
         let slide = &self.slides[self.current];
         let pal = self.palette;
         let exec = self.exec_output.as_deref().map(|output| ExecView {
@@ -195,7 +203,9 @@ impl Presenter {
                     let rows = layout
                         .content_rows
                         .saturating_sub(out.lines.len() + 1)
-                        .max(layout.content_rows / 2);
+                        .max(layout.content_rows / 2)
+                        .saturating_sub(shrink)
+                        .max(3);
                     match self
                         .images
                         .mermaid(source, text_width, rows, colors, &self.window)
@@ -214,7 +224,10 @@ impl Presenter {
                     };
                     let cols = text_width * self.image_scale(img.scale) / 100;
                     let remaining = layout.content_rows.saturating_sub(out.lines.len() + 1);
-                    let rows = remaining.max(layout.content_rows / 3).max(1);
+                    let rows = remaining
+                        .max(layout.content_rows / 3)
+                        .saturating_sub(shrink)
+                        .max(3);
                     let protocol = self.images.protocol();
                     match self.images.slide_image(
                         img,

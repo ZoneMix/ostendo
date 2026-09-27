@@ -18,6 +18,7 @@ mod images;
 mod input;
 mod navigation;
 mod palette;
+mod record;
 mod state;
 mod terminal;
 mod types;
@@ -109,6 +110,10 @@ pub struct Presenter {
     remote_rx: Option<Receiver<RemoteCommand>>,
     state_broadcast: Option<tokio::sync::broadcast::Sender<String>>,
     last_broadcast: String,
+    record_path: Option<PathBuf>,
+    recorder: Option<record::Recorder>,
+    /// The background last sent to the terminal (OSC 11).
+    terminal_bg: Option<Color>,
 }
 
 impl Presenter {
@@ -193,6 +198,9 @@ impl Presenter {
             remote_rx,
             state_broadcast,
             last_broadcast: String::new(),
+            record_path: cfg.record,
+            recorder: None,
+            terminal_bg: None,
             slides: cfg.slides,
         }
     }
@@ -202,9 +210,21 @@ impl Presenter {
     /// # Errors
     /// Fails if the terminal cannot be set up or written to.
     pub fn run(&mut self) -> Result<()> {
+        if let Some(path) = &self.record_path {
+            let title = if self.meta.title.is_empty() {
+                &self.slides[0].title
+            } else {
+                &self.meta.title
+            };
+            self.recorder = Some(record::Recorder::create(
+                path,
+                self.width,
+                self.height,
+                title,
+            )?);
+        }
         let _guard = terminal::TerminalGuard::enter()?;
         terminal::on_exit(self.font.reset_escape());
-        terminal::set_background(self.palette.bg);
         self.apply_slide_theme();
         self.font.request(Some(self.current));
         let result = self.event_loop();
@@ -212,6 +232,28 @@ impl Presenter {
         self.save_state();
         result
     }
+}
+
+/// Slides whose fully built content is taller than a `width` × `height`
+/// terminal leaves room for: (slide number, rows that would need scrolling).
+/// Per-slide `font_size` changes are not applied.
+pub fn overflowing_slides(cfg: PresenterConfig, width: u16, height: u16) -> Vec<(usize, usize)> {
+    let mut p = Presenter::new(cfg);
+    p.watcher = None;
+    p.width = width;
+    p.height = height;
+    (0..p.slides.len())
+        .filter_map(|i| {
+            p.current = i;
+            p.step = p.slides[i].steps.len();
+            p.fullscreen = p.slides[i].fullscreen.unwrap_or(false);
+            p.apply_slide_theme();
+            let layout = p.layout();
+            let rows = p.slide_frame(&layout).lines.len();
+            let extra = rows.saturating_sub(layout.content_rows);
+            (extra > 0).then_some((i + 1, extra))
+        })
+        .collect()
 }
 
 fn figlet_font() -> figlet_rs::FIGfont {

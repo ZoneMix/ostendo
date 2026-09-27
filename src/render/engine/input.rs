@@ -99,8 +99,18 @@ impl Presenter {
         if !transmit.is_empty() {
             out.write_all(&transmit)?;
         }
+        let mut frame = Vec::new();
+        if self.terminal_bg != Some(self.palette.bg) {
+            self.terminal_bg = Some(self.palette.bg);
+            frame.extend_from_slice(super::terminal::background_escape(self.palette.bg).as_bytes());
+        }
         self.display
-            .present(&screen, self.width, self.palette.text, out)?;
+            .present(&screen, self.width, self.palette.text, &mut frame)?;
+        out.write_all(&frame)?;
+        out.flush()?;
+        if let Some(recorder) = &mut self.recorder {
+            recorder.output(&frame);
+        }
         Ok(())
     }
 
@@ -126,9 +136,12 @@ impl Presenter {
         self.window = crate::render::layout::WindowSize::query();
         self.width = width.max(1);
         self.height = height.max(1);
+        if let Some(recorder) = &mut self.recorder {
+            recorder.resize(self.width, self.height);
+        }
         self.images.clear();
         self.display.invalidate();
-        super::terminal::set_background(self.palette.bg);
+        self.terminal_bg = None;
     }
 
     /// Handles one terminal event; returns true to quit.

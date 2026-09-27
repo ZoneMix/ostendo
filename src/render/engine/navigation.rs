@@ -160,6 +160,17 @@ fn searchable(slide: &Slide) -> String {
         parts.extend(c.text_lines.iter().map(String::as_str));
         parts.extend(c.bullets.iter().map(|b| b.text.as_str()));
         parts.extend(c.code_blocks.iter().map(|b| b.code.as_str()));
+        parts.extend(
+            c.quotes
+                .iter()
+                .flat_map(|q| q.lines.iter().map(String::as_str)),
+        );
+        parts.extend(
+            c.tables
+                .iter()
+                .flat_map(|t| t.headers.iter().chain(t.rows.iter().flatten()))
+                .map(String::as_str),
+        );
     }
     parts.join("\n").to_lowercase()
 }

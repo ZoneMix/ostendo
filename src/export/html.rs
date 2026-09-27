@@ -12,7 +12,9 @@ use base64::Engine;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::presentation::{Block, Bullet, Chart, ColumnContent, ColumnItem, Slide, Table};
+use crate::presentation::{
+    Block, BlockQuote, Bullet, Chart, ColumnContent, ColumnItem, Slide, Table,
+};
 use crate::theme::Theme;
 
 /// Write `slides` styled with `theme` to `output_path` as a single HTML file
@@ -223,25 +225,7 @@ fn slide_body(slide: &Slide) -> String {
             }
             Block::Code(i) => out.push_str(&code(&slide.code_blocks[i])),
             Block::Table(i) => out.push_str(&table(&slide.tables[i])),
-            Block::Quote(i) => {
-                let q = &slide.block_quotes[i];
-                match &q.callout {
-                    Some((kind, heading)) => {
-                        let kind = kind.name().to_lowercase();
-                        let _ = writeln!(out, "<div class=\"callout {kind}\">");
-                        let _ = writeln!(out, "<p class=\"heading\">{}</p>", escape_html(heading));
-                    }
-                    None => out.push_str("<blockquote>\n"),
-                }
-                for line in &q.lines {
-                    let _ = writeln!(out, "<p>{}</p>", inline(line));
-                }
-                out.push_str(if q.callout.is_some() {
-                    "</div>\n"
-                } else {
-                    "</blockquote>\n"
-                });
-            }
+            Block::Quote(i) => out.push_str(&quote(&slide.block_quotes[i])),
             Block::Diagram(i) => {
                 let d = &slide.diagram_blocks[i];
                 let graph = crate::diagram::parser::parse(&d.source);
@@ -303,6 +287,8 @@ fn column(content: &ColumnContent) -> String {
                 out.push_str(&list(&content.bullets[first..=last]));
             }
             ColumnItem::Code(i) => out.push_str(&code(&content.code_blocks[i])),
+            ColumnItem::Table(i) => out.push_str(&table(&content.tables[i])),
+            ColumnItem::Quote(i) => out.push_str(&quote(&content.quotes[i])),
             ColumnItem::Image => {
                 if let Some(img) = &content.image {
                     out.push_str(&image(Path::new(&img.path), ""));
@@ -310,6 +296,27 @@ fn column(content: &ColumnContent) -> String {
             }
         }
     }
+    out
+}
+
+fn quote(q: &BlockQuote) -> String {
+    let mut out = String::new();
+    match &q.callout {
+        Some((kind, heading)) => {
+            let kind = kind.name().to_lowercase();
+            let _ = writeln!(out, "<div class=\"callout {kind}\">");
+            let _ = writeln!(out, "<p class=\"heading\">{}</p>", escape_html(heading));
+        }
+        None => out.push_str("<blockquote>\n"),
+    }
+    for line in &q.lines {
+        let _ = writeln!(out, "<p>{}</p>", inline(line));
+    }
+    out.push_str(if q.callout.is_some() {
+        "</div>\n"
+    } else {
+        "</blockquote>\n"
+    });
     out
 }
 

@@ -175,6 +175,8 @@ pub struct ColumnContent {
     pub image: Option<ColumnImage>,
     /// Plain-text lines, typically a column header.
     pub text_lines: Vec<String>,
+    pub tables: Vec<Table>,
+    pub quotes: Vec<BlockQuote>,
     /// The column's content in source order.
     pub items: Vec<ColumnItem>,
 }
@@ -185,6 +187,8 @@ pub enum ColumnItem {
     Text(usize),
     Bullet(usize),
     Code(usize),
+    Table(usize),
+    Quote(usize),
     Image,
 }
 

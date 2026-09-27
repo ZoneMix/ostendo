@@ -24,6 +24,7 @@ fn presenter_at(md: &str, presentation_path: PathBuf) -> Presenter {
         fullscreen: false,
         timer: false,
         scale: 100,
+        record: None,
     });
     p.watcher = None;
     p.width = 60;
@@ -164,4 +165,37 @@ fn the_timer_shows_how_far_behind_pace_the_talk_is() {
     p.goto_slide(3);
     let bar = screen(&mut p).pop().unwrap();
     assert!(bar.contains("/ 8:00") && !bar.contains("behind"), "{bar}");
+}
+
+#[test]
+fn overflow_report_names_slides_that_would_scroll() {
+    let long: String = (1..=30).map(|i| format!("- item {i}\n")).collect();
+    let md = format!("# Fits\n- one\n---\n# Long\n{long}---\n# Built\n- a\n<!-- pause -->\n{long}");
+    let (meta, slides) = crate::markdown::parse_presentation(&md, None).unwrap();
+    let mut p = presenter(&md);
+    let config = PresenterConfig {
+        slides,
+        meta,
+        theme: p.base_theme.clone(),
+        theme_explicit: true,
+        start: Some(0),
+        presentation_path: p.presentation_path.clone(),
+        image_protocol: Some(ImageProtocol::Blocks),
+        remote: None,
+        allow_exec: true,
+        allow_remote_exec: false,
+        fullscreen: false,
+        timer: false,
+        scale: 100,
+        record: None,
+    };
+    let report = overflowing_slides(config, 60, 20);
+    let slides: Vec<usize> = report.iter().map(|r| r.0).collect();
+    assert_eq!(slides, [2, 3], "hidden steps count too");
+    // The compact layout drops list spacing: 30 items plus the title fill 32 rows.
+    let layout = {
+        p.current = 1;
+        p.layout()
+    };
+    assert_eq!(report[0].1, 32 - layout.content_rows);
 }

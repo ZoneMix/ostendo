@@ -83,6 +83,15 @@ struct Cli {
     #[arg(long)]
     validate: bool,
 
+    /// With --validate: also report slides that need scrolling in a terminal
+    /// this size (e.g. 100x30)
+    #[arg(long, value_name = "COLSxROWS", value_parser = parse_size, requires = "validate")]
+    size: Option<(u16, u16)>,
+
+    /// Record the talk as an asciicast file (replay with asciinema)
+    #[arg(long, value_name = "FILE")]
+    record: Option<PathBuf>,
+
     /// Write the presentation to a file and exit
     #[arg(long, value_enum, value_name = "FORMAT")]
     export: Option<ExportFormat>,
@@ -174,7 +183,14 @@ fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
     if cli.validate {
-        return validate(&file, &meta, &slides, &registry, cli.theme.as_deref());
+        return validate(
+            &file,
+            &meta,
+            &slides,
+            &registry,
+            cli.theme.as_deref(),
+            cli.size,
+        );
     }
 
     let requested = cli.theme.clone().or_else(|| meta.theme.clone());
@@ -230,6 +246,8 @@ fn run(cli: Cli) -> Result<()> {
         start: cli.slide.map(|n| n as usize - 1),
         presentation_path: file,
         image_protocol: match cli.image_mode {
+            // A recording shows images only as text cells.
+            ImageMode::Auto if cli.record.is_some() => Some(ImageProtocol::Blocks),
             ImageMode::Auto => None,
             ImageMode::Kitty => Some(ImageProtocol::Kitty),
             ImageMode::Iterm => Some(ImageProtocol::Iterm2),
@@ -243,8 +261,24 @@ fn run(cli: Cli) -> Result<()> {
         fullscreen: cli.fullscreen,
         timer: cli.timer,
         scale: cli.scale,
+        record: cli.record,
     })
     .run()
+}
+
+fn parse_size(value: &str) -> Result<(u16, u16), String> {
+    let (cols, rows) = value
+        .split_once(['x', 'X'])
+        .ok_or("expected COLSxROWS, like 100x30")?;
+    let cols: u16 = cols
+        .trim()
+        .parse()
+        .map_err(|_| "columns must be a number")?;
+    let rows: u16 = rows.trim().parse().map_err(|_| "rows must be a number")?;
+    if cols < 20 || rows < 5 {
+        return Err("the smallest size is 20x5".into());
+    }
+    Ok((cols, rows))
 }
 
 fn resolve_theme(registry: &ThemeRegistry, slug: Option<&str>) -> Result<Theme> {
@@ -283,6 +317,7 @@ fn validate(
     slides: &[Slide],
     registry: &ThemeRegistry,
     cli_theme: Option<&str>,
+    size: Option<(u16, u16)>,
 ) -> Result<()> {
     let mut issues = Vec::new();
     let theme = cli_theme.or(meta.theme.as_deref()).unwrap_or(DEFAULT_THEME);
@@ -320,6 +355,39 @@ fn validate(
         }
         if slide.title.is_empty() && slide.subtitle.is_empty() && slide.blocks.is_empty() {
             issues.push(format!("slide {n}: empty"));
+        }
+        for data in &slide.qr_codes {
+            if qrcode::QrCode::new(data.as_bytes()).is_err() {
+                issues.push(format!("slide {n}: too much text for a QR code"));
+            }
+        }
+        if slide.charts.iter().any(|c| c.bars.is_empty()) {
+            issues.push(format!("slide {n}: chart without `label: value` lines"));
+        }
+    }
+    if let Some((cols, rows)) = size {
+        let theme =
+            resolve_theme(registry, Some(theme)).or_else(|_| resolve_theme(registry, None))?;
+        let config = render::PresenterConfig {
+            slides: slides.to_vec(),
+            meta: meta.clone(),
+            theme,
+            theme_explicit: true,
+            start: Some(0),
+            presentation_path: file.to_path_buf(),
+            image_protocol: Some(ImageProtocol::Blocks),
+            remote: None,
+            allow_exec: true,
+            allow_remote_exec: false,
+            fullscreen: false,
+            timer: false,
+            scale: 80,
+            record: None,
+        };
+        for (n, extra) in render::overflowing_slides(config, cols, rows) {
+            issues.push(format!(
+                "slide {n}: {extra} row(s) too tall for {cols}x{rows} (it will scroll)"
+            ));
         }
     }
     println!("{}: {} slides, theme {theme}", file.display(), slides.len());

@@ -524,14 +524,17 @@ impl<'a> SlideBuilder<'a> {
             "image_render" | "image_scale" | "image_color" if !v.is_empty() => {
                 self.image_directive(name, v);
             }
-            "column_layout" => self.column_layout(v),
+            // A quote or table ends where the column it is in does.
+            "column_layout" | "column" | "reset_layout" => {
+                self.flush_quote();
+                self.flush_table();
+                self.column_directive(name, v);
+            }
             "column_separator" if v.eq_ignore_ascii_case("none") => self.columns.separator = false,
             "column_text_scale" => {
                 let scale = v.parse().ok().filter(|n| (2..=7).contains(n));
                 set(&mut self.columns.text_scale, scale);
             }
-            "column" => set(&mut self.column, v.parse().ok()),
-            "reset_layout" => self.column = None,
             "pause" if self.column.is_none() => {
                 // A quote continues after the pause as a separate block.
                 self.flush_quote();
@@ -565,6 +568,14 @@ impl<'a> SlideBuilder<'a> {
             }
             "image_scale" => self.image.scale = scale.unwrap_or(self.image.scale),
             _ => self.image.color_override = v.to_string(),
+        }
+    }
+
+    fn column_directive(&mut self, name: &str, v: &str) {
+        match name {
+            "column_layout" => self.column_layout(v),
+            "column" => set(&mut self.column, v.parse().ok()),
+            _ => self.column = None,
         }
     }
 
@@ -736,21 +747,33 @@ impl<'a> SlideBuilder<'a> {
             if callout.is_some() {
                 lines.remove(0);
             }
+            let quote = BlockQuote { lines, callout };
+            if let Some(col) = self.column_mut() {
+                col.items.push(ColumnItem::Quote(col.quotes.len()));
+                col.quotes.push(quote);
+                return;
+            }
             let s = &mut self.slide;
             s.blocks.push(Block::Quote(s.block_quotes.len()));
-            s.block_quotes.push(BlockQuote { lines, callout });
+            s.block_quotes.push(quote);
         }
     }
 
     fn flush_table(&mut self) {
         if let Some(t) = self.table.take().filter(|t| t.has_separator) {
-            let s = &mut self.slide;
-            s.blocks.push(Block::Table(s.tables.len()));
-            s.tables.push(Table {
+            let table = Table {
                 headers: t.headers,
                 alignments: t.alignments,
                 rows: t.rows,
-            });
+            };
+            if let Some(col) = self.column_mut() {
+                col.items.push(ColumnItem::Table(col.tables.len()));
+                col.tables.push(table);
+                return;
+            }
+            let s = &mut self.slide;
+            s.blocks.push(Block::Table(s.tables.len()));
+            s.tables.push(table);
         }
     }
 

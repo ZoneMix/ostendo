@@ -31,7 +31,6 @@ impl Presenter {
         }
         self.palette = self.palette_for(&wanted);
         self.theme = wanted;
-        super::terminal::set_background(self.palette.bg);
         self.images.clear();
         self.display.invalidate();
         self.invalidate();

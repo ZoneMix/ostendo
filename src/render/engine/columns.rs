@@ -93,6 +93,14 @@ pub(crate) fn columns(
                         rows.extend(lines);
                         continue;
                     }
+                    ColumnItem::Table(t) => {
+                        rows.extend(blocks::table(&ctx.with_width(width), &content.tables[t]));
+                        continue;
+                    }
+                    ColumnItem::Quote(q) => {
+                        rows.extend(blocks::quote(&ctx.with_width(width), &content.quotes[q]));
+                        continue;
+                    }
                     ColumnItem::Image => {
                         let Some(img) = &content.image else { continue };
                         let img_width =

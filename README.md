@@ -131,6 +131,8 @@ presentation.
 | `--remote-token <token>` | Require a token for the remote |
 | `--remote-exec` | Let the remote run code blocks |
 | `--validate` | Check the deck and exit |
+| `--size <cols>x<rows>` | With `--validate`: also report slides that would scroll at that size |
+| `--record <file>` | Record the talk as an asciicast ([asciinema](https://asciinema.org)) |
 | `--export html\|pdf` | Export and exit (`-o` sets the path) |
 | `--list-themes` | List themes with swatches |
 | `--count`, `--export-titles` | Print the slide count or titles |
@@ -168,12 +170,16 @@ slide's notes. It listens on `127.0.0.1` only; forward the port (for example
 with `ssh -L`) to use it from a phone. See [SECURITY.md](SECURITY.md) before
 presenting decks you did not write.
 
-## Export
+## Export and record
 
 ```bash
 ostendo talk.md --export html            # talk.html, images embedded
 ostendo talk.md --export pdf -o talk.pdf # needs Chrome/Chromium or wkhtmltopdf
+ostendo talk.md --record talk.cast       # then: asciinema play talk.cast
 ```
+
+Recordings draw images as half blocks unless `--image-mode` says otherwise,
+so they replay anywhere.
 
 ## Contributing
 

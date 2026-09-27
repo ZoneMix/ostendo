@@ -272,7 +272,7 @@ fn image_directives_and_path_resolution() {
 #[test]
 fn columns_route_content_by_column() {
     let slides = parse(
-        "# T\n<!-- column_layout: [2, 1] -->\n<!-- column_separator: none -->\n<!-- column: 0 -->\n**Header**\n- a\n**Later**\n- b\n<!-- column: 1 -->\n![i](c.png)\n<!-- image_scale: 40 -->\n<!-- column: 5 -->\n- out of range\n<!-- reset_layout -->\n- after",
+        "# T\n<!-- column_layout: [2, 1] -->\n<!-- column_separator: none -->\n<!-- column: 0 -->\n**Header**\n- a\n**Later**\n- b\n<!-- column: 1 -->\n![i](c.png)\n<!-- image_scale: 40 -->\n| k | v |\n|---|---|\n| a | 1 |\n<!-- column: 1 -->\n> [!TIP]\n> inside\n<!-- column: 5 -->\n- out of range\n<!-- reset_layout -->\n- after\n> outside",
     );
     let s = &slides[0];
     let cols = s.columns.as_ref().unwrap();
@@ -291,9 +291,22 @@ fn columns_route_content_by_column() {
     );
     let img = cols.contents[1].image.as_ref().unwrap();
     assert_eq!((img.path.as_str(), img.scale), ("c.png", Some(40)));
+    assert_eq!(
+        cols.contents[1].items,
+        [
+            ColumnItem::Image,
+            ColumnItem::Table(0),
+            ColumnItem::Quote(0)
+        ],
+        "a table or quote ends with its column"
+    );
+    assert_eq!(cols.contents[1].tables[0].rows, [["a", "1"]]);
     let slide_bullets: Vec<&str> = s.bullets.iter().map(|b| b.text.as_str()).collect();
     assert_eq!(slide_bullets, ["out of range", "after"]);
-    assert_eq!(s.blocks, [Block::Columns, Block::Bullets(0)]);
+    assert_eq!(
+        s.blocks,
+        [Block::Columns, Block::Bullets(0), Block::Quote(0)]
+    );
 }
 
 #[test]

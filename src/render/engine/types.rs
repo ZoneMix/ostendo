@@ -47,6 +47,8 @@ pub struct PresenterConfig {
     pub timer: bool,
     /// Content width as a percentage of the terminal width.
     pub scale: u8,
+    /// `--record`: write an asciicast of the talk here.
+    pub record: Option<PathBuf>,
 }
 
 /// Where things go on screen for the current terminal size and toggles.

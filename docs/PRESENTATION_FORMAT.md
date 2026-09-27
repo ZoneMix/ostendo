@@ -35,7 +35,9 @@ duration: 25m
 
 ## Slide content
 
-Elements render in the order they appear in the file.
+Elements render in the order they appear in the file. An image or Mermaid
+diagram gives up rows when the slide would otherwise need scrolling;
+`ostendo --validate talk.md --size 100x30` lists slides that still do.
 
 - `# Title` — the slide title (first `#` heading). Other headings (`##`, `###`)
   render as bold text.
@@ -230,7 +232,8 @@ iTerm2, WezTerm) and true-color half blocks everywhere else. Animated GIFs play.
 <!-- reset_layout -->
 ```
 
-Columns hold text, bullets, code, and one image each, in source order.
+Columns hold text, bullets, code, tables, quotes and callouts, and one image
+each, in source order.
 `<!-- column_separator: none -->` hides the divider;
 `<!-- column_text_scale: N -->` (2–7) enlarges column text on Kitty.
 
