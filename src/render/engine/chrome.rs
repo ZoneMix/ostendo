@@ -232,6 +232,7 @@ impl Presenter {
                     ("n", "speaker notes (N / P scroll)"),
                     ("/", "search slides (Enter again: next)"),
                     ("b", "blank the screen"),
+                    ("e", "edit this slide in $EDITOR"),
                     ("f", "fullscreen"),
                     ("Ctrl+E", "run code block (again: next block)"),
                     ("t", "start / reset timer"),

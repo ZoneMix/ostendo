@@ -49,6 +49,8 @@ pub struct PresentationMeta {
 pub struct Slide {
     /// 1-based position in the deck.
     pub number: usize,
+    /// 1-based line in the file where the slide's source starts.
+    pub line: usize,
     /// Text of the first `# ` heading.
     pub title: String,
     /// Set by `<!-- section: name -->`; inherited from the previous slide otherwise.

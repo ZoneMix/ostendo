@@ -132,6 +132,29 @@ impl Presenter {
         Ok(())
     }
 
+    /// Opens the current slide in `$VISUAL` / `$EDITOR`, then reloads, which
+    /// shows the slide that changed.
+    fn edit_slide(&mut self) {
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
+        let line = self.slides[self.current].line;
+        let Some((program, args)) = editor_command(&editor, &self.presentation_path, line) else {
+            return;
+        };
+        let status = super::terminal::hand_over(|| {
+            std::process::Command::new(&program).args(&args).status()
+        });
+        if let Err(e) = status {
+            self.notify(format!("cannot start {program}: {e}"));
+        }
+        // The hand-over reset the font and freed Kitty's images.
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((self.width, self.height));
+        self.resize(cols, rows);
+        self.font.request(Some(self.current));
+        self.reload();
+    }
+
     fn resize(&mut self, width: u16, height: u16) {
         self.window = crate::render::layout::WindowSize::query();
         self.width = width.max(1);
@@ -225,6 +248,7 @@ impl Presenter {
             KeyCode::Char('0') => self.reset_font(),
             KeyCode::Char('o') => self.open_overview(),
             KeyCode::Char('b') => self.blank = true,
+            KeyCode::Char('e') => self.edit_slide(),
             KeyCode::Char('/') => self.open_prompt(Mode::Search),
             KeyCode::Char('?') => {
                 self.mode = Mode::Help;
@@ -359,6 +383,34 @@ impl Presenter {
     }
 }
 
+/// The program and arguments that open `path` at `line` in `editor`, which
+/// may carry its own arguments (`code --wait`). Editors without a known way
+/// to take a line just open the file.
+fn editor_command(
+    editor: &str,
+    path: &std::path::Path,
+    line: usize,
+) -> Option<(String, Vec<String>)> {
+    let mut words = editor.split_whitespace();
+    let program = words.next()?.to_string();
+    let mut args: Vec<String> = words.map(str::to_string).collect();
+    let name = std::path::Path::new(&program)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let file = path.display().to_string();
+    match name.as_str() {
+        "vi" | "vim" | "nvim" | "nano" | "emacs" | "emacsclient" | "micro" | "kak" | "joe"
+        | "mg" | "ne" => args.extend([format!("+{line}"), file]),
+        "code" | "code-insiders" | "codium" | "cursor" => {
+            args.extend(["--goto".to_string(), format!("{file}:{line}")]);
+        }
+        "subl" | "zed" | "hx" | "helix" => args.push(format!("{file}:{line}")),
+        _ => args.push(file),
+    }
+    Some((program, args))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::{presenter, screen};
@@ -373,6 +425,34 @@ mod tests {
             };
             p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         }
+    }
+
+    #[test]
+    fn editors_open_the_file_at_the_slide_line() {
+        let path = std::path::Path::new("/talks/deck.md");
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("nvim", "nvim", &["+12", "/talks/deck.md"]),
+            (
+                "/usr/bin/vim -u NONE",
+                "/usr/bin/vim",
+                &["-u", "NONE", "+12", "/talks/deck.md"],
+            ),
+            (
+                "code --wait",
+                "code",
+                &["--wait", "--goto", "/talks/deck.md:12"],
+            ),
+            ("hx", "hx", &["/talks/deck.md:12"]),
+            ("gedit", "gedit", &["/talks/deck.md"]),
+        ];
+        for (editor, program, args) in cases {
+            let (p, a) = editor_command(editor, path, 12).unwrap();
+            assert_eq!(
+                (p.as_str(), a),
+                (*program, args.iter().map(|s| s.to_string()).collect())
+            );
+        }
+        assert!(editor_command("  ", path, 1).is_none());
     }
 
     #[test]

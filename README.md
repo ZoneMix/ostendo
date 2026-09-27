@@ -109,6 +109,7 @@ demonstrated in `presentations/examples/test_presentation.md`.
 | `n` | Speaker notes (`N` / `P` scroll them) |
 | `/` | Search slide text and notes (`/` then Enter: next match) |
 | `b` | Blank the screen (any key brings it back) |
+| `e` | Edit this slide in `$VISUAL` / `$EDITOR`, then come back to it |
 | `Ctrl+E` | Run the code block (again: next block) |
 | `f` | Hide the status bar |
 | `t` | Start / reset the timer (it starts at the first slide change) |

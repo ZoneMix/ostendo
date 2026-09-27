@@ -3,8 +3,6 @@
 Ideas that would make Ostendo better. Open an issue to discuss the approach
 before starting on one.
 
-- **Slide editing.** Fix a typo in place during rehearsal and write the slide
-  back to the markdown file.
 - **Slide sorter.** Reorder slides from the overview (`o`) and write the new
   order back to the file.
 - **Math.** `$…$` and `$$…$$` rendered as Unicode, or as images on graphics

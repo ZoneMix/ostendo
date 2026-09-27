@@ -36,7 +36,9 @@ pub fn parse_presentation(
 
     let mut slides: Vec<Slide> = Vec::new();
     let mut section = String::new();
-    for block in split_slides(body) {
+    let body_start = lines.len() - body.len();
+    for range in split_slides(body) {
+        let block = &body[range.clone()];
         if block.iter().all(|l| l.trim().is_empty()) {
             continue;
         }
@@ -44,7 +46,8 @@ pub fn parse_presentation(
             anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
         }
         let builder = SlideBuilder::new(slides.len() + 1, base_dir, &meta.templates);
-        let slide = parse_slide(builder, block, &section);
+        let mut slide = parse_slide(builder, block, &section);
+        slide.line = body_start + range.start + 1;
         section.clone_from(&slide.section);
         slides.push(slide);
     }

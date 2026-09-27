@@ -27,13 +27,26 @@ impl TerminalGuard {
                 previous(info);
             }));
         });
-        terminal::enable_raw_mode()?;
-        let mut out = io::stdout();
-        execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;
-        out.write_all(MOUSE_ON.as_bytes())?;
-        out.flush()?;
+        take_over()?;
         Ok(Self)
     }
+}
+
+fn take_over() -> io::Result<()> {
+    terminal::enable_raw_mode()?;
+    let mut out = io::stdout();
+    execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;
+    out.write_all(MOUSE_ON.as_bytes())?;
+    out.flush()
+}
+
+/// Gives the terminal to another program (an editor) for the duration of
+/// `run`, then takes it back.
+pub(crate) fn hand_over<T>(run: impl FnOnce() -> T) -> T {
+    restore();
+    let result = run();
+    let _ = take_over();
+    result
 }
 
 impl Drop for TerminalGuard {

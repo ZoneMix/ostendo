@@ -64,9 +64,10 @@ pub(super) fn split_front_matter<'a>(
     (None, lines)
 }
 
-/// Splits on `---` lines outside fences and multi-line comments. An opener with no closer
-/// anywhere below is an ordinary line, so one unclosed fence cannot swallow the deck.
-pub(super) fn split_slides<'a>(lines: &'a [&'a str]) -> Vec<&'a [&'a str]> {
+/// Splits on `---` lines outside fences and multi-line comments, returning the line
+/// range of each slide. An opener with no closer anywhere below is an ordinary line, so
+/// one unclosed fence cannot swallow the deck.
+pub(super) fn split_slides(lines: &[&str]) -> Vec<std::ops::Range<usize>> {
     let last_comment_end = lines.iter().rposition(|l| l.contains("-->"));
     // longest_close[i][tilde]: longest bare fence of that kind at or after line i.
     let mut longest_close = vec![[0usize; 2]; lines.len() + 1];
@@ -90,7 +91,7 @@ pub(super) fn split_slides<'a>(lines: &'a [&'a str]) -> Vec<&'a [&'a str]> {
         } else if in_comment {
             in_comment = !line.contains("-->");
         } else if line.trim_end() == "---" {
-            blocks.push(&lines[start..i]);
+            blocks.push(start..i);
             start = i + 1;
         } else if let Some((open, _)) = Fence::parse(line) {
             if longest_close[i + 1][usize::from(open.tilde)] >= open.len {
@@ -100,6 +101,6 @@ pub(super) fn split_slides<'a>(lines: &'a [&'a str]) -> Vec<&'a [&'a str]> {
             in_comment = opens_comment(line) && last_comment_end.is_some_and(|end| end > i);
         }
     }
-    blocks.push(&lines[start..]);
+    blocks.push(start..lines.len());
     blocks
 }

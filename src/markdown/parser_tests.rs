@@ -16,6 +16,11 @@ fn slides_split_on_separator_lines() {
     assert_eq!(titles(&slides), ["Slide 1", "Slide 2", "Slide 3"]);
     let numbers: Vec<usize> = slides.iter().map(|s| s.number).collect();
     assert_eq!(numbers, [1, 2, 3]);
+    let lines: Vec<usize> = slides.iter().map(|s| s.line).collect();
+    assert_eq!(lines, [1, 5, 7], "source line where each slide starts");
+    let after_front_matter = parse("---\ntitle: T\n---\n# One\n---\n# Two");
+    let lines: Vec<usize> = after_front_matter.iter().map(|s| s.line).collect();
+    assert_eq!(lines, [4, 6]);
 }
 
 #[test]
