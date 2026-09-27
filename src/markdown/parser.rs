@@ -2,6 +2,7 @@
 //! directives, and the markdown subset the renderer draws.
 
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::presentation::{
@@ -42,7 +43,8 @@ pub fn parse_presentation(
         if slides.len() == MAX_SLIDES {
             anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
         }
-        let slide = parse_slide(block, slides.len() + 1, &section, base_dir);
+        let builder = SlideBuilder::new(slides.len() + 1, base_dir, &meta.templates);
+        let slide = parse_slide(builder, block, &section);
         section.clone_from(&slide.section);
         slides.push(slide);
     }
@@ -51,11 +53,28 @@ pub fn parse_presentation(
 
 fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
     let mut meta = PresentationMeta::default();
-    for caps in lines
-        .iter()
-        .filter_map(|l| FRONT_MATTER_KV_RE.captures(l.trim()))
-    {
+    // Inside `templates:`, an indented `name:` starts a template and deeper
+    // `directive: value` lines fill it.
+    let mut in_templates = false;
+    let mut template: Option<String> = None;
+    for line in lines {
+        let Some(caps) = FRONT_MATTER_KV_RE.captures(line.trim()) else {
+            continue;
+        };
         let val = caps[2].trim().trim_matches('"').to_string();
+        let indented = line.starts_with([' ', '\t']);
+        if indented && in_templates {
+            if val.is_empty() {
+                template = Some(caps[1].to_string());
+                meta.templates.entry(caps[1].to_string()).or_default();
+            } else if let Some(name) = &template {
+                let entry = meta.templates.entry(name.clone()).or_default();
+                entry.push((caps[1].to_string(), Some(val)));
+            }
+            continue;
+        }
+        in_templates = !indented && &caps[1] == "templates";
+        template = None;
         match &caps[1] {
             "title" => meta.title = val,
             "author" => meta.author = val,
@@ -186,6 +205,24 @@ fn parse_chart(source: &str, columns: bool) -> Chart {
     chart
 }
 
+/// Directive sets available to every deck; a deck's own template of the same
+/// name wins.
+fn builtin_template(name: &str) -> Option<&'static [(&'static str, Option<&'static str>)]> {
+    Some(match name {
+        "title" => &[("align", Some("center")), ("ascii_title", None)],
+        "section" => &[
+            ("align", Some("center")),
+            ("title_decoration", Some("banner")),
+        ],
+        "closing" => &[
+            ("align", Some("center")),
+            ("ascii_title", None),
+            ("loop_animation", Some("sparkle(figlet)")),
+        ],
+        _ => return None,
+    })
+}
+
 /// `[!TIP]` or `[!tip] Custom heading` opening a quote.
 fn callout_marker(line: &str) -> Option<(Callout, String)> {
     let rest = line.trim().strip_prefix("[!")?;
@@ -274,13 +311,7 @@ fn parse_highlights(spec: &str) -> Option<Vec<Vec<(usize, usize)>>> {
         .collect()
 }
 
-fn parse_slide(
-    lines: &[&str],
-    number: usize,
-    inherited_section: &str,
-    base_dir: Option<&Path>,
-) -> Slide {
-    let mut builder = SlideBuilder::new(number, base_dir);
+fn parse_slide(mut builder: SlideBuilder, lines: &[&str], inherited_section: &str) -> Slide {
     for line in lines {
         builder.line(line);
     }
@@ -327,6 +358,7 @@ enum FenceKind {
 struct SlideBuilder<'a> {
     slide: Slide,
     base_dir: Option<&'a Path>,
+    templates: &'a HashMap<String, Vec<(String, Option<String>)>>,
     open: Option<OpenBlock>,
     title_found: bool,
     /// The previous line was paragraph text, so the next text line continues it.
@@ -342,13 +374,18 @@ struct SlideBuilder<'a> {
 }
 
 impl<'a> SlideBuilder<'a> {
-    fn new(number: usize, base_dir: Option<&'a Path>) -> Self {
+    fn new(
+        number: usize,
+        base_dir: Option<&'a Path>,
+        templates: &'a HashMap<String, Vec<(String, Option<String>)>>,
+    ) -> Self {
         Self {
             slide: Slide {
                 number,
                 ..Slide::default()
             },
             base_dir,
+            templates,
             open: None,
             title_found: false,
             paragraph_open: false,
@@ -535,6 +572,7 @@ impl<'a> SlideBuilder<'a> {
                 let scale = v.parse().ok().filter(|n| (2..=7).contains(n));
                 set(&mut self.columns.text_scale, scale);
             }
+            "template" => self.template(v),
             "pause" => {
                 // A quote or table continues after the pause as a separate one.
                 self.flush_quote();
@@ -784,6 +822,27 @@ impl<'a> SlideBuilder<'a> {
         self.flush_quote();
         self.flush_table();
         self.slide.blocks.push(block);
+    }
+
+    /// Applies a deck template, or else a built-in one, as if its directives
+    /// were written here.
+    fn template(&mut self, name: &str) {
+        let directives: Vec<(String, Option<String>)> = match self.templates.get(name) {
+            Some(own) => own.clone(),
+            None => match builtin_template(name) {
+                Some(builtin) => builtin
+                    .iter()
+                    .map(|&(k, v)| (k.to_string(), v.map(str::to_string)))
+                    .collect(),
+                None => {
+                    self.slide.missing_template = Some(name.to_string());
+                    return;
+                }
+            },
+        };
+        for (directive, value) in directives.iter().filter(|(d, _)| d != "template") {
+            self.directive(directive, value.as_deref());
+        }
     }
 
     /// Tags column items added since the last pause with the pause count.

@@ -361,6 +361,9 @@ fn validate(
                 issues.push(format!("slide {n}: too much text for a QR code"));
             }
         }
+        if let Some(name) = &slide.missing_template {
+            issues.push(format!("slide {n}: unknown template '{name}'"));
+        }
         if slide.charts.iter().any(|c| c.bars.is_empty()) {
             issues.push(format!("slide {n}: chart without `label: value` lines"));
         }

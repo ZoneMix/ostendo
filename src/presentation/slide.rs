@@ -40,6 +40,9 @@ pub struct PresentationMeta {
     pub theme: Option<String>,
     /// `duration: 20m`: planned talk length, for the pace shown by the timer.
     pub duration: Option<std::time::Duration>,
+    /// `templates:` block: name -> directives (name, value) applied by
+    /// `<!-- template: name -->`.
+    pub templates: HashMap<String, Vec<(String, Option<String>)>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -106,6 +109,8 @@ pub struct Slide {
     /// Hash of the slide's source lines; hot reload uses it to find the slide
     /// an edit touched.
     pub fingerprint: u64,
+    /// A `<!-- template: name -->` that names no built-in or deck template.
+    pub missing_template: Option<String>,
 }
 
 /// One build step of a slide.

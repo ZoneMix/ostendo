@@ -31,6 +31,7 @@ duration: 25m
 | `accent` | Hex accent color for the deck's theme; ignored if it would be unreadable (below 3:1 contrast) |
 | `transition` | Default transition for every slide: `fade`, `slide`, `dissolve` |
 | `align` | Default alignment: `top`, `center`, `vcenter`, `hcenter` |
+| `templates` | Named directive sets for `<!-- template: name -->` (see [Templates](#templates)) |
 | `duration` | Planned length (`20`, `25m`, `1h30m`; minutes by default). The timer then shows the target and how far behind pace you are, and turns red past it |
 
 ## Slide content
@@ -195,6 +196,29 @@ Directives apply to the slide they are on.
 | `<!-- footer: text -->` | text | Footer line |
 | `<!-- footer_align: V -->` | `left`, `center`, `right` | Footer alignment |
 | `<!-- theme: slug -->` | theme slug | Theme for this slide only |
+
+### Templates
+
+`<!-- template: name -->` applies a set of directives as if they were
+written at that line; directives after it override them. Built in:
+
+| Template | Directives |
+|---|---|
+| `title` | `align: center`, `ascii_title` |
+| `section` | `align: center`, `title_decoration: banner` |
+| `closing` | `align: center`, `ascii_title`, `loop_animation: sparkle(figlet)` |
+
+Define your own (or replace a built-in) in the front matter:
+
+```yaml
+templates:
+  divider:
+    align: center
+    title_decoration: box
+    transition: dissolve
+```
+
+`--validate` reports templates that do not exist.
 
 ### Speaker notes
 

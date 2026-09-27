@@ -455,3 +455,35 @@ fn pauses_inside_columns_tag_the_items_after_them() {
     assert_eq!(s.steps, [Step::Pause(1), Step::Pause(1)]);
     assert_eq!(s.blocks, [Block::Columns, Block::Paragraph(0)]);
 }
+
+#[test]
+fn templates_apply_their_directives_where_they_appear() {
+    let src = concat!(
+        "---\ntitle: T\ntemplates:\n  divider:\n    align: center\n    title_decoration: box\n",
+        "  title:\n    align: top\n---\n",
+        "# A\n<!-- template: divider -->\n<!-- title_decoration: underline -->\n---\n",
+        "# B\n<!-- template: closing -->\n---\n",
+        "# C\n<!-- template: title -->\n---\n",
+        "# D\n<!-- template: nope -->",
+    );
+    let (meta, s) = parse_presentation(src, None).unwrap();
+    assert_eq!(meta.title, "T");
+    assert_eq!(
+        meta.default_alignment, None,
+        "template lines are not deck settings"
+    );
+    assert_eq!(s[0].alignment, Some(SlideAlignment::Center));
+    assert_eq!(
+        s[0].title_decoration.as_deref(),
+        Some("underline"),
+        "later directives win"
+    );
+    assert!(s[1].ascii_title && s[1].alignment == Some(SlideAlignment::Center));
+    assert_eq!(s[1].loop_animations[0].1.as_deref(), Some("figlet"));
+    assert_eq!(
+        (s[2].alignment, s[2].ascii_title),
+        (Some(SlideAlignment::Top), false),
+        "a deck template replaces the built-in of the same name"
+    );
+    assert_eq!(s[3].missing_template.as_deref(), Some("nope"));
+}

@@ -12,8 +12,6 @@ before starting on one.
 - **PPTX export.** `--export pptx` alongside HTML and PDF.
 - **Notes placement.** Put the notes panel on the side as well as below, with
   an adjustable size.
-- **Slide templates.** `<!-- template: section_divider -->` applies a named
-  set of directives.
 - **Audience polls.** Vote from the remote page; results render as a live bar
   chart.
 - **Pacing report.** Time spent per slide, compared across rehearsals.
