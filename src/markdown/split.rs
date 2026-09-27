@@ -104,3 +104,65 @@ pub(super) fn split_slides(lines: &[&str]) -> Vec<std::ops::Range<usize>> {
     blocks.push(start..lines.len());
     blocks
 }
+
+/// `source` with slides `first` and `first + 1` (counted as the parser counts
+/// them, skipping blank ones) trading places. Everything else, front matter
+/// and separators included, is left as written. `None` when there is no such
+/// pair.
+pub fn swap_adjacent_slides(source: &str, first: usize) -> Option<String> {
+    let raw: Vec<&str> = source.split_inclusive('\n').collect();
+    let lines: Vec<&str> = raw
+        .iter()
+        .map(|l| l.trim_end_matches(['\n', '\r']))
+        .collect();
+    let (_, body) = split_front_matter(&lines);
+    let offset = lines.len() - body.len();
+    let slides: Vec<std::ops::Range<usize>> = split_slides(body)
+        .into_iter()
+        .filter(|r| body[r.clone()].iter().any(|l| !l.trim().is_empty()))
+        .map(|r| r.start + offset..r.end + offset)
+        .collect();
+    let (a, b) = (slides.get(first)?.clone(), slides.get(first + 1)?.clone());
+    // Each moved slide must end its own line, wherever it lands.
+    let text = |r: &std::ops::Range<usize>| {
+        let mut t = raw[r.clone()].concat();
+        if !t.ends_with('\n') {
+            t.push('\n');
+        }
+        t
+    };
+    let mut out = raw[..a.start].concat();
+    out.push_str(&text(&b));
+    out.push_str(&raw[a.end..b.start].concat());
+    out.push_str(&text(&a));
+    out.push_str(&raw[b.end..].concat());
+    if !source.ends_with('\n') && out.ends_with('\n') {
+        out.pop();
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swapping_slides_moves_only_their_text() {
+        let deck = "---\ntitle: T\n---\n# A\n- a\n\n---\n\n---\n# B\n---  \n# C";
+        assert_eq!(
+            swap_adjacent_slides(deck, 0).unwrap(),
+            "---\ntitle: T\n---\n# B\n---\n\n---\n# A\n- a\n\n---  \n# C"
+        );
+        assert_eq!(
+            swap_adjacent_slides(deck, 1).unwrap(),
+            "---\ntitle: T\n---\n# A\n- a\n\n---\n\n---\n# C\n---  \n# B",
+            "the last slide keeps the file's missing final newline"
+        );
+        assert!(swap_adjacent_slides(deck, 2).is_none());
+        let crlf = "# A\r\n---\r\n# B\r\n";
+        assert_eq!(
+            swap_adjacent_slides(crlf, 0).unwrap(),
+            "# B\r\n---\r\n# A\r\n"
+        );
+    }
+}

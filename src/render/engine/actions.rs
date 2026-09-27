@@ -114,6 +114,43 @@ impl Presenter {
         self.invalidate();
     }
 
+    /// Moves the slide selected in the overview one place later (or earlier)
+    /// in the file, keeping it selected and the current slide in view.
+    pub(crate) fn move_slide(&mut self, later: bool) {
+        let sel = self.overview_sel;
+        let Some(first) = (if later { Some(sel) } else { sel.checked_sub(1) }) else {
+            return;
+        };
+        if first + 1 >= self.slides.len() {
+            return;
+        }
+        let path = std::fs::canonicalize(&self.presentation_path)
+            .unwrap_or_else(|_| self.presentation_path.clone());
+        let moved = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|source| crate::markdown::swap_adjacent_slides(&source, first));
+        let Some(source) = moved else {
+            self.notify("the file no longer matches the deck; reloaded".to_string());
+            self.reload();
+            return;
+        };
+        if let Err(e) = write_atomically(&path, &source) {
+            self.notify(format!("cannot write {}: {e}", path.display()));
+            return;
+        }
+        let current = match self.current {
+            c if c == first => first + 1,
+            c if c == first + 1 => first,
+            c => c,
+        };
+        self.reload();
+        self.current = current.min(self.slides.len() - 1);
+        self.step = self.slides[self.current].steps.len();
+        self.overview_sel = if later { sel + 1 } else { sel - 1 };
+        self.apply_slide_theme();
+        self.font.request(None);
+    }
+
     pub(crate) fn poll_remote(&mut self) {
         let Some(rx) = self.remote_rx.take() else {
             return;
@@ -253,4 +290,17 @@ impl Presenter {
             self.last_broadcast = json;
         }
     }
+}
+
+/// Replaces `path` without ever leaving it half written, keeping its permissions.
+fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    let mut tmp = tempfile::NamedTempFile::new_in(dir.unwrap_or(std::path::Path::new(".")))?;
+    tmp.write_all(text.as_bytes())?;
+    if let Ok(meta) = std::fs::metadata(path) {
+        std::fs::set_permissions(tmp.path(), meta.permissions())?;
+    }
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }

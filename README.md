@@ -105,7 +105,7 @@ demonstrated in `presentations/examples/test_presentation.md`.
 | `Ctrl+D` / `Ctrl+U` | Scroll half a page |
 | `J` / `K` | Next / previous section |
 | `g` then a number, `Enter` | Go to slide |
-| `o` | Overview of all slides |
+| `o` | Overview of all slides; `J` / `K` there move the selected slide (the file is rewritten) |
 | `n` | Speaker notes (`N` / `P` scroll them) |
 | `/` | Search slide text and notes (`/` then Enter: next match) |
 | `b` | Blank the screen (any key brings it back) |

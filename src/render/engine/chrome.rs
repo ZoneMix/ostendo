@@ -223,7 +223,7 @@ impl Presenter {
                     ("g", "go to slide number"),
                     ("Home End", "first / last slide"),
                     ("j k ↓ ↑", "scroll (Ctrl+D / Ctrl+U: half page)"),
-                    ("o", "overview"),
+                    ("o", "overview (J / K there move a slide)"),
                 ],
             ),
             (
@@ -357,7 +357,7 @@ impl Presenter {
             }
         }
         let hint = format!(
-            " ←↑↓→ move   Enter open   Esc back{}",
+            " ←↑↓→ select   J K reorder   Enter open   Esc back{}",
             if pages > 1 {
                 format!("   page {} / {pages}", page + 1)
             } else {

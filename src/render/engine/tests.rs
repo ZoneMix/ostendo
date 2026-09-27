@@ -8,7 +8,7 @@ pub(super) fn presenter(md: &str) -> Presenter {
     presenter_at(md, PathBuf::from("/nonexistent/ostendo-test/deck.md"))
 }
 
-fn presenter_at(md: &str, presentation_path: PathBuf) -> Presenter {
+pub(super) fn presenter_at(md: &str, presentation_path: PathBuf) -> Presenter {
     let (meta, slides) = crate::markdown::parse_presentation(md, None).unwrap();
     let mut p = Presenter::new(PresenterConfig {
         slides,

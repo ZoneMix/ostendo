@@ -197,7 +197,7 @@ impl Presenter {
                 self.mode = Mode::Normal;
                 self.font.request(Some(self.current));
             }
-            Mode::Overview => self.overview_key(key.code),
+            Mode::Overview => self.overview_key(key),
             Mode::Command | Mode::Goto | Mode::Search => {
                 let typed = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
                 return self.prompt_key(key.code, typed);
@@ -342,11 +342,22 @@ impl Presenter {
         (usize::from(self.height).saturating_sub(4) / 3).max(1)
     }
 
-    fn overview_key(&mut self, code: KeyCode) {
+    fn overview_key(&mut self, key: KeyEvent) {
         let last = self.slides.len() - 1;
         let rows = self.overview_rows();
         let sel = self.overview_sel;
-        self.overview_sel = match code {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let move_later = match key.code {
+            KeyCode::Char('J') => Some(true),
+            KeyCode::Char('K') => Some(false),
+            KeyCode::Down if shift => Some(true),
+            KeyCode::Up if shift => Some(false),
+            _ => None,
+        };
+        if let Some(later) = move_later {
+            return self.move_slide(later);
+        }
+        self.overview_sel = match key.code {
             KeyCode::Down | KeyCode::Char('j') => (sel + 1).min(last),
             KeyCode::Up | KeyCode::Char('k') => sel.saturating_sub(1),
             KeyCode::Right | KeyCode::Char('l') => (sel + rows).min(last),
@@ -413,7 +424,7 @@ fn editor_command(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{presenter, screen};
+    use super::super::tests::{presenter, presenter_at, screen};
     use super::*;
 
     fn press(p: &mut Presenter, keys: &str) {
@@ -425,6 +436,37 @@ mod tests {
             };
             p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         }
+    }
+
+    #[test]
+    fn the_overview_reorders_slides_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deck.md");
+        let deck = "# A\n---\n# B\n---\n# C\n";
+        std::fs::write(&path, deck).unwrap();
+        let mut p = presenter_at(deck, path.clone());
+        press(&mut p, "oJ");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# B\n---\n# A\n---\n# C\n"
+        );
+        assert_eq!(
+            (p.mode, p.overview_sel),
+            (Mode::Overview, 1),
+            "the selection follows"
+        );
+        assert_eq!(
+            p.slides[p.current].title, "A",
+            "the current slide stays current"
+        );
+        press(&mut p, "K");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), deck);
+        press(&mut p, "K");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            deck,
+            "nothing before the first"
+        );
     }
 
     #[test]
