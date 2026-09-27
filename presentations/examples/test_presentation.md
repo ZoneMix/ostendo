@@ -1822,19 +1822,39 @@ VERIFY: --export flag produces valid HTML
 <!-- section: export -->
 <!-- font_size: 4 -->
 
-- Export with `--export output.pdf`
+- Export with `--export pdf -o slides.pdf`
 - Uses headless Chrome or wkhtmltopdf
 - One page per slide
 - Preserves layout and colors
 
 ```bash
-ostendo presentation.md --export slides.pdf
+ostendo presentation.md --export pdf -o slides.pdf
 ```
 
 <!-- notes:
 FEATURE: PDF export
 EXPECTED: Exports PDF via headless browser
 VERIFY: --export flag produces valid PDF
+-->
+
+---
+
+# PowerPoint Export
+<!-- section: export -->
+<!-- font_size: 4 -->
+
+- Export with `--export pptx`
+- Editable text in the theme's colors, speaker notes included
+- Charts become shapes; images, SVGs, and QR codes become pictures
+
+```bash
+ostendo presentation.md --export pptx -o slides.pptx
+```
+
+<!-- notes:
+FEATURE: PowerPoint export
+EXPECTED: Writes slides.pptx with one slide per slide, titles as slide titles, and these notes in the notes pane
+VERIFY: Opens without a repair prompt in PowerPoint, Keynote, Google Slides, and LibreOffice Impress; nothing runs off a slide
 -->
 
 ---

@@ -151,6 +151,7 @@ enum ImageMode {
 enum ExportFormat {
     Html,
     Pdf,
+    Pptx,
 }
 
 fn main() -> std::process::ExitCode {
@@ -227,6 +228,7 @@ fn run(cli: Cli) -> Result<()> {
         let ext = match format {
             ExportFormat::Html => "html",
             ExportFormat::Pdf => "pdf",
+            ExportFormat::Pptx => "pptx",
         };
         let output = cli
             .output
@@ -244,6 +246,9 @@ fn run(cli: Cli) -> Result<()> {
         match format {
             ExportFormat::Html => export::html::export_html(&slides, &theme, title, &output)?,
             ExportFormat::Pdf => export::pdf::export_pdf(&slides, &theme, title, &output)?,
+            ExportFormat::Pptx => {
+                export::pptx::export_pptx(&slides, &meta, &theme, title, &output)?
+            }
         }
         println!("Wrote {}", output.display());
         return Ok(());

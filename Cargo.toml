@@ -17,6 +17,8 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 figlet-rs = "0.1"
+flate2 = "1"
+crc32fast = "1"
 icy_sixel = "0.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 fast_image_resize = "5"

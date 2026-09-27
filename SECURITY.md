@@ -30,9 +30,9 @@ Limits on every run:
 ## Files the deck can read
 
 Image paths are not restricted: `![](/any/path)` displays any image your user
-can read. `--export html` embeds only files that decode as images (or SVG files
-that contain `<svg`), so pointing an image at a credentials file does not copy
-it into the export. Mermaid diagrams are rendered by `mmdc` in a private
+can read. `--export html` and `--export pptx` embed only files that decode as
+images (or SVG files that contain `<svg`), so pointing an image at a
+credentials file does not copy it into the export. Mermaid diagrams are rendered by `mmdc` in a private
 temporary directory with a 20 second limit.
 
 ## Remote control (`--remote`)

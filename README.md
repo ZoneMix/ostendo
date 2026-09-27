@@ -36,8 +36,8 @@ notes without leaving the shell.
   dark/light pairs you can switch on stage.
 - **Fast.** Only the rows that change are redrawn, inside synchronized
   updates: no flicker, even over SSH and tmux.
-- **Export and record.** Self-contained HTML, PDF through headless Chrome, and
-  asciinema recordings.
+- **Export and record.** Self-contained HTML, PDF through headless Chrome,
+  editable PowerPoint with speaker notes, and asciinema recordings.
 
 | | |
 |:-:|:-:|
@@ -158,7 +158,7 @@ presentation. Every run of a minute or more with the timer going is kept, and
 | `--validate` | Check the deck and exit |
 | `--size <cols>x<rows>` | With `--validate`: also report slides that would scroll at that size |
 | `--record <file>` | Record the talk as an asciicast ([asciinema](https://asciinema.org)) |
-| `--export html\|pdf` | Export and exit (`-o` sets the path) |
+| `--export html\|pdf\|pptx` | Export and exit (`-o` sets the path) |
 | `--list-themes` | List themes with swatches |
 | `--report` | Time per slide in past runs against the average and the plan |
 | `--count`, `--export-titles` | Print the slide count or titles |
@@ -213,6 +213,7 @@ shows only the poll on screen: it cannot move slides or see your notes.
 ```bash
 ostendo talk.md --export html            # talk.html, images embedded
 ostendo talk.md --export pdf -o talk.pdf # needs Chrome/Chromium or wkhtmltopdf
+ostendo talk.md --export pptx            # PowerPoint, Keynote, Google Slides
 ostendo talk.md --record talk.cast       # then: asciinema play talk.cast
 ```
 
@@ -221,7 +222,7 @@ so they replay anywhere.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [WISHLIST.md](WISHLIST.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
