@@ -7,12 +7,14 @@ use super::blocks::{self, Ctx};
 
 /// Renders `layout` into merged rows. `title` puts a FIGlet title at the top of
 /// column 0; `image` draws a column image at the given width; `first_exec` is
-/// the Ctrl+E index of the first executable block in the columns.
+/// the Ctrl+E index of the first executable block in the columns; items after
+/// more than `shown_pauses` pauses are left blank.
 pub(crate) fn columns(
     ctx: &Ctx,
     layout: &ColumnLayout,
     title: Option<&str>,
     first_exec: usize,
+    shown_pauses: usize,
     image: &mut dyn FnMut(&crate::presentation::ColumnImage, usize) -> Vec<StyledLine>,
 ) -> Vec<StyledLine> {
     let n = layout.contents.len().min(layout.ratios.len().max(1));
@@ -58,9 +60,10 @@ pub(crate) fn columns(
                     );
                 }
             }
-            let mut items = content.items.iter().peekable();
+            let pauses = |i: usize| content.pauses_before.get(i).copied().unwrap_or(0);
+            let mut items = content.items.iter().copied().enumerate().peekable();
             let mut previous: Option<ColumnItem> = None;
-            while let Some(item) = items.next() {
+            while let Some((i, item)) = items.next() {
                 let consecutive_text = matches!(
                     (previous, item),
                     (Some(ColumnItem::Text(_)), ColumnItem::Text(_))
@@ -68,48 +71,55 @@ pub(crate) fn columns(
                 if !consecutive_text {
                     gap(&mut rows);
                 }
-                previous = Some(*item);
-                let lines = match *item {
-                    ColumnItem::Text(t) => blocks::paragraph(&inner, &content.text_lines[t]),
+                previous = Some(item);
+                let full = ctx.with_width(width);
+                let lines = match item {
+                    ColumnItem::Text(t) => {
+                        scaled(blocks::paragraph(&inner, &content.text_lines[t]), scale)
+                    }
                     ColumnItem::Bullet(first) => {
+                        // One list, unless a pause falls between its items.
                         let mut last = first;
-                        while let Some(ColumnItem::Bullet(next)) = items.peek() {
-                            last = *next;
+                        while let Some(&(j, ColumnItem::Bullet(next))) = items.peek() {
+                            if pauses(j) != pauses(i) {
+                                break;
+                            }
+                            last = next;
                             items.next();
                         }
-                        blocks::bullets(&inner, &content.bullets[first..=last], false)
+                        scaled(
+                            blocks::bullets(&inner, &content.bullets[first..=last], false),
+                            scale,
+                        )
                     }
                     ColumnItem::Code(c) => {
                         let cb = &content.code_blocks[c];
-                        let cctx = ctx.with_width(width);
-                        let mut lines = blocks::code_block(&cctx, cb, cb.highlights.first());
+                        let mut lines = blocks::code_block(&full, cb, cb.highlights.first());
                         if cb.exec_mode.is_some() {
                             if let Some(view) = ctx.exec.as_ref().filter(|v| v.block == exec_index)
                             {
-                                lines.extend(blocks::exec_output(&cctx, view.output, view.running));
+                                lines.extend(blocks::exec_output(&full, view.output, view.running));
                             }
                             exec_index += 1;
                         }
-                        rows.extend(lines);
-                        continue;
+                        lines
                     }
-                    ColumnItem::Table(t) => {
-                        rows.extend(blocks::table(&ctx.with_width(width), &content.tables[t]));
-                        continue;
-                    }
-                    ColumnItem::Quote(q) => {
-                        rows.extend(blocks::quote(&ctx.with_width(width), &content.quotes[q]));
-                        continue;
-                    }
-                    ColumnItem::Image => {
-                        let Some(img) = &content.image else { continue };
-                        let img_width =
-                            width * usize::from(img.scale.unwrap_or(100).clamp(10, 100)) / 100;
-                        rows.extend(image(img, img_width.max(1)));
-                        continue;
-                    }
+                    ColumnItem::Table(t) => blocks::table(&full, &content.tables[t]),
+                    ColumnItem::Quote(q) => blocks::quote(&full, &content.quotes[q]),
+                    ColumnItem::Image => match &content.image {
+                        Some(img) => {
+                            let scale = usize::from(img.scale.unwrap_or(100).clamp(10, 100));
+                            image(img, (width * scale / 100).max(1))
+                        }
+                        None => Vec::new(),
+                    },
                 };
-                rows.extend(scaled(lines, scale));
+                if pauses(i) > shown_pauses {
+                    // Not built yet: keep its rows so nothing moves when it appears.
+                    rows.extend(lines.iter().map(|_| StyledLine::empty()));
+                } else {
+                    rows.extend(lines);
+                }
             }
             rows
         })

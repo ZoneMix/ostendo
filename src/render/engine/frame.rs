@@ -254,11 +254,13 @@ impl Presenter {
                     let mut col_image = |img: &crate::presentation::ColumnImage, w: usize| {
                         images.column_image(&img.path, img.color.as_deref(), w, colors)
                     };
+                    let shown_pauses = shown.iter().filter(|s| matches!(s, Step::Pause(_))).count();
                     lines = columns(
                         &ctx,
                         layout_cols,
                         title,
                         exec_before(slide.code_blocks.len()),
+                        shown_pauses,
                         &mut col_image,
                     );
                 }

@@ -442,3 +442,16 @@ fn front_matter_duration_is_minutes_unless_marked() {
         assert_eq!(minutes(value), expected, "{value}");
     }
 }
+
+#[test]
+fn pauses_inside_columns_tag_the_items_after_them() {
+    let s = &parse(concat!(
+        "# T\n<!-- column_layout: [1, 1] -->\n<!-- column: 0 -->\n- a\n<!-- pause -->\n- b\n",
+        "<!-- column: 1 -->\n<!-- pause -->\n- c\n<!-- reset_layout -->\nAfter",
+    ))[0];
+    let cols = s.columns.as_ref().unwrap();
+    assert_eq!(cols.contents[0].pauses_before, [0, 1]);
+    assert_eq!(cols.contents[1].pauses_before, [2]);
+    assert_eq!(s.steps, [Step::Pause(1), Step::Pause(1)]);
+    assert_eq!(s.blocks, [Block::Columns, Block::Paragraph(0)]);
+}

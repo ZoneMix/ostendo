@@ -535,9 +535,11 @@ impl<'a> SlideBuilder<'a> {
                 let scale = v.parse().ok().filter(|n| (2..=7).contains(n));
                 set(&mut self.columns.text_scale, scale);
             }
-            "pause" if self.column.is_none() => {
-                // A quote continues after the pause as a separate block.
+            "pause" => {
+                // A quote or table continues after the pause as a separate one.
                 self.flush_quote();
+                self.flush_table();
+                self.sync_column_pauses();
                 self.slide.steps.push(Step::Pause(self.slide.blocks.len()));
             }
             _ => slide_directive(&mut self.slide, name, value),
@@ -784,10 +786,24 @@ impl<'a> SlideBuilder<'a> {
         self.slide.blocks.push(block);
     }
 
+    /// Tags column items added since the last pause with the pause count.
+    fn sync_column_pauses(&mut self) {
+        let pauses = self
+            .slide
+            .steps
+            .iter()
+            .filter(|s| matches!(s, Step::Pause(_)))
+            .count();
+        for col in &mut self.columns.contents {
+            col.pauses_before.resize(col.items.len(), pauses);
+        }
+    }
+
     fn finish(mut self) -> Slide {
         self.close_open_block();
         self.flush_quote();
         self.flush_table();
+        self.sync_column_pauses();
         self.slide.notes = self.notes.join("\n").trim().to_string();
         if !self.image.path.as_os_str().is_empty() {
             self.slide.image = Some(self.image);

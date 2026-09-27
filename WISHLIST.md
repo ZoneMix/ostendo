@@ -17,4 +17,3 @@ before starting on one.
 - **Audience polls.** Vote from the remote page; results render as a live bar
   chart.
 - **Pacing report.** Time spent per slide, compared across rehearsals.
-- **Pauses in columns.** Reveal one column at a time.

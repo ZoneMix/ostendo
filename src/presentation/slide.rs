@@ -179,6 +179,9 @@ pub struct ColumnContent {
     pub quotes: Vec<BlockQuote>,
     /// The column's content in source order.
     pub items: Vec<ColumnItem>,
+    /// For each of `items`, how many `<!-- pause -->`s come before it on the
+    /// slide; it shows once that many build steps have.
+    pub pauses_before: Vec<usize>,
 }
 
 /// One entry of [`ColumnContent::items`], indexing into the column's lists.

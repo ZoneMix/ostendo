@@ -216,3 +216,25 @@ fn the_remote_learns_what_comes_next() {
     p.next_slide();
     assert_eq!(up_next(&mut p), "End of deck");
 }
+
+#[test]
+fn columns_build_one_part_at_a_time() {
+    let mut p = presenter(concat!(
+        "# Cols\n<!-- column_layout: [1, 1] -->\n<!-- column: 0 -->\n- left one\n<!-- pause -->\n",
+        "- left two\n<!-- column: 1 -->\n<!-- pause -->\n- right\n<!-- reset_layout -->\nAfter",
+    ));
+    let visible = |p: &mut Presenter| -> Vec<bool> {
+        let rows = screen(p);
+        ["left one", "left two", "right", "After"]
+            .iter()
+            .map(|t| row_of(&rows, t).is_some())
+            .collect()
+    };
+    let first_row = row_of(&screen(&mut p), "left one");
+    assert_eq!(visible(&mut p), [true, false, false, false]);
+    p.next_slide();
+    assert_eq!(visible(&mut p), [true, true, false, false]);
+    p.next_slide();
+    assert_eq!(visible(&mut p), [true, true, true, true]);
+    assert_eq!(row_of(&screen(&mut p), "left one"), first_row);
+}

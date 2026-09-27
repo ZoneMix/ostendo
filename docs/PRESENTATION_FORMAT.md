@@ -122,8 +122,12 @@ if flag.enabled() {
 
 Hidden content keeps its space, so centered slides do not shift as they
 build. ← steps back; returning to a slide with ← shows it fully built. Dots
-in the status bar show how far the current slide has built. Pauses inside
-columns are ignored, and exports show every slide fully built.
+in the status bar show how far the current slide has built, and exports show
+every slide fully built.
+
+Inside columns, a pause hides what follows it in that column, the columns
+after it, and everything after the layout, so a two-column slide can reveal
+its right side on the next press.
 
 ## Diagrams
 
