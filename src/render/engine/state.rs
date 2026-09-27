@@ -64,6 +64,19 @@ impl Presenter {
         self.notes_scroll = 0;
     }
 
+    /// Puts the notes beside the slide, or back below it, showing them.
+    pub(crate) fn move_notes(&mut self) {
+        self.show_notes = true;
+        self.notes_side = !self.notes_side;
+        self.save_state();
+    }
+
+    pub(crate) fn resize_notes(&mut self, delta: i16) {
+        self.show_notes = true;
+        self.notes_share = (i16::from(self.notes_share) + delta).clamp(15, 60) as u8;
+        self.save_state();
+    }
+
     pub(crate) fn toggle_fullscreen(&mut self) {
         self.fullscreen = !self.fullscreen;
     }
@@ -111,6 +124,8 @@ impl Presenter {
         self.state.set_font_offsets(self.font.user_offsets());
         self.state.set_theme_slug(&self.base_theme.slug);
         self.state.set_image_scale_offset(self.image_scale_offset);
+        self.state
+            .set_notes_layout(self.notes_side, self.notes_share);
         let _ = self.state.save();
     }
 }

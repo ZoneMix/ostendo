@@ -19,12 +19,25 @@ impl Presenter {
         let slide = &self.slides[self.current];
         let prompt = matches!(self.mode, Mode::Command | Mode::Goto | Mode::Search);
         let bar = usize::from(!self.fullscreen || prompt);
-        let notes = if self.show_notes && !slide.notes.trim().is_empty() {
-            (usize::from(self.height) / 3).clamp(4, 10)
+        let height = usize::from(self.height);
+        let notes = if self.notes_shown() && self.side_notes_width().is_none() {
+            (height * usize::from(self.notes_share) / 100).clamp(4, (height / 2).max(4))
         } else {
             0
         };
         (bar, notes, usize::from(slide.footer.is_some()))
+    }
+
+    fn notes_shown(&self) -> bool {
+        self.show_notes && !self.slides[self.current].notes.trim().is_empty()
+    }
+
+    /// Columns of the notes panel when it sits beside the slide; narrow
+    /// terminals keep it below.
+    fn side_notes_width(&self) -> Option<usize> {
+        let width = usize::from(self.width);
+        (self.notes_side && self.notes_shown() && width >= 60)
+            .then(|| (width * usize::from(self.notes_share) / 100).clamp(20, width - 30))
     }
 
     pub(crate) fn layout(&self) -> Layout {
@@ -33,14 +46,16 @@ impl Presenter {
         let content_top = 1;
         // One spare row above whatever sits at the bottom.
         let reserved = content_top + footer + notes + bar + 1;
-        let content_width = (width * usize::from(self.scale) / 100).clamp(1, width.max(1));
+        // The slide centers in what the side notes leave, one column apart.
+        let room = width - self.side_notes_width().map_or(0, |w| w + 1);
+        let content_width = (room * usize::from(self.scale) / 100).clamp(1, room.max(1));
         Layout {
-            width,
+            width: room,
             height,
             content_top,
             content_rows: height.saturating_sub(reserved).max(1),
             content_width,
-            margin: (width - content_width) / 2,
+            margin: (room - content_width) / 2,
         }
     }
 
@@ -153,6 +168,17 @@ impl Presenter {
                 ],
                 ..StyledLine::default()
             };
+        }
+
+        if let Some(side) = self.side_notes_width() {
+            let x = width - side;
+            let panel = self.notes_panel(side, bottom);
+            for (row, line) in rows.iter_mut().zip(panel) {
+                let used = row.line.width();
+                row.line
+                    .push(StyledSpan::new(&" ".repeat(x.saturating_sub(used))));
+                row.line.spans.extend(line.spans);
+            }
         }
 
         let images = if animating {

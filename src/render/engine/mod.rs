@@ -68,6 +68,10 @@ pub struct Presenter {
     fullscreen_default: bool,
     show_notes: bool,
     notes_scroll: usize,
+    /// Notes beside the slide instead of below it (`m`).
+    notes_side: bool,
+    /// Percent of the width (beside) or height (below) the notes take.
+    notes_share: u8,
     show_theme_name: bool,
     show_sections: bool,
     timer_start: Option<Instant>,
@@ -168,6 +172,11 @@ impl Presenter {
             fullscreen_default: cfg.fullscreen,
             show_notes: false,
             notes_scroll: 0,
+            notes_side: state.notes_layout().0,
+            notes_share: match state.notes_layout().1 {
+                0 => 33,
+                share => share.clamp(15, 60),
+            },
             show_theme_name: false,
             show_sections: false,
             timer_start: cfg.timer.then(Instant::now),

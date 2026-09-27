@@ -238,3 +238,28 @@ fn columns_build_one_part_at_a_time() {
     assert_eq!(visible(&mut p), [true, true, true, true]);
     assert_eq!(row_of(&screen(&mut p), "left one"), first_row);
 }
+
+#[test]
+fn notes_move_beside_the_slide_and_resize() {
+    let mut p = presenter("# Talk\n- point\n<!-- notes: say the thing -->");
+    p.width = 100;
+    p.show_notes = true;
+    let below = screen(&mut p);
+    assert!(row_of(&below, "say the thing").unwrap() > row_of(&below, "point").unwrap());
+
+    p.move_notes();
+    let beside = screen(&mut p);
+    let row = row_of(&beside, "Notes").unwrap();
+    assert_eq!(row, 0, "the panel starts at the top");
+    let panel_col = beside[row].find("Notes").unwrap();
+    assert!(panel_col > 60, "the panel sits on the right: {panel_col}");
+    let slide_col = beside[row_of(&beside, "point").unwrap()]
+        .find("point")
+        .unwrap();
+    assert!(slide_col < panel_col - 20, "the slide keeps the left side");
+
+    let width_of = |p: &mut Presenter| 100 - screen(p)[0].find("──").unwrap();
+    let before = width_of(&mut p);
+    p.resize_notes(10);
+    assert!(width_of(&mut p) > before);
+}

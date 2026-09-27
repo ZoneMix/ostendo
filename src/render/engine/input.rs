@@ -248,6 +248,9 @@ impl Presenter {
             KeyCode::Char('0') => self.reset_font(),
             KeyCode::Char('o') => self.open_overview(),
             KeyCode::Char('b') => self.blank = true,
+            KeyCode::Char('m') => self.move_notes(),
+            KeyCode::Char('{') => self.resize_notes(-5),
+            KeyCode::Char('}') => self.resize_notes(5),
             KeyCode::Char('e') => self.edit_slide(),
             KeyCode::Char('/') => self.open_prompt(Mode::Search),
             KeyCode::Char('?') => {

@@ -230,6 +230,7 @@ impl Presenter {
                 "Present",
                 vec![
                     ("n", "speaker notes (N / P scroll)"),
+                    ("m  { }", "notes beside / below the slide, smaller / larger"),
                     ("/", "search slides (Enter again: next)"),
                     ("b", "blank the screen"),
                     ("e", "edit this slide in $EDITOR"),

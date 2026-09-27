@@ -54,6 +54,7 @@ pub struct PresenterConfig {
 /// Where things go on screen for the current terminal size and toggles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Layout {
+    /// Columns the slide area spans: the terminal, less notes beside it.
     pub width: usize,
     pub height: usize,
     pub content_top: usize,

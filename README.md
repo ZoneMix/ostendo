@@ -107,6 +107,7 @@ demonstrated in `presentations/examples/test_presentation.md`.
 | `g` then a number, `Enter` | Go to slide |
 | `o` | Overview of all slides; `J` / `K` there move the selected slide (the file is rewritten) |
 | `n` | Speaker notes (`N` / `P` scroll them) |
+| `m` / `{` / `}` | Notes beside or below the slide; make them smaller or larger (remembered) |
 | `/` | Search slide text and notes (`/` then Enter: next match) |
 | `b` | Blank the screen (any key brings it back) |
 | `e` | Edit this slide in `$VISUAL` / `$EDITOR`, then come back to it |
