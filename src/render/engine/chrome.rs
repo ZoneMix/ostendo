@@ -242,6 +242,7 @@ impl Presenter {
                     ("e", "edit this slide in $EDITOR"),
                     ("f", "fullscreen"),
                     ("Ctrl+E", "run code block (again: next block)"),
+                    ("1-9", "add a vote to a poll option"),
                     ("t", "start / reset timer"),
                 ],
             ),

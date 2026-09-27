@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::presentation::{
     Block, BlockQuote, Bullet, Callout, Chart, CodeBlock, ColumnContent, ColumnImage, ColumnItem,
     ColumnLayout, DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition,
-    ImageRenderMode, MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Step,
+    ImageRenderMode, MermaidBlock, Poll, PresentationMeta, Slide, SlideAlignment, SlideImage, Step,
     Table,
 };
 use crate::render::animation::{
@@ -208,6 +208,27 @@ fn parse_chart(source: &str, columns: bool) -> Chart {
     chart
 }
 
+/// `# question`, then an option per line; list markers are optional.
+fn parse_poll(source: &str) -> Poll {
+    let mut poll = Poll {
+        question: String::new(),
+        options: Vec::new(),
+    };
+    for line in source.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        match line.strip_prefix("# ") {
+            Some(question) => poll.question = question.trim().to_string(),
+            None => {
+                let option = LIST_ITEM_RE
+                    .captures(line)
+                    .and_then(|c| c.get(3))
+                    .map_or(line, |m| m.as_str().trim());
+                poll.options.push(option.to_string());
+            }
+        }
+    }
+    poll
+}
+
 /// Directive sets available to every deck; a deck's own template of the same
 /// name wins.
 fn builtin_template(name: &str) -> Option<&'static [(&'static str, Option<&'static str>)]> {
@@ -284,6 +305,7 @@ fn fence_kind(info: &str) -> FenceKind {
             }
         }
         "qr" => return FenceKind::Qr,
+        "poll" => return FenceKind::Poll,
         _ => {}
     }
     FenceKind::Code {
@@ -366,6 +388,7 @@ enum FenceKind {
         columns: bool,
     },
     Qr,
+    Poll,
 }
 
 struct SlideBuilder<'a> {
@@ -516,6 +539,10 @@ impl<'a> SlideBuilder<'a> {
                     FenceKind::Chart { columns } => {
                         self.push_block(Block::Chart(self.slide.charts.len()));
                         self.slide.charts.push(parse_chart(&source, columns));
+                    }
+                    FenceKind::Poll => {
+                        self.push_block(Block::Poll(self.slide.polls.len()));
+                        self.slide.polls.push(parse_poll(&source));
                     }
                     FenceKind::Qr => {
                         self.push_block(Block::Qr(self.slide.qr_codes.len()));

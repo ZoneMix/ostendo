@@ -1,10 +1,8 @@
 //! Types shared across the engine submodules.
 
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
 
 use crate::presentation::{PresentationMeta, Slide};
-use crate::remote::RemoteCommand;
 use crate::render::text::StyledLine;
 use crate::terminal::protocols::ImageProtocol;
 use crate::theme::Theme;
@@ -37,10 +35,7 @@ pub struct PresenterConfig {
     pub presentation_path: PathBuf,
     /// Forced image protocol; `None` auto-detects.
     pub image_protocol: Option<ImageProtocol>,
-    pub remote: Option<(
-        Receiver<RemoteCommand>,
-        tokio::sync::broadcast::Sender<String>,
-    )>,
+    pub remote: Option<crate::remote::Links>,
     pub allow_exec: bool,
     pub allow_remote_exec: bool,
     pub fullscreen: bool,

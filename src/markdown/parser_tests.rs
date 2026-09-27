@@ -408,12 +408,20 @@ fn github_alerts_become_callouts() {
 }
 
 #[test]
-fn charts_and_qr_codes_parse() {
+fn charts_polls_and_qr_codes_parse() {
     let s = &parse(concat!(
         "# T\n```chart style=columns\n# Latency\np50: 12 ms\np99: 1,250 ms\nno value here\n```\n",
-        "```qr\n  https://x.dev  \n```",
+        "```qr\n  https://x.dev  \n```\n",
+        "```poll\n# Tabs or spaces?\n- Tabs\n\n2. Spaces\nBoth\n```",
     ))[0];
-    assert_eq!(s.blocks, [Block::Chart(0), Block::Qr(0)]);
+    assert_eq!(s.blocks, [Block::Chart(0), Block::Qr(0), Block::Poll(0)]);
+    assert_eq!(
+        s.polls[0],
+        Poll {
+            question: "Tabs or spaces?".into(),
+            options: vec!["Tabs".into(), "Spaces".into(), "Both".into()],
+        }
+    );
     let chart = &s.charts[0];
     assert!(chart.columns);
     assert_eq!(chart.title.as_deref(), Some("Latency"));

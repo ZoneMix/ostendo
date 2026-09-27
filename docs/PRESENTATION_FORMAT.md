@@ -201,6 +201,23 @@ A `$` opens math only before a non-space character and closes only after one,
 and not when a digit or letter follows it, so `$5 or $10` and `$HOME/$USER`
 stay text. Write `\$` for a literal dollar sign.
 
+## Polls
+
+````markdown
+```poll
+# Which language do you ship most?
+Rust
+Go
+Python
+```
+````
+
+`#` is the question; every other line is an option (list markers are
+optional). The slide shows each option's votes as a bar. `1`–`9` add a vote
+by hand, and with `ostendo talk.md --audience` a QR code beside the bars opens
+a voting page on phones on the same network; one vote per phone, shown live.
+Votes last for the session; the export lists the options.
+
 ## Mermaid
 
 A ```` ```mermaid ```` block is rendered to an image with

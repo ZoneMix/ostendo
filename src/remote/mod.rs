@@ -1,14 +1,29 @@
 //! WebSocket remote control protocol.
 //!
 //! - **Inbound**: clients send `{"type": "command", "action": "<name>", ...}`,
-//!   which [`server`] turns into a [`RemoteCommand`] for the presenter.
+//!   which [`server`] turns into a [`RemoteCommand`] for the presenter;
+//!   audience pages send only votes, through [`audience`].
 //! - **Outbound**: the presenter broadcasts [`StateMessage`] JSON to every
-//!   connected client whenever the presentation state changes.
+//!   connected client whenever the presentation state changes, and the poll
+//!   on screen to audience pages.
 
+pub mod audience;
 mod html;
 pub mod server;
 
+use std::sync::mpsc::Receiver;
+
 use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, watch};
+
+/// The presenter's ends of the servers it runs.
+pub struct Links {
+    pub commands: Receiver<RemoteCommand>,
+    /// State JSON for `--remote` pages.
+    pub states: Option<broadcast::Sender<String>>,
+    /// Poll JSON for `--audience` pages, and the address they open.
+    pub audience: Option<(watch::Sender<String>, String)>,
+}
 
 /// Wire format of an inbound message; `slide` and `theme` carry the argument
 /// of `goto` and `set_theme`.
@@ -89,6 +104,11 @@ pub enum RemoteCommand {
     TimerReset,
     /// Theme slug.
     SetTheme(String),
+    /// From an audience page: an option of the poll with this id.
+    Vote {
+        poll: String,
+        option: usize,
+    },
 }
 
 /// Presentation state broadcast to remote clients; the field names are the

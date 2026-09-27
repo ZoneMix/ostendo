@@ -1,6 +1,6 @@
 //! Code execution, hot reload, and the remote-control link.
 
-use crate::presentation::ExecMode;
+use crate::presentation::{Block, ExecMode, Poll};
 use crate::remote::{RemoteCommand, StateMessage};
 use crate::theme::colors::color_to_hex;
 
@@ -169,6 +169,11 @@ impl Presenter {
     }
 
     fn remote_command(&mut self, cmd: RemoteCommand) {
+        if let RemoteCommand::Vote { poll, option } = cmd {
+            // Votes come from the room, not the presenter: they change nothing else.
+            self.vote(Some(&poll), option);
+            return;
+        }
         if self.blank && !matches!(cmd, RemoteCommand::ToggleBlank) {
             // Like the keyboard: the first command only brings the slide back.
             self.blank = false;
@@ -198,6 +203,7 @@ impl Presenter {
             RemoteCommand::ExecuteCode if self.allow_remote_exec => self.execute_code(),
             RemoteCommand::TimerStart => self.start_timer(),
             RemoteCommand::TimerReset => self.reset_timer(),
+            RemoteCommand::Vote { .. } => {}
             RemoteCommand::SetTheme(slug) => {
                 if let Some(theme) = self.registry.get(&slug) {
                     self.set_base_theme(theme);
@@ -205,6 +211,65 @@ impl Presenter {
             }
             _ => {}
         }
+    }
+
+    /// The first poll on the current slide, once the slide has built that far.
+    fn open_poll(&self) -> Option<&Poll> {
+        let slide = &self.slides[self.current];
+        slide.blocks[..slide.shown_blocks(self.step)]
+            .iter()
+            .find_map(|block| match block {
+                Block::Poll(i) => slide.polls.get(*i),
+                _ => None,
+            })
+    }
+
+    /// Counts a vote for `option` of the open poll; a vote from the audience
+    /// page names the poll it saw, and is dropped once another is open.
+    pub(crate) fn vote(&mut self, poll: Option<&str>, option: usize) {
+        let Some(open) = self.open_poll() else {
+            return;
+        };
+        let (id, options) = (open.id(), open.options.len());
+        if option >= options || poll.is_some_and(|p| p != id) {
+            return;
+        }
+        self.votes.entry(id).or_insert_with(|| vec![0; options])[option] += 1;
+        self.invalidate();
+    }
+
+    /// Shows audience pages the open poll and its votes, or that there is none.
+    pub(crate) fn publish_poll(&mut self) {
+        let Some(tx) = &self.audience else {
+            return;
+        };
+        let pal = &self.palette;
+        let mut msg = serde_json::json!({
+            "type": "poll",
+            "bg": color_to_hex(pal.bg),
+            "text": color_to_hex(pal.text),
+            "accent": color_to_hex(pal.accent),
+        });
+        if let Some(poll) = self.open_poll() {
+            let id = poll.id();
+            let counts = self
+                .votes
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| vec![0; poll.options.len()]);
+            msg["id"] = id.into();
+            msg["question"] = poll.question.clone().into();
+            msg["options"] = poll.options.clone().into();
+            msg["counts"] = counts.into();
+        }
+        let json = msg.to_string();
+        tx.send_if_modified(|shown| {
+            let changed = *shown != json;
+            if changed {
+                *shown = json;
+            }
+            changed
+        });
     }
 
     /// Sends the presenter state to remote clients when it changed.

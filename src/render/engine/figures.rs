@@ -1,9 +1,9 @@
-//! Charts and QR codes drawn with block characters.
+//! Charts, polls, and QR codes drawn with block characters.
 
 use crossterm::style::Color;
 use unicode_width::UnicodeWidthStr;
 
-use crate::presentation::Chart;
+use crate::presentation::{Chart, Poll};
 use crate::render::text::{ellipsize, StyledLine, StyledSpan};
 use crate::theme::colors::interpolate_color;
 
@@ -120,6 +120,78 @@ fn columns(
         });
     }
     out
+}
+
+/// A poll's options as bars of their votes. With `url`, the address to vote
+/// at follows, drawn as a QR code beside the bars when there is room.
+pub(crate) fn poll(ctx: &Ctx, poll: &Poll, votes: &[u32], url: Option<&str>) -> Vec<StyledLine> {
+    let code = url.and_then(|u| qr(u, ctx.width / 2));
+    let code_width = code.as_ref().map_or(0, |c| c[0].width());
+    let beside = code.is_some() && ctx.width >= code_width + 3 + 24;
+    let width = if beside {
+        ctx.width - code_width - 3
+    } else {
+        ctx.width
+    };
+    let ctx_left = ctx.with_width(width);
+
+    let total: u32 = votes.iter().sum();
+    let bars = poll
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let n = votes.get(i).copied().unwrap_or(0);
+            let shown = match total {
+                0 => n.to_string(),
+                _ => format!("{n} · {}%", n * 100 / total),
+            };
+            (format!("{} {option}", i + 1), f64::from(n), shown)
+        })
+        .collect();
+    let mut left = super::blocks::paragraph(&ctx_left, &format!("**{}**", poll.question));
+    left.push(StyledLine::empty());
+    left.extend(chart(
+        &ctx_left,
+        &Chart {
+            title: None,
+            bars,
+            columns: false,
+        },
+    ));
+    left.push(StyledLine::empty());
+    let tally = match total {
+        1 => "1 vote".to_string(),
+        n => format!("{n} votes"),
+    };
+    let muted = |text: &str| StyledLine {
+        spans: vec![StyledSpan::new(text).with_fg(ctx.pal.muted)],
+        ..StyledLine::default()
+    };
+    left.push(muted(&tally));
+
+    let (Some(url), Some(code)) = (url, code.filter(|_| beside)) else {
+        if let Some(url) = url {
+            left.push(muted(&ellipsize(&format!("Vote at {url}"), ctx.width)));
+        }
+        return left;
+    };
+    let mut right = code;
+    let caption = ellipsize(url, code_width);
+    let pad = " ".repeat((code_width - caption.width()) / 2);
+    right.push(muted(&format!("{pad}{caption}")));
+    let rows = left.len().max(right.len());
+    (0..rows)
+        .map(|r| {
+            let mut line = left.get(r).cloned().unwrap_or_default();
+            let used = line.width();
+            line.push(StyledSpan::new(&" ".repeat(width - used.min(width) + 3)));
+            if let Some(row) = right.get(r) {
+                line.spans.extend(row.spans.iter().cloned());
+            }
+            line
+        })
+        .collect()
 }
 
 /// A QR code for `data`, two modules per cell, black on white whatever the

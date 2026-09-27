@@ -23,6 +23,7 @@ mod state;
 mod terminal;
 mod types;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
@@ -118,6 +119,11 @@ pub struct Presenter {
     remote_rx: Option<Receiver<RemoteCommand>>,
     state_broadcast: Option<tokio::sync::broadcast::Sender<String>>,
     last_broadcast: String,
+    /// The poll on screen, for `--audience` pages.
+    audience: Option<tokio::sync::watch::Sender<String>>,
+    audience_url: Option<String>,
+    /// Votes per option, by poll id.
+    votes: HashMap<String, Vec<u32>>,
     record_path: Option<PathBuf>,
     recorder: Option<record::Recorder>,
     /// The background last sent to the terminal (OSC 11).
@@ -149,10 +155,11 @@ impl Presenter {
             state.font_offsets(),
         );
         let fullscreen = cfg.slides[current].fullscreen.unwrap_or(cfg.fullscreen);
-        let (remote_rx, state_broadcast) = match cfg.remote {
-            Some((rx, tx)) => (Some(rx), Some(tx)),
-            None => (None, None),
+        let (remote_rx, state_broadcast, audience) = match cfg.remote {
+            Some(links) => (Some(links.commands), links.states, links.audience),
+            None => (None, None, None),
         };
+        let (audience, audience_url) = audience.unzip();
         Self {
             images: images::ImageStore::new(protocol, &cfg.slides),
             meta: cfg.meta,
@@ -213,6 +220,9 @@ impl Presenter {
             remote_rx,
             state_broadcast,
             last_broadcast: String::new(),
+            audience,
+            audience_url,
+            votes: HashMap::new(),
             record_path: cfg.record,
             recorder: None,
             terminal_bg: None,

@@ -28,8 +28,8 @@ notes without leaving the shell.
 - **Animations.** Fade, slide, and dissolve transitions; typewriter and fade-in
   entrances; matrix, sparkle, pulse, bounce, and spin loops.
 - **Presenter tools.** Speaker notes, search, a blank screen, an overview, a
-  timer that tracks your pace against the planned length, and a phone remote
-  that shows what comes next.
+  timer that tracks your pace against the planned length, a phone remote
+  that shows what comes next, and live audience polls voted from phones.
 - **Authoring.** Hot reload jumps to the slide you just edited, and
   `--validate --size 100x30` names slides that would not fit.
 - **Themes.** Every built-in theme passes WCAG contrast checks, with
@@ -113,6 +113,7 @@ demonstrated in `presentations/examples/test_presentation.md`.
 | `b` | Blank the screen (any key brings it back) |
 | `e` | Edit this slide in `$VISUAL` / `$EDITOR`, then come back to it |
 | `Ctrl+E` | Run the code block (again: next block) |
+| `1`–`9` | Add a vote to that option of the poll on screen (a show of hands) |
 | `f` | Hide the status bar |
 | `t` | Start / reset the timer (it starts at the first slide change) |
 | `T` | Show the theme name |
@@ -152,6 +153,8 @@ presentation. Every run of a minute or more with the timer going is kept, and
 | `--remote-port <port>` | Remote port (default 8765) |
 | `--remote-token <token>` | Require a token for the remote |
 | `--remote-exec` | Let the remote run code blocks |
+| `--audience` | Serve a voting page for poll slides to your network |
+| `--audience-port <port>` | Voting page port (default 8766) |
 | `--validate` | Check the deck and exit |
 | `--size <cols>x<rows>` | With `--validate`: also report slides that would scroll at that size |
 | `--record <file>` | Record the talk as an asciicast ([asciinema](https://asciinema.org)) |
@@ -193,6 +196,17 @@ what comes next, the timer and pace, and buttons to navigate or blank the
 screen. It listens on `127.0.0.1` only; forward the port (for example
 with `ssh -L`) to use it from a phone. See [SECURITY.md](SECURITY.md) before
 presenting decks you did not write.
+
+## Audience polls
+
+```bash
+ostendo talk.md --audience
+```
+
+A ```` ```poll ```` slide shows its options as live bars and, with
+`--audience`, a QR code for a voting page that everyone on the same network
+can open. Votes arrive as they are cast; `1`–`9` add votes by hand. The page
+shows only the poll on screen: it cannot move slides or see your notes.
 
 ## Export and record
 

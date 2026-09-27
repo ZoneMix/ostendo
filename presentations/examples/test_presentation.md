@@ -1593,6 +1593,26 @@ VERIFY: HTML export shows the same layout, centered
 
 ---
 
+# Audience Poll
+<!-- section: features -->
+<!-- font_size: 3 -->
+
+```poll
+# How do you present today?
+Slides app
+Terminal
+PDF
+Whiteboard
+```
+
+<!-- notes:
+FEATURE: Live audience polls
+EXPECTED: Numbered options with empty bars and "0 votes"; each press of 1-4 grows that bar and updates the percentages. With --audience, a QR code and the voting URL sit beside the bars
+VERIFY: Vote from a phone on the same network: the bar grows within a second, and a second vote from that phone is not counted
+-->
+
+---
+
 # Search and Blank
 <!-- section: features -->
 <!-- font_size: 4 -->

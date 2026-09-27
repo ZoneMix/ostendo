@@ -22,6 +22,7 @@ impl Presenter {
         loop {
             self.render(&mut out)?;
             self.broadcast_state();
+            self.publish_poll();
             if event::poll(self.poll_timeout())? {
                 loop {
                     if self.handle_event(event::read()?) {
@@ -246,6 +247,7 @@ impl Presenter {
             KeyCode::Char(']') => self.adjust_font(1),
             KeyCode::Char('[') => self.adjust_font(-1),
             KeyCode::Char('0') => self.reset_font(),
+            KeyCode::Char(c @ '1'..='9') => self.vote(None, c as usize - '1' as usize),
             KeyCode::Char('o') => self.open_overview(),
             KeyCode::Char('b') => self.blank = true,
             KeyCode::Char('m') => self.move_notes(),
@@ -525,5 +527,45 @@ mod tests {
         assert_eq!(p.current, 1);
         let bar = screen(&mut p).pop().unwrap();
         assert!(bar.contains("no slide mentions “haystack”"), "{bar}");
+    }
+
+    #[test]
+    fn votes_count_toward_the_poll_on_screen() {
+        let mut p = presenter(concat!(
+            "# Poll\nFirst a question.\n<!-- pause -->\n",
+            "```poll\n# Best language?\n- Rust\n- Go\n```\n---\n# Next",
+        ));
+        let (polls, shown) = tokio::sync::watch::channel(String::new());
+        p.audience = Some(polls);
+        let (tx, rx) = std::sync::mpsc::channel();
+        p.remote_rx = Some(rx);
+        let audience = |p: &mut Presenter| {
+            p.publish_poll();
+            serde_json::from_str::<serde_json::Value>(&shown.borrow()).unwrap()
+        };
+
+        press(&mut p, "2");
+        assert!(
+            audience(&mut p).get("id").is_none(),
+            "the poll is not built yet"
+        );
+        p.next_slide();
+        let id = audience(&mut p)["id"].as_str().unwrap().to_string();
+        press(&mut p, "229");
+        let vote = |poll: &str, option| crate::remote::RemoteCommand::Vote {
+            poll: poll.to_string(),
+            option,
+        };
+        for v in [vote(&id, 0), vote("an-old-poll", 0), vote(&id, 7)] {
+            tx.send(v).unwrap();
+        }
+        p.poll_remote();
+
+        assert_eq!(audience(&mut p)["counts"], serde_json::json!([1, 2]));
+        let rows = screen(&mut p);
+        let go = rows.iter().find(|r| r.contains("2 Go")).unwrap();
+        assert!(go.ends_with("2 · 66%"), "{go}");
+        p.next_slide();
+        assert!(audience(&mut p).get("id").is_none());
     }
 }

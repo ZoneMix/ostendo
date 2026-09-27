@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::presentation::{
-    Block, BlockQuote, Bullet, Chart, ColumnContent, ColumnItem, Slide, Table,
+    Block, BlockQuote, Bullet, Chart, ColumnContent, ColumnItem, Poll, Slide, Table,
 };
 use crate::theme::Theme;
 
@@ -74,6 +74,9 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
     font-size: 0.9em;
 }}
 .slide code {{ font-family: monospace; }}
+.slide .poll figcaption {{ font-weight: bold; margin-bottom: 0.4em; }}
+.slide .poll li {{ list-style: decimal inside; }}
+.slide .poll li::before {{ content: none; }}
 .slide pre.math {{ background: none; width: fit-content; margin: 0.5em auto; white-space: pre; line-height: 1.2; font-size: 1.1em; }}
 .slide blockquote {{
     border-left: 3px solid var(--accent);
@@ -249,6 +252,7 @@ fn slide_body(slide: &Slide) -> String {
             Block::Chart(i) => out.push_str(&chart(&slide.charts[i])),
             Block::Qr(i) => out.push_str(&qr_svg(&slide.qr_codes[i])),
             Block::Math(i) => out.push_str(&math(&slide.math[i])),
+            Block::Poll(i) => out.push_str(&poll(&slide.polls[i])),
             Block::Image => {
                 if let Some(img) = &slide.image {
                     out.push_str(&image(&img.path, &img.alt_text));
@@ -476,6 +480,18 @@ fn image_data_uri(path: &Path) -> Option<String> {
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
     Some(format!("data:{mime};base64,{encoded}"))
+}
+
+fn poll(p: &Poll) -> String {
+    let mut out = format!(
+        "<figure class=\"poll\"><figcaption>{}</figcaption>\n<ol>\n",
+        inline(&p.question)
+    );
+    for option in &p.options {
+        let _ = writeln!(out, "<li>{}</li>", inline(option));
+    }
+    out.push_str("</ol></figure>\n");
+    out
 }
 
 /// Display math as the terminal draws it; a `<pre>` keeps the rows aligned.

@@ -108,6 +108,7 @@ pub struct Slide {
     pub qr_codes: Vec<String>,
     /// TeX of each `$$…$$` block.
     pub math: Vec<String>,
+    pub polls: Vec<Poll>,
     /// What each press of → does before the deck moves on, in source order.
     pub steps: Vec<Step>,
     /// Hash of the slide's source lines; hot reload uses it to find the slide
@@ -140,8 +141,27 @@ pub enum Block {
     Chart(usize),
     Qr(usize),
     Math(usize),
+    Poll(usize),
     Image,
     Columns,
+}
+
+/// A ```` ```poll ```` block: a `# question` and one option per line, voted
+/// on with the number keys or from the `--audience` page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Poll {
+    pub question: String,
+    pub options: Vec<String>,
+}
+
+impl Poll {
+    /// Names the poll to the audience page and keys its votes, which so
+    /// survive a reload that leaves the poll's text alone.
+    pub fn id(&self) -> String {
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&(&self.question, &self.options), &mut hasher);
+        format!("{:016x}", std::hash::Hasher::finish(&hasher))
+    }
 }
 
 /// A ```` ```chart ```` block: one bar per `label: value` line, `# title`
@@ -214,6 +234,20 @@ pub struct Bullet {
     pub text: String,
     /// 0 for no indent, 1 for 2+ spaces, 2 for 4+ spaces.
     pub depth: usize,
+}
+
+impl Slide {
+    /// How many of `blocks` show after `step` build steps: those before the
+    /// first pause still to come.
+    pub fn shown_blocks(&self, step: usize) -> usize {
+        self.steps[step.min(self.steps.len())..]
+            .iter()
+            .find_map(|s| match s {
+                Step::Pause(n) => Some(*n),
+                Step::Highlight { .. } => None,
+            })
+            .unwrap_or(self.blocks.len())
+    }
 }
 
 impl Bullet {

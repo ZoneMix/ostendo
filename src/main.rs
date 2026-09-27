@@ -80,6 +80,19 @@ struct Cli {
     #[arg(long, requires = "remote")]
     remote_exec: bool,
 
+    /// Serve a voting page for poll slides to everyone on the network
+    #[arg(long)]
+    audience: bool,
+
+    /// Port for --audience
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value_t = 8766,
+        requires = "audience"
+    )]
+    audience_port: u16,
+
     /// Check the presentation and exit (non-zero status on problems)
     #[arg(long)]
     validate: bool,
@@ -236,8 +249,10 @@ fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let remote = if cli.remote {
-        let channels = remote::server::start(cli.remote_port, cli.remote_token.clone())?;
+    let (commands, remote_rx) = std::sync::mpsc::channel();
+    let states = if cli.remote {
+        let states =
+            remote::server::start(cli.remote_port, cli.remote_token.clone(), commands.clone())?;
         let fragment = cli
             .remote_token
             .as_ref()
@@ -247,10 +262,22 @@ fn run(cli: Cli) -> Result<()> {
             "Remote control: http://127.0.0.1:{}{fragment}",
             cli.remote_port
         );
-        Some(channels)
+        Some(states)
     } else {
         None
     };
+    let audience = if cli.audience {
+        let (polls, url) = remote::audience::start(cli.audience_port, commands)?;
+        eprintln!("Audience voting: {url}");
+        Some((polls, url))
+    } else {
+        None
+    };
+    let remote = (states.is_some() || audience.is_some()).then(|| remote::Links {
+        commands: remote_rx,
+        states,
+        audience,
+    });
 
     render::Presenter::new(render::PresenterConfig {
         slides,
@@ -380,6 +407,9 @@ fn validate(
         }
         if slide.charts.iter().any(|c| c.bars.is_empty()) {
             issues.push(format!("slide {n}: chart without `label: value` lines"));
+        }
+        if slide.polls.iter().any(|p| p.options.len() < 2) {
+            issues.push(format!("slide {n}: poll with fewer than two options"));
         }
     }
     if let Some((cols, rows)) = size {

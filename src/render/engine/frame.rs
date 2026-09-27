@@ -148,14 +148,11 @@ impl Presenter {
                 .filter(|c| c.exec_mode.is_some())
                 .count()
         };
-        let (shown, pending) = slide.steps.split_at(self.step.min(slide.steps.len()));
-        let hidden_block = pending.iter().find_map(|s| match s {
-            Step::Pause(n) => Some(*n),
-            Step::Highlight { .. } => None,
-        });
+        let shown = &slide.steps[..self.step.min(slide.steps.len())];
+        let hidden_block = slide.shown_blocks(self.step);
         let mut hidden_from = None;
         for (index, block) in slide.blocks.iter().enumerate() {
-            if Some(index) == hidden_block {
+            if index == hidden_block {
                 hidden_from = Some(out.lines.len());
             }
             let mut lines = Vec::new();
@@ -190,6 +187,12 @@ impl Presenter {
                 }
                 Block::Chart(i) => lines = super::figures::chart(&ctx, &slide.charts[i]),
                 Block::Math(i) => lines = blocks::math(&ctx, &slide.math[i]),
+                Block::Poll(i) => {
+                    let poll = &slide.polls[i];
+                    let votes = self.votes.get(&poll.id()).map_or(&[][..], Vec::as_slice);
+                    let url = self.audience_url.as_deref();
+                    lines = super::figures::poll(&ctx, poll, votes, url);
+                }
                 Block::Qr(i) => match super::figures::qr(&slide.qr_codes[i], text_width) {
                     Some(code) => place(&mut out, Rendered::Lines(code), text_width),
                     None => {
@@ -286,7 +289,7 @@ impl Presenter {
             conceal(
                 &mut out,
                 from,
-                slide.blocks[hidden_block.unwrap_or(0)..].contains(&Block::Image),
+                slide.blocks[hidden_block..].contains(&Block::Image),
             );
         }
         align(

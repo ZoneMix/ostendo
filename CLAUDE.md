@@ -86,7 +86,7 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | `math.rs` | TeX math to Unicode: one line inline, stacked for display |
 | `code/` | Execution sandbox, PTY, syntax highlighting |
 | `export/` | HTML and PDF export |
-| `remote/` | WebSocket remote control server and embedded UI |
+| `remote/` | WebSocket remote control server and page; `audience.rs` + `vote.html`: poll voting |
 | `theme/` | Theme registry, schema, color math; themes are `themes/*.yaml`, embedded by `build.rs` |
 | `watch.rs` | Hot-reload file watcher |
 
