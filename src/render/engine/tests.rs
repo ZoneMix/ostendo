@@ -127,3 +127,28 @@ fn reload_jumps_to_the_edited_slide_fully_built() {
     p.reload();
     assert_eq!(p.current, 0, "front matter edits keep the position");
 }
+
+#[test]
+fn chart_bars_scale_to_the_largest_value() {
+    let mut p = presenter("# Chart\n```chart\nFull: 10\nHalf: 5 ms\n```");
+    let rows = screen(&mut p);
+    let row = |label: &str| rows[row_of(&rows, label).unwrap()].clone();
+    let (full, half) = (
+        row("Full").matches('█').count(),
+        row("Half").matches('█').count(),
+    );
+    assert!(
+        full > 20 && full.abs_diff(half * 2) <= 1,
+        "{full} vs {half}"
+    );
+    let value_col = |label: &str, value: &str| {
+        let r = row(label);
+        assert!(r.ends_with(value), "{r:?}");
+        r.chars().count() - value.chars().count()
+    };
+    assert_eq!(
+        value_col("Full", "10"),
+        value_col("Half", "5 ms"),
+        "values line up"
+    );
+}

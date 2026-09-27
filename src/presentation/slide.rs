@@ -96,6 +96,9 @@ pub struct Slide {
     pub diagram_blocks: Vec<DiagramBlock>,
     /// `<!-- theme: slug -->` for this slide only.
     pub theme_override: Option<String>,
+    pub charts: Vec<Chart>,
+    /// Text of each ```` ```qr ```` block, drawn as a QR code.
+    pub qr_codes: Vec<String>,
     /// What each press of → does before the deck moves on, in source order.
     pub steps: Vec<Step>,
     /// Hash of the slide's source lines; hot reload uses it to find the slide
@@ -123,8 +126,21 @@ pub enum Block {
     Quote(usize),
     Diagram(usize),
     Mermaid(usize),
+    Chart(usize),
+    Qr(usize),
     Image,
     Columns,
+}
+
+/// A ```` ```chart ```` block: one bar per `label: value` line, `# title`
+/// optional.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chart {
+    pub title: Option<String>,
+    /// Label, value, and the value as written (`42 ms`).
+    pub bars: Vec<(String, f64, String)>,
+    /// `style=columns`: vertical bars instead of horizontal ones.
+    pub columns: bool,
 }
 
 #[derive(Debug, Clone)]

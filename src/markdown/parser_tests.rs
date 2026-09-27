@@ -388,3 +388,23 @@ fn github_alerts_become_callouts() {
     assert_eq!(s.block_quotes[0].lines, ["Careful"]);
     assert_eq!(s.block_quotes[2].lines, ["[!bogus]", "y"]);
 }
+
+#[test]
+fn charts_and_qr_codes_parse() {
+    let s = &parse(concat!(
+        "# T\n```chart style=columns\n# Latency\np50: 12 ms\np99: 1,250 ms\nno value here\n```\n",
+        "```qr\n  https://x.dev  \n```",
+    ))[0];
+    assert_eq!(s.blocks, [Block::Chart(0), Block::Qr(0)]);
+    let chart = &s.charts[0];
+    assert!(chart.columns);
+    assert_eq!(chart.title.as_deref(), Some("Latency"));
+    assert_eq!(
+        chart.bars,
+        [
+            ("p50".to_string(), 12.0, "12 ms".to_string()),
+            ("p99".to_string(), 1250.0, "1,250 ms".to_string()),
+        ]
+    );
+    assert_eq!(s.qr_codes, ["https://x.dev"]);
+}

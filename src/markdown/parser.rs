@@ -5,7 +5,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::presentation::{
-    Block, BlockQuote, Bullet, Callout, CodeBlock, ColumnContent, ColumnImage, ColumnItem,
+    Block, BlockQuote, Bullet, Callout, Chart, CodeBlock, ColumnContent, ColumnImage, ColumnItem,
     ColumnLayout, DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition,
     ImageRenderMode, MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Step,
     Table,
@@ -138,6 +138,34 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
+/// `# Title` plus `label: value` lines; the value is the leading number of
+/// what follows the colon, so units and notes may follow it.
+fn parse_chart(source: &str, columns: bool) -> Chart {
+    let mut chart = Chart {
+        title: None,
+        bars: Vec::new(),
+        columns,
+    };
+    for line in source.lines().map(str::trim) {
+        if let Some(title) = line.strip_prefix("# ") {
+            chart.title = Some(title.trim().to_string());
+        } else if let Some((label, rest)) = line.rsplit_once(':') {
+            let shown = rest.trim();
+            let number: String = shown
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+                .filter(|&c| c != ',')
+                .collect();
+            if let Ok(value) = number.parse::<f64>() {
+                chart
+                    .bars
+                    .push((label.trim().to_string(), value, shown.to_string()));
+            }
+        }
+    }
+    chart
+}
+
 /// `[!TIP]` or `[!tip] Custom heading` opening a quote.
 fn callout_marker(line: &str) -> Option<(Callout, String)> {
     let rest = line.trim().strip_prefix("[!")?;
@@ -180,8 +208,15 @@ fn fence_kind(info: &str) -> FenceKind {
             _ => {}
         }
     }
-    if language == "diagram" {
-        return FenceKind::Diagram(style);
+    match language {
+        "diagram" => return FenceKind::Diagram(style),
+        "chart" => {
+            return FenceKind::Chart {
+                columns: info.contains("style=columns"),
+            }
+        }
+        "qr" => return FenceKind::Qr,
+        _ => {}
     }
     FenceKind::Code {
         language: language.to_string(),
@@ -263,6 +298,10 @@ enum FenceKind {
         highlights: Vec<Vec<(usize, usize)>>,
     },
     Diagram(DiagramStyle),
+    Chart {
+        columns: bool,
+    },
+    Qr,
 }
 
 struct SlideBuilder<'a> {
@@ -395,6 +434,14 @@ impl<'a> SlideBuilder<'a> {
                         self.slide
                             .diagram_blocks
                             .push(DiagramBlock { source, style });
+                    }
+                    FenceKind::Chart { columns } => {
+                        self.push_block(Block::Chart(self.slide.charts.len()));
+                        self.slide.charts.push(parse_chart(&source, columns));
+                    }
+                    FenceKind::Qr => {
+                        self.push_block(Block::Qr(self.slide.qr_codes.len()));
+                        self.slide.qr_codes.push(source.trim().to_string());
                     }
                     FenceKind::Code { language, .. } if language == "mermaid" => {
                         self.push_block(Block::Mermaid(self.slide.mermaid_blocks.len()));

@@ -12,7 +12,7 @@ use base64::Engine;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::presentation::{Block, Bullet, ColumnContent, ColumnItem, Slide, Table};
+use crate::presentation::{Block, Bullet, Chart, ColumnContent, ColumnItem, Slide, Table};
 use crate::theme::Theme;
 
 /// Write `slides` styled with `theme` to `output_path` as a single HTML file
@@ -79,6 +79,12 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
     opacity: 0.8;
     margin: 0.5em 0;
 }}
+.slide .chart {{ margin: 0.5em 0; }}
+.slide .chart figcaption {{ opacity: 0.7; margin-bottom: 0.4em; }}
+.slide .chart .bar {{ display: grid; grid-template-columns: 8em 1fr auto; gap: 0.6em; align-items: center; }}
+.slide .chart .bar i {{ display: block; height: 0.9em; background: var(--accent); border-radius: 2px; }}
+.slide .chart .bar b {{ font-weight: normal; opacity: 0.7; }}
+.slide svg.qr {{ width: 12em; height: 12em; display: block; margin: 0.5em auto; }}
 .slide .callout {{
     --tone: #4493f8;
     border-left: 4px solid var(--tone);
@@ -255,6 +261,8 @@ fn slide_body(slide: &Slide) -> String {
                 let source = escape_html(&slide.mermaid_blocks[i].source);
                 let _ = writeln!(out, "<pre class=\"mermaid\">{source}</pre>");
             }
+            Block::Chart(i) => out.push_str(&chart(&slide.charts[i])),
+            Block::Qr(i) => out.push_str(&qr_svg(&slide.qr_codes[i])),
             Block::Image => {
                 if let Some(img) = &slide.image {
                     out.push_str(&image(&img.path, &img.alt_text));
@@ -329,6 +337,46 @@ fn list(items: &[Bullet]) -> String {
     }
     out.push_str("</ul>\n");
     out
+}
+
+fn chart(chart: &Chart) -> String {
+    let max = chart.bars.iter().map(|b| b.1).fold(0.0, f64::max);
+    let mut out = String::from("<figure class=\"chart\">\n");
+    if let Some(title) = &chart.title {
+        let _ = writeln!(out, "<figcaption>{}</figcaption>", escape_html(title));
+    }
+    for (label, value, shown) in &chart.bars {
+        let pct = if max > 0.0 { value / max * 100.0 } else { 0.0 };
+        let _ = writeln!(
+            out,
+            "<div class=\"bar\"><span>{}</span><i style=\"width:{pct:.1}%\"></i><b>{}</b></div>",
+            escape_html(label),
+            escape_html(shown)
+        );
+    }
+    out.push_str("</figure>\n");
+    out
+}
+
+/// The QR code as an inline SVG, one square per dark module.
+fn qr_svg(data: &str) -> String {
+    let Ok(code) = qrcode::QrCode::new(data.as_bytes()) else {
+        return format!("<p>{}</p>\n", escape_html(data));
+    };
+    let n = code.width();
+    let mut path = String::new();
+    for y in 0..n {
+        for x in 0..n {
+            if code[(x, y)] == qrcode::Color::Dark {
+                let _ = write!(path, "M{} {}h1v1h-1z", x + 4, y + 4);
+            }
+        }
+    }
+    let size = n + 8;
+    format!(
+        "<svg class=\"qr\" viewBox=\"0 0 {size} {size}\" role=\"img\" aria-label=\"{}\"><rect width=\"{size}\" height=\"{size}\" fill=\"#fff\"/><path d=\"{path}\" fill=\"#000\"/></svg>\n",
+        escape_html(data)
+    )
 }
 
 fn code(cb: &crate::presentation::CodeBlock) -> String {

@@ -136,6 +136,34 @@ line starting with `:` annotates the nodes of the row above, one `: ` segment
 per node. Styles: `box` (default), `bracket`, `vertical`. When a style does not
 fit, labels are shortened and then the next narrower style is used.
 
+## Charts
+
+````markdown
+```chart
+# Cold start (ms)
+ostendo: 38 ms
+presenterm: 61 ms
+```
+````
+
+One bar per `label: value` line, scaled to the largest value; the value may
+carry a unit (`38 ms`, `1,250`), and `#` adds a caption. `chart style=columns`
+draws vertical columns instead, good for a series (days, versions).
+
+## QR codes
+
+````markdown
+```qr
+https://github.com/ZoneMix/ostendo
+```
+````
+
+Draws the text as a QR code, black on white so phones can scan it from any
+theme. It needs about as many columns as the code has modules plus four;
+exports embed it as SVG.
+
+## Mermaid
+
 A ```` ```mermaid ```` block is rendered to an image with
 [mermaid-cli](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) when it is
 installed, and shown as source otherwise.

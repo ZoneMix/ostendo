@@ -11,6 +11,7 @@ mod chrome;
 mod columns;
 mod compose;
 mod display;
+mod figures;
 mod font;
 mod frame;
 mod images;

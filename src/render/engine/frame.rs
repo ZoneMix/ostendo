@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use crate::presentation::{Block, ImagePosition, SlideAlignment, Step};
-use crate::render::text::{StyledLine, StyledSpan};
+use crate::render::text::{ellipsize, StyledLine, StyledSpan};
 use crate::theme::colors::interpolate_color;
 
 use super::blocks::{self, Ctx, ExecView};
@@ -180,6 +180,16 @@ impl Presenter {
                         &graph, d.style, text_width, pal.accent, pal.text, dim, "",
                     );
                 }
+                Block::Chart(i) => lines = super::figures::chart(&ctx, &slide.charts[i]),
+                Block::Qr(i) => match super::figures::qr(&slide.qr_codes[i], text_width) {
+                    Some(code) => place(&mut out, Rendered::Lines(code), text_width),
+                    None => {
+                        let note =
+                            format!("[QR code too large at this width: {}]", slide.qr_codes[i]);
+                        lines.push(StyledLine::plain(&ellipsize(&note, text_width)));
+                        lines[0].spans[0].fg = Some(pal.muted);
+                    }
+                },
                 Block::Mermaid(i) => {
                     let source = &slide.mermaid_blocks[i].source;
                     let rows = layout
