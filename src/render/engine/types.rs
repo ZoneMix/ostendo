@@ -18,6 +18,8 @@ pub(crate) enum Mode {
     Command,
     /// `g` + slide number.
     Goto,
+    /// `/` + text to find.
+    Search,
     Help,
     Overview,
 }

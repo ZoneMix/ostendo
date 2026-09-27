@@ -70,6 +70,11 @@ pub struct Presenter {
     show_theme_name: bool,
     show_sections: bool,
     timer_start: Option<Instant>,
+    /// `b`: nothing on screen until the next key.
+    blank: bool,
+    /// A short message shown in the status bar, and when it was posted.
+    notice: Option<(String, Instant)>,
+    last_search: String,
 
     registry: ThemeRegistry,
     /// The theme the user chose; `theme` may differ on slides that override it.
@@ -161,6 +166,9 @@ impl Presenter {
             show_theme_name: false,
             show_sections: false,
             timer_start: cfg.timer.then(Instant::now),
+            blank: false,
+            notice: None,
+            last_search: String::new(),
             theme: base_theme.clone(),
             base_theme,
             registry,

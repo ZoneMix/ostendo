@@ -18,6 +18,7 @@ theme: nord
 accent: "#88c0d0"
 transition: fade
 align: top
+duration: 25m
 ---
 ```
 
@@ -30,6 +31,7 @@ align: top
 | `accent` | Hex accent color for the deck's theme; ignored if it would be unreadable (below 3:1 contrast) |
 | `transition` | Default transition for every slide: `fade`, `slide`, `dissolve` |
 | `align` | Default alignment: `top`, `center`, `vcenter`, `hcenter` |
+| `duration` | Planned length (`20`, `25m`, `1h30m`; minutes by default). The timer then shows the target and how far behind pace you are, and turns red past it |
 
 ## Slide content
 

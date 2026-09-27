@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 
+use crate::presentation::Slide;
 use crate::render::animation::{parse_transition, AnimationState};
 
 use super::Presenter;
@@ -92,10 +93,73 @@ impl Presenter {
         self.goto_slide(target);
     }
 
+    /// Shows the next slide (wrapping around) whose text or notes contain
+    /// `query`, ignoring case, fully built; an empty query repeats the last.
+    pub(crate) fn search(&mut self, query: &str) {
+        let query = match query.trim() {
+            "" => self.last_search.clone(),
+            q => q.to_lowercase(),
+        };
+        if query.is_empty() {
+            return;
+        }
+        let n = self.slides.len();
+        let found = (1..=n)
+            .map(|k| (self.current + k) % n)
+            .find(|&i| searchable(&self.slides[i]).contains(&query));
+        match found {
+            Some(i) => {
+                self.goto_slide(i);
+                self.step = self.slides[i].steps.len();
+                self.notify(format!("“{query}” · slide {}", i + 1));
+            }
+            None => self.notify(format!("no slide mentions “{query}”")),
+        }
+        self.last_search = query;
+    }
+
+    pub(crate) fn notify(&mut self, text: String) {
+        self.notice = Some((text, Instant::now()));
+    }
+
     pub(crate) fn scroll_by(&mut self, delta: isize) {
         self.scroll = self
             .scroll
             .saturating_add_signed(delta)
             .min(self.max_scroll);
     }
+}
+
+/// Everything a presenter might search for on a slide, lowercased.
+fn searchable(slide: &Slide) -> String {
+    let columns = slide.columns.iter().flat_map(|c| &c.contents);
+    let mut parts: Vec<&str> = vec![&slide.title, &slide.subtitle, &slide.notes, &slide.section];
+    parts.extend(slide.paragraphs.iter().map(String::as_str));
+    parts.extend(slide.bullets.iter().map(|b| b.text.as_str()));
+    parts.extend(slide.code_blocks.iter().map(|c| c.code.as_str()));
+    parts.extend(
+        slide
+            .block_quotes
+            .iter()
+            .flat_map(|q| q.lines.iter().map(String::as_str)),
+    );
+    parts.extend(
+        slide
+            .tables
+            .iter()
+            .flat_map(|t| t.headers.iter().chain(t.rows.iter().flatten()))
+            .map(String::as_str),
+    );
+    parts.extend(
+        slide
+            .charts
+            .iter()
+            .flat_map(|c| c.bars.iter().map(|b| b.0.as_str())),
+    );
+    for c in columns {
+        parts.extend(c.text_lines.iter().map(String::as_str));
+        parts.extend(c.bullets.iter().map(|b| b.text.as_str()));
+        parts.extend(c.code_blocks.iter().map(|b| b.code.as_str()));
+    }
+    parts.join("\n").to_lowercase()
 }

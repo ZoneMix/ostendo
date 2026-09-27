@@ -151,13 +151,18 @@ impl Presenter {
         if ctrl && key.code == KeyCode::Char('c') {
             return true;
         }
+        if self.blank {
+            // The key that brings the slide back does nothing else.
+            self.blank = false;
+            return false;
+        }
         match self.mode {
             Mode::Help => {
                 self.mode = Mode::Normal;
                 self.font.request(Some(self.current));
             }
             Mode::Overview => self.overview_key(key.code),
-            Mode::Command | Mode::Goto => {
+            Mode::Command | Mode::Goto | Mode::Search => {
                 let typed = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
                 return self.prompt_key(key.code, typed);
             }
@@ -206,6 +211,8 @@ impl Presenter {
             KeyCode::Char('[') => self.adjust_font(-1),
             KeyCode::Char('0') => self.reset_font(),
             KeyCode::Char('o') => self.open_overview(),
+            KeyCode::Char('b') => self.blank = true,
+            KeyCode::Char('/') => self.open_prompt(Mode::Search),
             KeyCode::Char('?') => {
                 self.mode = Mode::Help;
                 self.font.request(None);
@@ -243,10 +250,14 @@ impl Presenter {
                         self.goto_number(&input);
                         false
                     }
+                    Mode::Search => {
+                        self.search(&input);
+                        false
+                    }
                     _ => self.execute_command(&input),
                 };
             }
-            KeyCode::Char(c) if typed && (self.mode == Mode::Command || c.is_ascii_digit()) => {
+            KeyCode::Char(c) if typed && (self.mode != Mode::Goto || c.is_ascii_digit()) => {
                 self.input.push(c)
             }
             _ => {}
@@ -332,5 +343,49 @@ impl Presenter {
             self.font.reset(self.current);
             self.save_state();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{presenter, screen};
+    use super::*;
+
+    fn press(p: &mut Presenter, keys: &str) {
+        for c in keys.chars() {
+            let code = if c == '\n' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(c)
+            };
+            p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn blanking_hides_everything_and_the_next_key_only_restores() {
+        let mut p = presenter("# One\n---\n# Two");
+        press(&mut p, "b");
+        assert!(screen(&mut p).iter().all(String::is_empty));
+        press(&mut p, "l");
+        assert_eq!(p.current, 0, "the restoring key must not advance");
+        assert!(screen(&mut p).iter().any(|r| r.contains("One")));
+    }
+
+    #[test]
+    fn search_finds_text_and_notes_wrapping_around() {
+        let mut p = presenter(
+            "# One\n---\n# Two\n<!-- notes: mention the Needle -->\n---\n# Three\n- a needle here",
+        );
+        press(&mut p, "/needle\n");
+        assert_eq!(p.current, 1);
+        press(&mut p, "/\n");
+        assert_eq!(p.current, 2, "empty query repeats the last search");
+        press(&mut p, "/\n");
+        assert_eq!(p.current, 1, "search wraps past the end");
+        press(&mut p, "/haystack\n");
+        assert_eq!(p.current, 1);
+        let bar = screen(&mut p).pop().unwrap();
+        assert!(bar.contains("no slide mentions “haystack”"), "{bar}");
     }
 }

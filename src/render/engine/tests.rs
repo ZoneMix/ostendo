@@ -152,3 +152,16 @@ fn chart_bars_scale_to_the_largest_value() {
         "values line up"
     );
 }
+
+#[test]
+fn the_timer_shows_how_far_behind_pace_the_talk_is() {
+    let mut p = presenter("---\nduration: 8\n---\n# A\n---\n# B\n---\n# C\n---\n# D");
+    // Two minutes is the plan for the first of four slides; five have passed.
+    p.timer_start = Instant::now().checked_sub(std::time::Duration::from_secs(300));
+    let bar = screen(&mut p).pop().unwrap();
+    assert!(bar.contains("/ 8:00 · 3:00 behind"), "{bar}");
+
+    p.goto_slide(3);
+    let bar = screen(&mut p).pop().unwrap();
+    assert!(bar.contains("/ 8:00") && !bar.contains("behind"), "{bar}");
+}

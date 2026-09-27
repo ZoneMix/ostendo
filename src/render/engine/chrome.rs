@@ -1,6 +1,8 @@
 //! Screen furniture around the slide: status bar, notes, prompts, help, overview.
 
 use crossterm::style::Color;
+
+use crate::presentation::Callout;
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::text::{ellipsize, wrap_text, StyledLine, StyledSpan};
@@ -49,6 +51,9 @@ fn two_tone(line: StyledLine, fill: usize, fill_bg: Color, bg: Color) -> StyledL
     out
 }
 
+/// How long a notice replaces the deck title in the status bar.
+const NOTICE_TIME: std::time::Duration = std::time::Duration::from_millis(2500);
+
 impl Presenter {
     /// Bottom bar: deck title and section on the left; theme, timer, and slide
     /// number on the right. Its background fills left-to-right with progress.
@@ -60,7 +65,17 @@ impl Presenter {
             right.push(StyledSpan::new(&format!("{}   ", self.theme.name)).with_fg(pal.muted));
         }
         if let Some(t) = self.timer_text() {
-            right.push(StyledSpan::new(&format!("◷ {t}   ")).with_fg(pal.text));
+            let (mut text, mut color) = (format!("◷ {t}"), pal.text);
+            if let (Some((behind, over)), Some(total)) = (self.pace(), self.meta.duration) {
+                text.push_str(&format!(" / {}", super::state::clock(total)));
+                if over {
+                    color = pal.callout(Callout::Caution);
+                } else if let Some(late) = behind {
+                    text.push_str(&format!(" · {} behind", super::state::clock(late)));
+                    color = pal.callout(Callout::Warning);
+                }
+            }
+            right.push(StyledSpan::new(&format!("{text}   ")).with_fg(color));
         }
         let steps = slide.steps.len();
         if steps > 0 {
@@ -97,9 +112,16 @@ impl Presenter {
         if !slide.section.is_empty() {
             left_text.push_str(&format!("  ·  {}", slide.section));
         }
+        let mut left_fg = pal.text;
+        if let Some((text, at)) = &self.notice {
+            if at.elapsed() < NOTICE_TIME {
+                left_text = format!(" {text}");
+                left_fg = pal.accent;
+            }
+        }
         let left = ellipsize(&left_text, width.saturating_sub(right_w + 2));
         let gap = width.saturating_sub(left.width() + right_w);
-        let mut spans = vec![StyledSpan::new(&left).with_fg(pal.text)];
+        let mut spans = vec![StyledSpan::new(&left).with_fg(left_fg)];
         spans.push(StyledSpan::new(&" ".repeat(gap)));
         spans.extend(right);
 
@@ -114,6 +136,10 @@ impl Presenter {
         let pal = &self.palette;
         let (label, hint) = match self.mode {
             super::Mode::Goto => ("go to slide ", format!("   1–{}", self.slides.len())),
+            super::Mode::Search if self.input.is_empty() && !self.last_search.is_empty() => {
+                ("/", format!("   Enter: next “{}”", self.last_search))
+            }
+            super::Mode::Search => ("/", String::new()),
             _ => (":", String::new()),
         };
         let mut line = padded(
@@ -204,6 +230,8 @@ impl Presenter {
                 "Present",
                 vec![
                     ("n", "speaker notes (N / P scroll)"),
+                    ("/", "search slides (Enter again: next)"),
+                    ("b", "blank the screen"),
                     ("f", "fullscreen"),
                     ("Ctrl+E", "run code block (again: next block)"),
                     ("t", "start / reset timer"),

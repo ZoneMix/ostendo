@@ -1,6 +1,6 @@
 //! Themes, view toggles, and persisted state.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::theme::Theme;
 
@@ -91,13 +91,20 @@ impl Presenter {
 
     /// Elapsed time as `m:ss` or `h:mm:ss`, when the timer is running.
     pub(crate) fn timer_text(&self) -> Option<String> {
-        let secs = self.timer_start?.elapsed().as_secs();
-        let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-        Some(if h > 0 {
-            format!("{h}:{m:02}:{s:02}")
-        } else {
-            format!("{m}:{s:02}")
-        })
+        Some(clock(self.timer_start?.elapsed()))
+    }
+
+    /// With a front-matter `duration`: how far the talk is behind the pace
+    /// that ends on time (`None` when on pace), and whether it ran over.
+    pub(crate) fn pace(&self) -> Option<(Option<Duration>, bool)> {
+        let (total, start) = (self.meta.duration?, self.timer_start?);
+        let elapsed = start.elapsed();
+        // The share of the talk the slides so far should have taken.
+        let planned = total.mul_f64((self.current + 1) as f64 / self.slides.len() as f64);
+        let behind = elapsed
+            .checked_sub(planned)
+            .filter(|late| *late > Duration::from_secs(30));
+        Some((behind, elapsed > total))
     }
 
     pub(crate) fn save_state(&mut self) {
@@ -106,5 +113,16 @@ impl Presenter {
         self.state.set_theme_slug(&self.base_theme.slug);
         self.state.set_image_scale_offset(self.image_scale_offset);
         let _ = self.state.save();
+    }
+}
+
+/// `m:ss`, or `h:mm:ss` past an hour.
+pub(crate) fn clock(d: Duration) -> String {
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }

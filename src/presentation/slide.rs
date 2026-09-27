@@ -38,6 +38,8 @@ pub struct PresentationMeta {
     /// Transition name (`fade`, `slide`, `dissolve`) for slides without their own.
     pub transition: String,
     pub theme: Option<String>,
+    /// `duration: 20m`: planned talk length, for the pace shown by the timer.
+    pub duration: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, Default)]

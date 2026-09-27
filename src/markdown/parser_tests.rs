@@ -408,3 +408,24 @@ fn charts_and_qr_codes_parse() {
     );
     assert_eq!(s.qr_codes, ["https://x.dev"]);
 }
+
+#[test]
+fn front_matter_duration_is_minutes_unless_marked() {
+    let minutes = |v: &str| {
+        let src = format!("---\nduration: {v}\n---\n# One");
+        let (meta, _) = parse_presentation(&src, None).unwrap();
+        meta.duration.map(|d| d.as_secs_f64() / 60.0)
+    };
+    for (value, expected) in [
+        ("20", Some(20.0)),
+        ("45m", Some(45.0)),
+        ("45 min", Some(45.0)),
+        ("1h", Some(60.0)),
+        ("1h30m", Some(90.0)),
+        ("0", None),
+        ("soon", None),
+        ("1e30", None),
+    ] {
+        assert_eq!(minutes(value), expected, "{value}");
+    }
+}

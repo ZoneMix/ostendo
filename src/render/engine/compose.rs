@@ -17,7 +17,8 @@ impl Presenter {
     /// Rows taken at the bottom: (status/prompt bar, notes panel, footer).
     fn chrome_rows(&self) -> (usize, usize, usize) {
         let slide = &self.slides[self.current];
-        let bar = usize::from(!self.fullscreen || matches!(self.mode, Mode::Command | Mode::Goto));
+        let prompt = matches!(self.mode, Mode::Command | Mode::Goto | Mode::Search);
+        let bar = usize::from(!self.fullscreen || prompt);
         let notes = if self.show_notes && !slide.notes.trim().is_empty() {
             (usize::from(self.height) / 3).clamp(4, 10)
         } else {
@@ -52,6 +53,9 @@ impl Presenter {
                 .collect(),
             images: Vec::new(),
         };
+        if self.blank {
+            return blank_rows(vec![StyledLine::empty(); height], self.palette);
+        }
         match self.mode {
             Mode::Help => return blank_rows(self.help_screen(width, height), self.palette),
             Mode::Overview => return blank_rows(self.overview_screen(width, height), self.palette),
@@ -116,7 +120,7 @@ impl Presenter {
         if bar == 1 && height > 0 {
             bottom -= 1;
             rows[bottom].line = match self.mode {
-                Mode::Command | Mode::Goto => self.prompt_bar(width),
+                Mode::Command | Mode::Goto | Mode::Search => self.prompt_bar(width),
                 _ => self.status_bar(width),
             };
         }

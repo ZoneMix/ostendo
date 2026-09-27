@@ -64,10 +64,30 @@ fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
             "transition" => meta.transition = val,
             "theme" if !val.is_empty() => meta.theme = Some(val),
             "align" | "alignment" => meta.default_alignment = parse_alignment(&val),
+            "duration" => meta.duration = parse_duration(&val),
             _ => {}
         }
     }
     meta
+}
+
+/// `20` (minutes), `45m`, `45min`, `1h`, `1h30m`.
+fn parse_duration(value: &str) -> Option<std::time::Duration> {
+    let v = value.to_lowercase().replace(' ', "");
+    let (hours, rest) = match v.split_once('h') {
+        Some((h, rest)) => (h.parse::<f64>().ok()?, rest),
+        None => (0.0, v.as_str()),
+    };
+    let rest = rest.trim_end_matches("min").trim_end_matches('m');
+    let minutes = if rest.is_empty() {
+        0.0
+    } else {
+        rest.parse::<f64>().ok()?
+    };
+    let secs = (hours * 60.0 + minutes) * 60.0;
+    std::time::Duration::try_from_secs_f64(secs)
+        .ok()
+        .filter(|d| !d.is_zero())
 }
 
 fn parse_alignment(value: &str) -> Option<SlideAlignment> {
