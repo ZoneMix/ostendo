@@ -165,8 +165,9 @@ the front matter, or `:theme <slug>` while presenting. To make your own, see
 ostendo talk.md --remote --remote-token "$(openssl rand -hex 16)"
 ```
 
-Open the printed URL to get a page with navigation buttons and the current
-slide's notes. It listens on `127.0.0.1` only; forward the port (for example
+Open the printed URL for a presenter view: the current slide, its notes,
+what comes next, the timer and pace, and buttons to navigate or blank the
+screen. It listens on `127.0.0.1` only; forward the port (for example
 with `ssh -L`) to use it from a phone. See [SECURITY.md](SECURITY.md) before
 presenting decks you did not write.
 

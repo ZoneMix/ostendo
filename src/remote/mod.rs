@@ -37,6 +37,7 @@ impl RemoteCommandMsg {
             "scroll_up" => RemoteCommand::ScrollUp,
             "scroll_down" => RemoteCommand::ScrollDown,
             "toggle_fullscreen" => RemoteCommand::ToggleFullscreen,
+            "toggle_blank" => RemoteCommand::ToggleBlank,
             "toggle_notes" => RemoteCommand::ToggleNotes,
             "toggle_theme_name" => RemoteCommand::ToggleThemeName,
             "toggle_sections" => RemoteCommand::ToggleSections,
@@ -69,6 +70,8 @@ pub enum RemoteCommand {
     ScrollUp,
     ScrollDown,
     ToggleFullscreen,
+    /// Blank the screen, or bring it back.
+    ToggleBlank,
     ToggleNotes,
     ToggleThemeName,
     ToggleSections,
@@ -101,10 +104,16 @@ pub struct StateMessage {
     pub slide_title: String,
     pub notes: String,
     pub timer: String,
+    /// `3:10 behind` or `over time` when the deck sets a duration.
+    pub pace: String,
+    /// What the next press of → shows: remaining build steps, or the next
+    /// slide's title.
+    pub up_next: String,
     /// Plain-text lines of the current slide for the preview pane.
     pub slide_content: Vec<String>,
     pub section: String,
     pub is_fullscreen: bool,
+    pub is_blank: bool,
     pub is_notes_visible: bool,
     pub is_dark_mode: bool,
     pub show_theme_name: bool,
@@ -139,9 +148,12 @@ mod tests {
             slide_title: "Test Title".to_string(),
             notes: "Some notes".to_string(),
             timer: "00:05:30".to_string(),
+            pace: String::new(),
+            up_next: "Summary".to_string(),
             slide_content: vec!["Bullet 1".to_string(), "Bullet 2".to_string()],
             section: "intro".to_string(),
             is_fullscreen: false,
+            is_blank: false,
             is_notes_visible: true,
             is_dark_mode: true,
             show_theme_name: false,

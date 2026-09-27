@@ -199,3 +199,20 @@ fn overflow_report_names_slides_that_would_scroll() {
     };
     assert_eq!(report[0].1, 32 - layout.content_rows);
 }
+
+#[test]
+fn the_remote_learns_what_comes_next() {
+    let mut p = presenter("# Build\n- a\n<!-- pause -->\n- b\n---\n# Summary");
+    let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+    p.state_broadcast = Some(tx);
+    let mut up_next = |p: &mut Presenter| {
+        p.broadcast_state();
+        let json: serde_json::Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        json["up_next"].as_str().unwrap().to_string()
+    };
+    assert_eq!(up_next(&mut p), "1 more step on this slide");
+    p.next_slide();
+    assert_eq!(up_next(&mut p), "Summary");
+    p.next_slide();
+    assert_eq!(up_next(&mut p), "End of deck");
+}

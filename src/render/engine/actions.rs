@@ -125,7 +125,13 @@ impl Presenter {
     }
 
     fn remote_command(&mut self, cmd: RemoteCommand) {
+        if self.blank && !matches!(cmd, RemoteCommand::ToggleBlank) {
+            // Like the keyboard: the first command only brings the slide back.
+            self.blank = false;
+            return;
+        }
         match cmd {
+            RemoteCommand::ToggleBlank => self.blank = !self.blank,
             RemoteCommand::Next => self.next_slide(),
             RemoteCommand::Prev => self.prev_slide(),
             RemoteCommand::Goto(n) => self.goto_slide(n.saturating_sub(1)),
@@ -168,7 +174,7 @@ impl Presenter {
             return;
         }
         let slide = &self.slides[self.current];
-        let slide_content = self
+        let lines: Vec<String> = self
             .frame_cache
             .as_ref()
             .map(|(_, frame)| {
@@ -186,6 +192,18 @@ impl Presenter {
                     .collect()
             })
             .unwrap_or_default();
+        // A phone is narrower than the terminal: drop the centering padding.
+        let indent = lines
+            .iter()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.len() - l.trim_start_matches(' ').len())
+            .min()
+            .unwrap_or(0);
+        let slide_content: Vec<String> = lines
+            .iter()
+            .skip_while(|l| l.is_empty())
+            .map(|l| l.get(indent..).unwrap_or("").to_string())
+            .collect();
         let pal = &self.palette;
         let msg = StateMessage {
             msg_type: "state".to_string(),
@@ -194,9 +212,23 @@ impl Presenter {
             slide_title: slide.title.clone(),
             notes: slide.notes.clone(),
             timer: self.timer_text().unwrap_or_default(),
+            pace: match self.pace() {
+                Some((_, true)) => "over time".to_string(),
+                Some((Some(late), false)) => format!("{} behind", super::state::clock(late)),
+                _ => String::new(),
+            },
+            up_next: match slide.steps.len() - self.step.min(slide.steps.len()) {
+                0 => self
+                    .slides
+                    .get(self.current + 1)
+                    .map_or_else(|| "End of deck".to_string(), |s| s.title.clone()),
+                1 => "1 more step on this slide".to_string(),
+                n => format!("{n} more steps on this slide"),
+            },
             slide_content,
             section: slide.section.clone(),
             is_fullscreen: self.fullscreen,
+            is_blank: self.blank,
             is_notes_visible: self.show_notes,
             is_dark_mode: pal.is_dark(),
             show_theme_name: self.show_theme_name,
