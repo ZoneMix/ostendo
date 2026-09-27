@@ -1,7 +1,7 @@
 # Contributing
 
 Bug reports, fixes, themes, and example decks are welcome. For new features,
-open an issue first; [WISHLIST.md](WISHLIST.md) lists ideas.
+open an issue first.
 
 ## Setup
 

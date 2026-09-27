@@ -12,7 +12,9 @@ use base64::Engine;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::presentation::{Block, Bullet, ColumnContent, ColumnItem, Slide, Table};
+use crate::presentation::{
+    Block, BlockQuote, Bullet, Chart, ColumnContent, ColumnItem, Poll, Slide, Table,
+};
 use crate::theme::Theme;
 
 /// Write `slides` styled with `theme` to `output_path` as a single HTML file
@@ -72,6 +74,10 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
     font-size: 0.9em;
 }}
 .slide code {{ font-family: monospace; }}
+.slide .poll figcaption {{ font-weight: bold; margin-bottom: 0.4em; }}
+.slide .poll li {{ list-style: decimal inside; }}
+.slide .poll li::before {{ content: none; }}
+.slide pre.math {{ background: none; width: fit-content; margin: 0.5em auto; white-space: pre; line-height: 1.2; font-size: 1.1em; }}
 .slide blockquote {{
     border-left: 3px solid var(--accent);
     padding-left: 1em;
@@ -79,6 +85,26 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
     opacity: 0.8;
     margin: 0.5em 0;
 }}
+.slide .chart {{ margin: 0.5em 0; }}
+.slide .chart figcaption {{ opacity: 0.7; margin-bottom: 0.4em; }}
+.slide .chart .bar {{ display: grid; grid-template-columns: 8em 1fr auto; gap: 0.6em; align-items: center; }}
+.slide .chart .bar i {{ display: block; height: 0.9em; background: var(--accent); border-radius: 2px; }}
+.slide .chart .bar b {{ font-weight: normal; opacity: 0.7; }}
+.slide svg.qr {{ width: 12em; height: 12em; display: block; margin: 0.5em auto; }}
+.slide .callout {{
+    --tone: #4493f8;
+    border-left: 4px solid var(--tone);
+    background: color-mix(in srgb, var(--tone) 10%, transparent);
+    padding: 0.4em 1em;
+    margin: 0.5em 0;
+}}
+.slide .callout.tip {{ --tone: #3fb950; }}
+.slide .callout.important {{ --tone: #ab7df8; }}
+.slide .callout.warning {{ --tone: #d29922; }}
+.slide .callout.caution {{ --tone: #f85149; }}
+.slide .callout .heading {{ color: var(--tone); font-weight: bold; margin: 0.2em 0; }}
+.slide a {{ color: var(--accent); }}
+.slide li.task {{ list-style: none; }}
 .slide table {{
     border-collapse: collapse;
     margin: 0.5em 0;
@@ -203,13 +229,7 @@ fn slide_body(slide: &Slide) -> String {
             }
             Block::Code(i) => out.push_str(&code(&slide.code_blocks[i])),
             Block::Table(i) => out.push_str(&table(&slide.tables[i])),
-            Block::Quote(i) => {
-                out.push_str("<blockquote>\n");
-                for line in &slide.block_quotes[i].lines {
-                    let _ = writeln!(out, "<p>{}</p>", inline(line));
-                }
-                out.push_str("</blockquote>\n");
-            }
+            Block::Quote(i) => out.push_str(&quote(&slide.block_quotes[i])),
             Block::Diagram(i) => {
                 let d = &slide.diagram_blocks[i];
                 let graph = crate::diagram::parser::parse(&d.source);
@@ -229,6 +249,10 @@ fn slide_body(slide: &Slide) -> String {
                 let source = escape_html(&slide.mermaid_blocks[i].source);
                 let _ = writeln!(out, "<pre class=\"mermaid\">{source}</pre>");
             }
+            Block::Chart(i) => out.push_str(&chart(&slide.charts[i])),
+            Block::Qr(i) => out.push_str(&qr_svg(&slide.qr_codes[i])),
+            Block::Math(i) => out.push_str(&math(&slide.math[i])),
+            Block::Poll(i) => out.push_str(&poll(&slide.polls[i])),
             Block::Image => {
                 if let Some(img) = &slide.image {
                     out.push_str(&image(&img.path, &img.alt_text));
@@ -269,6 +293,9 @@ fn column(content: &ColumnContent) -> String {
                 out.push_str(&list(&content.bullets[first..=last]));
             }
             ColumnItem::Code(i) => out.push_str(&code(&content.code_blocks[i])),
+            ColumnItem::Table(i) => out.push_str(&table(&content.tables[i])),
+            ColumnItem::Quote(i) => out.push_str(&quote(&content.quotes[i])),
+            ColumnItem::Math(i) => out.push_str(&math(&content.math[i])),
             ColumnItem::Image => {
                 if let Some(img) = &content.image {
                     out.push_str(&image(Path::new(&img.path), ""));
@@ -279,18 +306,91 @@ fn column(content: &ColumnContent) -> String {
     out
 }
 
+fn quote(q: &BlockQuote) -> String {
+    let mut out = String::new();
+    match &q.callout {
+        Some((kind, heading)) => {
+            let kind = kind.name().to_lowercase();
+            let _ = writeln!(out, "<div class=\"callout {kind}\">");
+            let _ = writeln!(out, "<p class=\"heading\">{}</p>", escape_html(heading));
+        }
+        None => out.push_str("<blockquote>\n"),
+    }
+    for line in &q.lines {
+        let _ = writeln!(out, "<p>{}</p>", inline(line));
+    }
+    out.push_str(if q.callout.is_some() {
+        "</div>\n"
+    } else {
+        "</blockquote>\n"
+    });
+    out
+}
+
 fn list(items: &[Bullet]) -> String {
-    let ordered = regex::Regex::new(r"^\d+[.)]\s").ok();
     let mut out = String::from("<ul>\n");
     for b in items {
         let mut class = format!("d{}", b.depth.min(2));
-        if ordered.as_ref().is_some_and(|re| re.is_match(&b.text)) {
-            class.push_str(" ordered");
-        }
-        let _ = writeln!(out, "<li class=\"{class}\">{}</li>", inline(&b.text));
+        let body = match b.task() {
+            Some((done, text)) => {
+                class.push_str(" task");
+                let checked = if done { " checked" } else { "" };
+                format!(
+                    "<input type=\"checkbox\" disabled{checked}> {}",
+                    inline(text)
+                )
+            }
+            None => {
+                if b.is_ordered() {
+                    class.push_str(" ordered");
+                }
+                inline(&b.text)
+            }
+        };
+        let _ = writeln!(out, "<li class=\"{class}\">{body}</li>");
     }
     out.push_str("</ul>\n");
     out
+}
+
+fn chart(chart: &Chart) -> String {
+    let max = chart.bars.iter().map(|b| b.1).fold(0.0, f64::max);
+    let mut out = String::from("<figure class=\"chart\">\n");
+    if let Some(title) = &chart.title {
+        let _ = writeln!(out, "<figcaption>{}</figcaption>", escape_html(title));
+    }
+    for (label, value, shown) in &chart.bars {
+        let pct = if max > 0.0 { value / max * 100.0 } else { 0.0 };
+        let _ = writeln!(
+            out,
+            "<div class=\"bar\"><span>{}</span><i style=\"width:{pct:.1}%\"></i><b>{}</b></div>",
+            escape_html(label),
+            escape_html(shown)
+        );
+    }
+    out.push_str("</figure>\n");
+    out
+}
+
+/// The QR code as an inline SVG, one square per dark module.
+fn qr_svg(data: &str) -> String {
+    let Ok(code) = qrcode::QrCode::new(data.as_bytes()) else {
+        return format!("<p>{}</p>\n", escape_html(data));
+    };
+    let n = code.width();
+    let mut path = String::new();
+    for y in 0..n {
+        for x in 0..n {
+            if code[(x, y)] == qrcode::Color::Dark {
+                let _ = write!(path, "M{} {}h1v1h-1z", x + 4, y + 4);
+            }
+        }
+    }
+    let size = n + 8;
+    format!(
+        "<svg class=\"qr\" viewBox=\"0 0 {size} {size}\" role=\"img\" aria-label=\"{}\"><rect width=\"{size}\" height=\"{size}\" fill=\"#fff\"/><path d=\"{path}\" fill=\"#000\"/></svg>\n",
+        escape_html(data)
+    )
 }
 
 fn code(cb: &crate::presentation::CodeBlock) -> String {
@@ -351,7 +451,15 @@ fn inline(text: &str) -> String {
                     html = format!("<{tag}>{html}</{tag}>");
                 }
             }
-            html
+            // Only web and mail links: a `javascript:` target must not become live.
+            match span.link.as_deref().filter(|url| {
+                ["http://", "https://", "mailto:"]
+                    .iter()
+                    .any(|scheme| url.starts_with(scheme))
+            }) {
+                Some(url) => format!("<a href=\"{}\">{html}</a>", escape_html(url)),
+                None => html,
+            }
         })
         .collect()
 }
@@ -372,6 +480,24 @@ fn image_data_uri(path: &Path) -> Option<String> {
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
     Some(format!("data:{mime};base64,{encoded}"))
+}
+
+fn poll(p: &Poll) -> String {
+    let mut out = format!(
+        "<figure class=\"poll\"><figcaption>{}</figcaption>\n<ol>\n",
+        inline(&p.question)
+    );
+    for option in &p.options {
+        let _ = writeln!(out, "<li>{}</li>", inline(option));
+    }
+    out.push_str("</ol></figure>\n");
+    out
+}
+
+/// Display math as the terminal draws it; a `<pre>` keeps the rows aligned.
+fn math(tex: &str) -> String {
+    let rows = crate::math::display(tex).join("\n");
+    format!("<pre class=\"math\">{}</pre>\n", escape_html(&rows))
 }
 
 fn escape_html(s: &str) -> String {
@@ -425,7 +551,10 @@ mod tests {
 
     #[test]
     fn bodies_follow_source_order_with_inline_markup() {
-        let md = "# T\n\nIntro **bold** and `code`\n\n> quote\n\n- item ~~old~~\n";
+        let md = concat!(
+            "# T\n\nIntro **bold** and `code`, [docs](https://x.dev), [x](javascript:alert(1))\n\n",
+            "> quote\n\n> [!WARNING]\n> Careful\n\n- item ~~old~~\n- [x] shipped\n",
+        );
         let (_, slides) = crate::markdown::parse_presentation(md, None).unwrap();
         let html = export(&slides);
         let at = |needle: &str| {
@@ -435,6 +564,13 @@ mod tests {
         assert!(at("<strong>bold</strong>") < at("<blockquote>"));
         assert!(at("<blockquote>") < at("<del>old</del>"));
         assert!(html.contains("<code>code</code>") && html.contains("<title>Deck</title>"));
+        assert!(html.contains("<a href=\"https://x.dev\">docs</a>"));
+        assert!(
+            !html.contains("javascript:alert(1)\""),
+            "script link made live"
+        );
+        assert!(at("<div class=\"callout warning\">") < at("Careful"));
+        assert!(html.contains("<input type=\"checkbox\" disabled checked> shipped"));
     }
 
     #[test]

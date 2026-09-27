@@ -18,6 +18,7 @@ theme: nord
 accent: "#88c0d0"
 transition: fade
 align: top
+duration: 25m
 ---
 ```
 
@@ -30,24 +31,36 @@ align: top
 | `accent` | Hex accent color for the deck's theme; ignored if it would be unreadable (below 3:1 contrast) |
 | `transition` | Default transition for every slide: `fade`, `slide`, `dissolve` |
 | `align` | Default alignment: `top`, `center`, `vcenter`, `hcenter` |
+| `templates` | Named directive sets for `<!-- template: name -->` (see [Templates](#templates)) |
+| `duration` | Planned length (`20`, `25m`, `1h30m`; minutes by default). The timer then shows the target and how far behind pace you are, and turns red past it; `--report` compares each slide with an even share of it |
 
 ## Slide content
 
-Elements render in the order they appear in the file.
+Elements render in the order they appear in the file. An image or Mermaid
+diagram gives up rows when the slide would otherwise need scrolling;
+`ostendo --validate talk.md --size 100x30` lists slides that still do.
 
 - `# Title` — the slide title (first `#` heading). Other headings (`##`, `###`)
   render as bold text.
 - The first line of text right after the title is the subtitle; later text
   becomes paragraphs (consecutive lines join into one paragraph).
 - Lists: `-`, `*`, or `+` followed by a space; indent two spaces per level
-  (three levels). Ordered items (`1.`, `2)`) keep their numbers.
+  (three levels). Ordered items (`1.`, `2)`) keep their numbers, and task
+  items (`- [ ] todo`, `- [x] done`) show a box or a check.
 - Inline: `**bold**`, `*italic*` or `_italic_`, `` `code` ``, `~~strike~~`,
   nestable (`**bold with `code`**`). Underscores inside words (`snake_case`)
   stay literal.
+- Links: `[text](https://…)`, `<https://…>`, and bare `https://…` URLs are
+  underlined and clickable in terminals with hyperlink support (Kitty,
+  Ghostty, iTerm2, WezTerm, GNOME Terminal, Windows Terminal).
 - Tables: standard pipe tables; `:---`, `:---:`, `---:` set alignment. Wide
   tables shrink their columns and wrap cells.
 - Block quotes: `> text`. A line starting with `— ` or `-- ` is shown as an
   attribution.
+- Callouts (GitHub alert syntax): a quote whose first line is `[!NOTE]`,
+  `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]` becomes a colored
+  panel. Text after the marker replaces the heading: `> [!TIP] Pro move`.
+- Math: `$…$` inside text, `$$…$$` on lines of its own (see [Math](#math)).
 - Images: `![alt](path)`, relative to the markdown file. The alt text becomes a
   caption in text-based rendering.
 - Code fences, diagrams, and Mermaid blocks (below).
@@ -69,6 +82,7 @@ The info string is the language, then optional flags in any order:
 | `+exec` | Ctrl+E runs the block; output streams underneath |
 | `+pty` | Like `+exec`, in a pseudo-terminal (programs see a TTY and keep colors) |
 | `{label: "name"}` | Label shown in the block's header |
+| `{1,3-5\|7\|all}` | Emphasize lines 1 and 3–5, then 7, then none, one group per press of → (see [Building a slide](#building-a-slide)) |
 
 Runnable languages: `python`, `bash`/`sh`, `javascript`/`node`, `ruby`, `rust`,
 `c`, `cpp`/`c++`, `go`. Rust, C, C++, and Go snippets without a `main` are
@@ -86,6 +100,37 @@ import math, random
 <!-- preamble_end -->
 ```
 
+## Building a slide
+
+`<!-- pause -->` on its own line hides everything after it until the next
+press of →. Code blocks with highlight groups (`{1-2|4|all}`) step through
+their groups the same way, in source order with any pauses:
+
+````markdown
+# Rollout plan
+
+- Ship behind a flag
+<!-- pause -->
+- Watch the error budget
+<!-- pause -->
+
+```rust {1|3-4|all}
+let flag = Flag::new("new-parser");
+if flag.enabled() {
+    parse_v2(input)
+}
+```
+````
+
+Hidden content keeps its space, so centered slides do not shift as they
+build. ← steps back; returning to a slide with ← shows it fully built. Dots
+in the status bar show how far the current slide has built, and exports show
+every slide fully built.
+
+Inside columns, a pause hides what follows it in that column, the columns
+after it, and everything after the layout, so a two-column slide can reveal
+its right side on the next press.
+
 ## Diagrams
 
 ````markdown
@@ -100,6 +145,80 @@ A `#` line is the title; each other line is a row of nodes joined by `->`; a
 line starting with `:` annotates the nodes of the row above, one `: ` segment
 per node. Styles: `box` (default), `bracket`, `vertical`. When a style does not
 fit, labels are shortened and then the next narrower style is used.
+
+## Charts
+
+````markdown
+```chart
+# Cold start (ms)
+ostendo: 38 ms
+presenterm: 61 ms
+```
+````
+
+One bar per `label: value` line, scaled to the largest value; the value may
+carry a unit (`38 ms`, `1,250`), and `#` adds a caption. `chart style=columns`
+draws vertical columns instead, good for a series (days, versions).
+
+## QR codes
+
+````markdown
+```qr
+https://github.com/ZoneMix/ostendo
+```
+````
+
+Draws the text as a QR code, black on white so phones can scan it from any
+theme. It needs about as many columns as the code has modules plus four;
+exports embed it as SVG.
+
+## Math
+
+```markdown
+The roots of $ax^2 + bx + c$ are
+
+$$
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+$$
+```
+
+TeX math is drawn with Unicode characters, so it works in every terminal and
+in exports. Inline math (`$…$`) stays on one line: `x^2` becomes `x²`,
+`\frac{a}{b}` becomes `a/b`. Display math (`$$` on its own line, or
+`$$ … $$` alone on a line) is centered and stacks fractions, roots, sums and
+limits with their bounds above and below, `\left( … \right)` and matrices
+with tall brackets, and `\\` line breaks.
+
+Supported: Greek letters, operators, relations and arrows; `^` and `_`;
+`\frac`, `\binom`, `\sqrt[n]{…}`; `\sum`, `\prod`, `\int`, `\lim` and
+friends; `\sin`, `\log` and other function names; `\text`,
+`\operatorname`; `\mathbb`, `\mathcal`, `\mathfrak`, `\mathbf`; accents
+such as `\hat` and `\vec`; and the `matrix`, `pmatrix`, `bmatrix`,
+`vmatrix`, `cases`, and `aligned` environments. An unknown command shows as
+written.
+
+A `$` opens math only before a non-space character and closes only after one,
+and not when a digit or letter follows it, so `$5 or $10` and `$HOME/$USER`
+stay text. Write `\$` for a literal dollar sign.
+
+## Polls
+
+````markdown
+```poll
+# Which language do you ship most?
+Rust
+Go
+Python
+```
+````
+
+`#` is the question; every other line is an option (list markers are
+optional). The slide shows each option's votes as a bar. `1`–`9` add a vote
+by hand, and with `ostendo talk.md --audience` a QR code beside the bars opens
+a voting page on phones on the same network; one vote per phone, shown live.
+Votes last for the session; the export lists the options.
+
+## Mermaid
 
 A ```` ```mermaid ```` block is rendered to an image with
 [mermaid-cli](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) when it is
@@ -124,6 +243,29 @@ Directives apply to the slide they are on.
 | `<!-- footer: text -->` | text | Footer line |
 | `<!-- footer_align: V -->` | `left`, `center`, `right` | Footer alignment |
 | `<!-- theme: slug -->` | theme slug | Theme for this slide only |
+
+### Templates
+
+`<!-- template: name -->` applies a set of directives as if they were
+written at that line; directives after it override them. Built in:
+
+| Template | Directives |
+|---|---|
+| `title` | `align: center`, `ascii_title` |
+| `section` | `align: center`, `title_decoration: banner` |
+| `closing` | `align: center`, `ascii_title`, `loop_animation: sparkle(figlet)` |
+
+Define your own (or replace a built-in) in the front matter:
+
+```yaml
+templates:
+  divider:
+    align: center
+    title_decoration: box
+    transition: dissolve
+```
+
+`--validate` reports templates that do not exist.
 
 ### Speaker notes
 
@@ -165,7 +307,8 @@ iTerm2, WezTerm) and true-color half blocks everywhere else. Animated GIFs play.
 <!-- reset_layout -->
 ```
 
-Columns hold text, bullets, code, and one image each, in source order.
+Columns hold text, bullets, code, tables, quotes and callouts, and one image
+each, in source order.
 `<!-- column_separator: none -->` hides the divider;
 `<!-- column_text_scale: N -->` (2–7) enlarges column text on Kitty.
 

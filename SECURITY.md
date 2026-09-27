@@ -30,9 +30,9 @@ Limits on every run:
 ## Files the deck can read
 
 Image paths are not restricted: `![](/any/path)` displays any image your user
-can read. `--export html` embeds only files that decode as images (or SVG files
-that contain `<svg`), so pointing an image at a credentials file does not copy
-it into the export. Mermaid diagrams are rendered by `mmdc` in a private
+can read. `--export html` and `--export pptx` embed only files that decode as
+images (or SVG files that contain `<svg`), so pointing an image at a
+credentials file does not copy it into the export. Mermaid diagrams are rendered by `mmdc` in a private
 temporary directory with a 20 second limit.
 
 ## Remote control (`--remote`)
@@ -53,11 +53,28 @@ temporary directory with a 20 second limit.
   only with `--remote-exec`, and never with `--no-exec`.
 - The control page is served with a restrictive Content-Security-Policy.
 
+## Audience voting (`--audience`)
+
+- Listens on every interface (the audience is on your network), on its own
+  port, separate from `--remote`.
+- It serves only the voting page and poll: the question, options, and vote
+  counts of the poll on screen, and the theme's colors. No notes, slide
+  content, or controls; the only message it accepts is a vote, and a vote
+  for a poll that is no longer on screen is dropped.
+- One vote per connection for each poll, and the page remembers the vote, but
+  votes are anonymous and not authenticated: someone who reconnects on
+  purpose can vote again. Use polls for a show of hands, not decisions.
+- WebSocket connections must come from the page's own origin; at most 256 at
+  once, dropped after 5 seconds without a handshake; messages over 256 bytes
+  are ignored. The page has a Content-Security-Policy allowing only its own
+  WebSocket.
+
 ## Local state
 
 Ostendo writes `.ostendo-state.<name>.json` next to each presentation (slide,
-theme, and font adjustments) and nothing else outside the export path you
-choose.
+theme, and font adjustments), `.ostendo-rehearsals.<name>.json` (time per
+slide of timed runs, for `--report`), and nothing else outside the export and
+recording paths you choose.
 
 ## Parsing limits
 

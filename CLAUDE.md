@@ -60,12 +60,14 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | `markdown/inline.rs`, `tables.rs` | Inline formatting, table cells |
 | `presentation/slide.rs` | `Slide`, `Block`, column and content types |
 | `presentation/state.rs` | Per-presentation state saved between runs (JSON) |
+| `presentation/rehearsal.rs` | Time per slide of timed runs; the `--report` table |
 | `render/engine/mod.rs` | `Presenter` struct, `run()` |
 | `render/engine/input.rs` | Event loop, tick rate, key bindings, `:` commands |
 | `render/engine/navigation.rs`, `state.rs` | Slide changes; themes, toggles, persistence |
 | `render/engine/actions.rs` | Code execution, hot reload, remote control |
 | `render/engine/frame.rs` | Slide layout and cache, alignment, image placement |
-| `render/engine/blocks.rs`, `columns.rs` | Element builders: titles, bullets, code, tables, quotes, columns |
+| `render/engine/blocks.rs`, `columns.rs` | Element builders: titles, bullets, code, tables, quotes, callouts, columns |
+| `render/engine/figures.rs` | Charts and QR codes |
 | `render/engine/compose.rs`, `chrome.rs` | Full-screen assembly; status bar, notes, help, overview |
 | `render/engine/display.rs` | Row-diffing terminal writer, image placement |
 | `render/engine/images.rs` | Image loading, rendering cache, GIF frames, Mermaid |
@@ -73,22 +75,26 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | `render/engine/ansi.rs` | Program output (SGR) -> styled spans |
 | `render/engine/font.rs` | Per-slide font size (Kitty RC, Ghostty) |
 | `render/engine/terminal.rs` | Terminal setup and restore, panic hook |
+| `render/engine/record.rs` | `--record` asciicast writer |
+| `render/engine/tests.rs` | Behavior tests on a headless `Presenter` (`presenter()`, `screen()`) |
 | `render/animation/` | Transitions, entrances, loop animations |
 | `render/text.rs` | `StyledLine` / `StyledSpan`, width-aware wrap and truncate |
 | `terminal/protocols.rs` | Image protocol and font capability detection |
 | `terminal/ascii_art.rs` | Half-block and character-art image rendering |
 | `image_util/` | Image decoding, protocol encoders, Kitty protocol, Mermaid CLI |
 | `diagram/` | Diagram DSL and renderers (box, bracket, vertical) |
+| `math.rs` | TeX math to Unicode: one line inline, stacked for display |
 | `code/` | Execution sandbox, PTY, syntax highlighting |
-| `export/` | HTML and PDF export |
-| `remote/` | WebSocket remote control server and embedded UI |
+| `export/` | HTML, PDF, and PowerPoint (`pptx.rs`, with a small `zip.rs`) export |
+| `remote/` | WebSocket remote control server and page; `audience.rs` + `vote.html`: poll voting |
 | `theme/` | Theme registry, schema, color math; themes are `themes/*.yaml`, embedded by `build.rs` |
 | `watch.rs` | Hot-reload file watcher |
 
 ## Invariants
 
-- Never write to the terminal outside `Display::present` (and the font change
-  that precedes it in the same synchronized update).
+- Never write to the terminal outside `Presenter::render` (the font change,
+  the OSC 11 background, and `Display::present`); `--validate --size` builds
+  a headless `Presenter` and must print nothing but its report.
 - Anything that changes how a slide lays out must be in `FrameKey` or call
   `invalidate()`, which bumps `generation`; otherwise a stale cached frame is
   shown.
@@ -112,7 +118,9 @@ Help and overview are Screens built by `chrome.rs` and go through the same
   user markdown, the terminal, the filesystem, or the network.
 - Prefer `pub(crate)`.
 - Tests live in `#[cfg(test)] mod tests` next to the code (parser tests in
-  `markdown/parser_tests.rs`).
+  `markdown/parser_tests.rs`). Presenter behavior (keys, build steps, what
+  lands on screen) is tested through `render/engine/tests.rs`, which drives a
+  real `Presenter` without a terminal.
 - Themes must pass WCAG 2.0: text:bg >= 4.5, accent:bg >= 3.0.
 
 ## Where to look
@@ -120,7 +128,8 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | Task | Start here |
 |---|---|
 | New directive | `markdown/parser.rs` (`slide_directive`) -> `presentation/slide.rs` -> `docs/PRESENTATION_FORMAT.md` |
-| New slide element | `presentation/slide.rs` (`Block`) -> `render/engine/blocks.rs` -> `frame.rs` -> `export/html.rs` |
+| New slide element | `presentation/slide.rs` (`Block`) -> `markdown/parser.rs` -> `render/engine/blocks.rs` or `figures.rs` -> `frame.rs` -> `export/html.rs` -> `navigation.rs` (`searchable`) |
+| Build steps / pauses | `presentation/slide.rs` (`Step`) -> `frame.rs` (`conceal`) -> `navigation.rs` |
 | New animation | `render/animation/` |
 | Key binding | `render/engine/input.rs` (`normal_key`) -> help in `chrome.rs` -> README |
 | Status bar | `render/engine/chrome.rs` (`status_bar`) |

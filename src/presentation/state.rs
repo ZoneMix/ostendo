@@ -16,6 +16,10 @@ struct PresentationState {
     slide_font_offsets: HashMap<usize, i8>,
     theme_slug: Option<String>,
     image_scale_offset: i8,
+    /// Speaker notes beside the slide rather than below it.
+    notes_side: bool,
+    /// Share of the screen the notes panel takes, in percent (0: default).
+    notes_share: u8,
 }
 
 pub struct StateManager {
@@ -63,6 +67,16 @@ impl StateManager {
 
     pub fn set_theme_slug(&mut self, slug: &str) {
         self.state.theme_slug = Some(slug.to_string());
+    }
+
+    /// (beside the slide, percent of the screen); 0 percent means unset.
+    pub fn notes_layout(&self) -> (bool, u8) {
+        (self.state.notes_side, self.state.notes_share)
+    }
+
+    pub fn set_notes_layout(&mut self, side: bool, share: u8) {
+        self.state.notes_side = side;
+        self.state.notes_share = share;
     }
 
     pub fn get_image_scale_offset(&self) -> i8 {

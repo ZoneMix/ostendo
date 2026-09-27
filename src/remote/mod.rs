@@ -1,14 +1,29 @@
 //! WebSocket remote control protocol.
 //!
 //! - **Inbound**: clients send `{"type": "command", "action": "<name>", ...}`,
-//!   which [`server`] turns into a [`RemoteCommand`] for the presenter.
+//!   which [`server`] turns into a [`RemoteCommand`] for the presenter;
+//!   audience pages send only votes, through [`audience`].
 //! - **Outbound**: the presenter broadcasts [`StateMessage`] JSON to every
-//!   connected client whenever the presentation state changes.
+//!   connected client whenever the presentation state changes, and the poll
+//!   on screen to audience pages.
 
+pub mod audience;
 mod html;
 pub mod server;
 
+use std::sync::mpsc::Receiver;
+
 use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, watch};
+
+/// The presenter's ends of the servers it runs.
+pub struct Links {
+    pub commands: Receiver<RemoteCommand>,
+    /// State JSON for `--remote` pages.
+    pub states: Option<broadcast::Sender<String>>,
+    /// Poll JSON for `--audience` pages, and the address they open.
+    pub audience: Option<(watch::Sender<String>, String)>,
+}
 
 /// Wire format of an inbound message; `slide` and `theme` carry the argument
 /// of `goto` and `set_theme`.
@@ -37,6 +52,7 @@ impl RemoteCommandMsg {
             "scroll_up" => RemoteCommand::ScrollUp,
             "scroll_down" => RemoteCommand::ScrollDown,
             "toggle_fullscreen" => RemoteCommand::ToggleFullscreen,
+            "toggle_blank" => RemoteCommand::ToggleBlank,
             "toggle_notes" => RemoteCommand::ToggleNotes,
             "toggle_theme_name" => RemoteCommand::ToggleThemeName,
             "toggle_sections" => RemoteCommand::ToggleSections,
@@ -69,6 +85,8 @@ pub enum RemoteCommand {
     ScrollUp,
     ScrollDown,
     ToggleFullscreen,
+    /// Blank the screen, or bring it back.
+    ToggleBlank,
     ToggleNotes,
     ToggleThemeName,
     ToggleSections,
@@ -86,6 +104,11 @@ pub enum RemoteCommand {
     TimerReset,
     /// Theme slug.
     SetTheme(String),
+    /// From an audience page: an option of the poll with this id.
+    Vote {
+        poll: String,
+        option: usize,
+    },
 }
 
 /// Presentation state broadcast to remote clients; the field names are the
@@ -101,10 +124,16 @@ pub struct StateMessage {
     pub slide_title: String,
     pub notes: String,
     pub timer: String,
+    /// `3:10 behind` or `over time` when the deck sets a duration.
+    pub pace: String,
+    /// What the next press of → shows: remaining build steps, or the next
+    /// slide's title.
+    pub up_next: String,
     /// Plain-text lines of the current slide for the preview pane.
     pub slide_content: Vec<String>,
     pub section: String,
     pub is_fullscreen: bool,
+    pub is_blank: bool,
     pub is_notes_visible: bool,
     pub is_dark_mode: bool,
     pub show_theme_name: bool,
@@ -139,9 +168,12 @@ mod tests {
             slide_title: "Test Title".to_string(),
             notes: "Some notes".to_string(),
             timer: "00:05:30".to_string(),
+            pace: String::new(),
+            up_next: "Summary".to_string(),
             slide_content: vec!["Bullet 1".to_string(), "Bullet 2".to_string()],
             section: "intro".to_string(),
             is_fullscreen: false,
+            is_blank: false,
             is_notes_visible: true,
             is_dark_mode: true,
             show_theme_name: false,

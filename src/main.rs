@@ -5,6 +5,7 @@ mod diagram;
 mod export;
 mod image_util;
 mod markdown;
+mod math;
 mod presentation;
 mod remote;
 mod render;
@@ -79,9 +80,31 @@ struct Cli {
     #[arg(long, requires = "remote")]
     remote_exec: bool,
 
+    /// Serve a voting page for poll slides to everyone on the network
+    #[arg(long)]
+    audience: bool,
+
+    /// Port for --audience
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value_t = 8766,
+        requires = "audience"
+    )]
+    audience_port: u16,
+
     /// Check the presentation and exit (non-zero status on problems)
     #[arg(long)]
     validate: bool,
+
+    /// With --validate: also report slides that need scrolling in a terminal
+    /// this size (e.g. 100x30)
+    #[arg(long, value_name = "COLSxROWS", value_parser = parse_size, requires = "validate")]
+    size: Option<(u16, u16)>,
+
+    /// Record the talk as an asciicast file (replay with asciinema)
+    #[arg(long, value_name = "FILE")]
+    record: Option<PathBuf>,
 
     /// Write the presentation to a file and exit
     #[arg(long, value_enum, value_name = "FORMAT")]
@@ -102,6 +125,10 @@ struct Cli {
     /// Print slide titles, one per line, and exit
     #[arg(long)]
     export_titles: bool,
+
+    /// Print time per slide from past runs (timer on, a minute or longer) and exit
+    #[arg(long)]
+    report: bool,
 
     /// Print the image protocol this terminal supports and exit
     #[arg(long)]
@@ -124,6 +151,7 @@ enum ImageMode {
 enum ExportFormat {
     Html,
     Pdf,
+    Pptx,
 }
 
 fn main() -> std::process::ExitCode {
@@ -173,8 +201,24 @@ fn run(cli: Cli) -> Result<()> {
         }
         return Ok(());
     }
+    if cli.report {
+        let titles: Vec<String> = slides.iter().map(|s| s.title.clone()).collect();
+        let runs = presentation::rehearsal::load(&file);
+        print!(
+            "{}",
+            presentation::rehearsal::report(&titles, &runs, meta.duration)
+        );
+        return Ok(());
+    }
     if cli.validate {
-        return validate(&file, &meta, &slides, &registry, cli.theme.as_deref());
+        return validate(
+            &file,
+            &meta,
+            &slides,
+            &registry,
+            cli.theme.as_deref(),
+            cli.size,
+        );
     }
 
     let requested = cli.theme.clone().or_else(|| meta.theme.clone());
@@ -184,6 +228,7 @@ fn run(cli: Cli) -> Result<()> {
         let ext = match format {
             ExportFormat::Html => "html",
             ExportFormat::Pdf => "pdf",
+            ExportFormat::Pptx => "pptx",
         };
         let output = cli
             .output
@@ -201,13 +246,18 @@ fn run(cli: Cli) -> Result<()> {
         match format {
             ExportFormat::Html => export::html::export_html(&slides, &theme, title, &output)?,
             ExportFormat::Pdf => export::pdf::export_pdf(&slides, &theme, title, &output)?,
+            ExportFormat::Pptx => {
+                export::pptx::export_pptx(&slides, &meta, &theme, title, &output)?
+            }
         }
         println!("Wrote {}", output.display());
         return Ok(());
     }
 
-    let remote = if cli.remote {
-        let channels = remote::server::start(cli.remote_port, cli.remote_token.clone())?;
+    let (commands, remote_rx) = std::sync::mpsc::channel();
+    let states = if cli.remote {
+        let states =
+            remote::server::start(cli.remote_port, cli.remote_token.clone(), commands.clone())?;
         let fragment = cli
             .remote_token
             .as_ref()
@@ -217,10 +267,22 @@ fn run(cli: Cli) -> Result<()> {
             "Remote control: http://127.0.0.1:{}{fragment}",
             cli.remote_port
         );
-        Some(channels)
+        Some(states)
     } else {
         None
     };
+    let audience = if cli.audience {
+        let (polls, url) = remote::audience::start(cli.audience_port, commands)?;
+        eprintln!("Audience voting: {url}");
+        Some((polls, url))
+    } else {
+        None
+    };
+    let remote = (states.is_some() || audience.is_some()).then(|| remote::Links {
+        commands: remote_rx,
+        states,
+        audience,
+    });
 
     render::Presenter::new(render::PresenterConfig {
         slides,
@@ -230,6 +292,8 @@ fn run(cli: Cli) -> Result<()> {
         start: cli.slide.map(|n| n as usize - 1),
         presentation_path: file,
         image_protocol: match cli.image_mode {
+            // A recording shows images only as text cells.
+            ImageMode::Auto if cli.record.is_some() => Some(ImageProtocol::Blocks),
             ImageMode::Auto => None,
             ImageMode::Kitty => Some(ImageProtocol::Kitty),
             ImageMode::Iterm => Some(ImageProtocol::Iterm2),
@@ -243,8 +307,24 @@ fn run(cli: Cli) -> Result<()> {
         fullscreen: cli.fullscreen,
         timer: cli.timer,
         scale: cli.scale,
+        record: cli.record,
     })
     .run()
+}
+
+fn parse_size(value: &str) -> Result<(u16, u16), String> {
+    let (cols, rows) = value
+        .split_once(['x', 'X'])
+        .ok_or("expected COLSxROWS, like 100x30")?;
+    let cols: u16 = cols
+        .trim()
+        .parse()
+        .map_err(|_| "columns must be a number")?;
+    let rows: u16 = rows.trim().parse().map_err(|_| "rows must be a number")?;
+    if cols < 20 || rows < 5 {
+        return Err("the smallest size is 20x5".into());
+    }
+    Ok((cols, rows))
 }
 
 fn resolve_theme(registry: &ThemeRegistry, slug: Option<&str>) -> Result<Theme> {
@@ -283,6 +363,7 @@ fn validate(
     slides: &[Slide],
     registry: &ThemeRegistry,
     cli_theme: Option<&str>,
+    size: Option<(u16, u16)>,
 ) -> Result<()> {
     let mut issues = Vec::new();
     let theme = cli_theme.or(meta.theme.as_deref()).unwrap_or(DEFAULT_THEME);
@@ -320,6 +401,45 @@ fn validate(
         }
         if slide.title.is_empty() && slide.subtitle.is_empty() && slide.blocks.is_empty() {
             issues.push(format!("slide {n}: empty"));
+        }
+        for data in &slide.qr_codes {
+            if qrcode::QrCode::new(data.as_bytes()).is_err() {
+                issues.push(format!("slide {n}: too much text for a QR code"));
+            }
+        }
+        if let Some(name) = &slide.missing_template {
+            issues.push(format!("slide {n}: unknown template '{name}'"));
+        }
+        if slide.charts.iter().any(|c| c.bars.is_empty()) {
+            issues.push(format!("slide {n}: chart without `label: value` lines"));
+        }
+        if slide.polls.iter().any(|p| p.options.len() < 2) {
+            issues.push(format!("slide {n}: poll with fewer than two options"));
+        }
+    }
+    if let Some((cols, rows)) = size {
+        let theme =
+            resolve_theme(registry, Some(theme)).or_else(|_| resolve_theme(registry, None))?;
+        let config = render::PresenterConfig {
+            slides: slides.to_vec(),
+            meta: meta.clone(),
+            theme,
+            theme_explicit: true,
+            start: Some(0),
+            presentation_path: file.to_path_buf(),
+            image_protocol: Some(ImageProtocol::Blocks),
+            remote: None,
+            allow_exec: true,
+            allow_remote_exec: false,
+            fullscreen: false,
+            timer: false,
+            scale: 80,
+            record: None,
+        };
+        for (n, extra) in render::overflowing_slides(config, cols, rows) {
+            issues.push(format!(
+                "slide {n}: {extra} row(s) too tall for {cols}x{rows} (it will scroll)"
+            ));
         }
     }
     println!("{}: {} slides, theme {theme}", file.display(), slides.len());

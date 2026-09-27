@@ -27,13 +27,26 @@ impl TerminalGuard {
                 previous(info);
             }));
         });
-        terminal::enable_raw_mode()?;
-        let mut out = io::stdout();
-        execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;
-        out.write_all(MOUSE_ON.as_bytes())?;
-        out.flush()?;
+        take_over()?;
         Ok(Self)
     }
+}
+
+fn take_over() -> io::Result<()> {
+    terminal::enable_raw_mode()?;
+    let mut out = io::stdout();
+    execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;
+    out.write_all(MOUSE_ON.as_bytes())?;
+    out.flush()
+}
+
+/// Gives the terminal to another program (an editor) for the duration of
+/// `run`, then takes it back.
+pub(crate) fn hand_over<T>(run: impl FnOnce() -> T) -> T {
+    restore();
+    let result = run();
+    let _ = take_over();
+    result
 }
 
 impl Drop for TerminalGuard {
@@ -62,12 +75,11 @@ fn restore() {
     let _ = terminal::disable_raw_mode();
 }
 
-/// Sets the terminal's default background (OSC 11) so cells the terminal
-/// creates itself, e.g. after a font-size change, match the theme.
-pub(crate) fn set_background(color: Color) {
-    if let Color::Rgb { r, g, b } = color {
-        let mut out = io::stdout();
-        let _ = write!(out, "\x1b]11;rgb:{r:02x}/{g:02x}/{b:02x}\x1b\\");
-        let _ = out.flush();
+/// OSC 11: the terminal's default background, so cells the terminal creates
+/// itself (after a font-size change, say) match the theme.
+pub(crate) fn background_escape(color: Color) -> String {
+    match color {
+        Color::Rgb { r, g, b } => format!("\x1b]11;rgb:{r:02x}/{g:02x}/{b:02x}\x1b\\"),
+        _ => String::new(),
     }
 }

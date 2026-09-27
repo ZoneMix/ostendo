@@ -1,5 +1,5 @@
 use super::*;
-use crate::presentation::{FooterAlign, TableAlign};
+use crate::presentation::{Callout, FooterAlign, Step, TableAlign};
 use crate::render::animation::{EntranceAnimation, LoopAnimation, TransitionType};
 
 fn parse(src: &str) -> Vec<Slide> {
@@ -16,6 +16,11 @@ fn slides_split_on_separator_lines() {
     assert_eq!(titles(&slides), ["Slide 1", "Slide 2", "Slide 3"]);
     let numbers: Vec<usize> = slides.iter().map(|s| s.number).collect();
     assert_eq!(numbers, [1, 2, 3]);
+    let lines: Vec<usize> = slides.iter().map(|s| s.line).collect();
+    assert_eq!(lines, [1, 5, 7], "source line where each slide starts");
+    let after_front_matter = parse("---\ntitle: T\n---\n# One\n---\n# Two");
+    let lines: Vec<usize> = after_front_matter.iter().map(|s| s.line).collect();
+    assert_eq!(lines, [4, 6]);
 }
 
 #[test]
@@ -272,7 +277,7 @@ fn image_directives_and_path_resolution() {
 #[test]
 fn columns_route_content_by_column() {
     let slides = parse(
-        "# T\n<!-- column_layout: [2, 1] -->\n<!-- column_separator: none -->\n<!-- column: 0 -->\n**Header**\n- a\n**Later**\n- b\n<!-- column: 1 -->\n![i](c.png)\n<!-- image_scale: 40 -->\n<!-- column: 5 -->\n- out of range\n<!-- reset_layout -->\n- after",
+        "# T\n<!-- column_layout: [2, 1] -->\n<!-- column_separator: none -->\n<!-- column: 0 -->\n**Header**\n- a\n**Later**\n- b\n<!-- column: 1 -->\n![i](c.png)\n<!-- image_scale: 40 -->\n| k | v |\n|---|---|\n| a | 1 |\n<!-- column: 1 -->\n> [!TIP]\n> inside\n<!-- column: 5 -->\n- out of range\n<!-- reset_layout -->\n- after\n> outside",
     );
     let s = &slides[0];
     let cols = s.columns.as_ref().unwrap();
@@ -291,9 +296,22 @@ fn columns_route_content_by_column() {
     );
     let img = cols.contents[1].image.as_ref().unwrap();
     assert_eq!((img.path.as_str(), img.scale), ("c.png", Some(40)));
+    assert_eq!(
+        cols.contents[1].items,
+        [
+            ColumnItem::Image,
+            ColumnItem::Table(0),
+            ColumnItem::Quote(0)
+        ],
+        "a table or quote ends with its column"
+    );
+    assert_eq!(cols.contents[1].tables[0].rows, [["a", "1"]]);
     let slide_bullets: Vec<&str> = s.bullets.iter().map(|b| b.text.as_str()).collect();
     assert_eq!(slide_bullets, ["out of range", "after"]);
-    assert_eq!(s.blocks, [Block::Columns, Block::Bullets(0)]);
+    assert_eq!(
+        s.blocks,
+        [Block::Columns, Block::Bullets(0), Block::Quote(0)]
+    );
 }
 
 #[test]
@@ -337,4 +355,180 @@ fn bundled_decks_parse_into_titled_slides() {
     assert!(slides.iter().any(|s| !s.tables.is_empty()));
     assert!(slides.iter().any(|s| !s.block_quotes.is_empty()));
     assert!(slides.iter().any(|s| s.columns.is_some()));
+}
+
+#[test]
+fn pauses_and_highlight_groups_become_build_steps() {
+    let s = &parse(concat!(
+        "# T\n<!-- pause -->\nIntro\n- a\n<!-- pause -->\n- b\n",
+        "```rust {label: \"x.rs\"} {1,3-4|all}\nfn main() {}\n```\n",
+        "```py {label: \"bad\"} {2-1}\npass\n```",
+    ))[0];
+    assert_eq!(
+        s.subtitle, "",
+        "text after a pause is not the always-visible subtitle"
+    );
+    assert_eq!(
+        s.blocks,
+        [
+            Block::Paragraph(0),
+            Block::Bullets(0),
+            Block::Bullets(1),
+            Block::Code(0),
+            Block::Code(1)
+        ]
+    );
+    assert_eq!(
+        s.steps,
+        [
+            Step::Pause(0),
+            Step::Pause(2),
+            Step::Highlight { code: 0, group: 1 }
+        ]
+    );
+    assert_eq!(s.code_blocks[0].label, "x.rs");
+    assert_eq!(s.code_blocks[0].highlights, [vec![(1, 1), (3, 4)], vec![]]);
+    assert!(s.code_blocks[1].highlights.is_empty());
+}
+
+#[test]
+fn github_alerts_become_callouts() {
+    let s = &parse("# T\n> [!WARNING]\n> Careful\n\n> [!tip] Pro move\n> x\n\n> [!bogus]\n> y")[0];
+    let callouts: Vec<_> = s.block_quotes.iter().map(|q| q.callout.clone()).collect();
+    assert_eq!(
+        callouts,
+        [
+            Some((Callout::Warning, "Warning".to_string())),
+            Some((Callout::Tip, "Pro move".to_string())),
+            None,
+        ]
+    );
+    assert_eq!(s.block_quotes[0].lines, ["Careful"]);
+    assert_eq!(s.block_quotes[2].lines, ["[!bogus]", "y"]);
+}
+
+#[test]
+fn charts_polls_and_qr_codes_parse() {
+    let s = &parse(concat!(
+        "# T\n```chart style=columns\n# Latency\np50: 12 ms\np99: 1,250 ms\nno value here\n```\n",
+        "```qr\n  https://x.dev  \n```\n",
+        "```poll\n# Tabs or spaces?\n- Tabs\n\n2. Spaces\nBoth\n```",
+    ))[0];
+    assert_eq!(s.blocks, [Block::Chart(0), Block::Qr(0), Block::Poll(0)]);
+    assert_eq!(
+        s.polls[0],
+        Poll {
+            question: "Tabs or spaces?".into(),
+            options: vec!["Tabs".into(), "Spaces".into(), "Both".into()],
+        }
+    );
+    let chart = &s.charts[0];
+    assert!(chart.columns);
+    assert_eq!(chart.title.as_deref(), Some("Latency"));
+    assert_eq!(
+        chart.bars,
+        [
+            ("p50".to_string(), 12.0, "12 ms".to_string()),
+            ("p99".to_string(), 1250.0, "1,250 ms".to_string()),
+        ]
+    );
+    assert_eq!(s.qr_codes, ["https://x.dev"]);
+}
+
+#[test]
+fn front_matter_duration_is_minutes_unless_marked() {
+    let minutes = |v: &str| {
+        let src = format!("---\nduration: {v}\n---\n# One");
+        let (meta, _) = parse_presentation(&src, None).unwrap();
+        meta.duration.map(|d| d.as_secs_f64() / 60.0)
+    };
+    for (value, expected) in [
+        ("20", Some(20.0)),
+        ("45m", Some(45.0)),
+        ("45 min", Some(45.0)),
+        ("1h", Some(60.0)),
+        ("1h30m", Some(90.0)),
+        ("0", None),
+        ("soon", None),
+        ("1e30", None),
+    ] {
+        assert_eq!(minutes(value), expected, "{value}");
+    }
+}
+
+#[test]
+fn pauses_inside_columns_tag_the_items_after_them() {
+    let s = &parse(concat!(
+        "# T\n<!-- column_layout: [1, 1] -->\n<!-- column: 0 -->\n- a\n<!-- pause -->\n- b\n",
+        "<!-- column: 1 -->\n<!-- pause -->\n- c\n<!-- reset_layout -->\nAfter",
+    ))[0];
+    let cols = s.columns.as_ref().unwrap();
+    assert_eq!(cols.contents[0].pauses_before, [0, 1]);
+    assert_eq!(cols.contents[1].pauses_before, [2]);
+    assert_eq!(s.steps, [Step::Pause(1), Step::Pause(1)]);
+    assert_eq!(s.blocks, [Block::Columns, Block::Paragraph(0)]);
+}
+
+#[test]
+fn templates_apply_their_directives_where_they_appear() {
+    let src = concat!(
+        "---\ntitle: T\ntemplates:\n  divider:\n    align: center\n    title_decoration: box\n",
+        "  title:\n    align: top\n---\n",
+        "# A\n<!-- template: divider -->\n<!-- title_decoration: underline -->\n---\n",
+        "# B\n<!-- template: closing -->\n---\n",
+        "# C\n<!-- template: title -->\n---\n",
+        "# D\n<!-- template: nope -->",
+    );
+    let (meta, s) = parse_presentation(src, None).unwrap();
+    assert_eq!(meta.title, "T");
+    assert_eq!(
+        meta.default_alignment, None,
+        "template lines are not deck settings"
+    );
+    assert_eq!(s[0].alignment, Some(SlideAlignment::Center));
+    assert_eq!(
+        s[0].title_decoration.as_deref(),
+        Some("underline"),
+        "later directives win"
+    );
+    assert!(s[1].ascii_title && s[1].alignment == Some(SlideAlignment::Center));
+    assert_eq!(s[1].loop_animations[0].1.as_deref(), Some("figlet"));
+    assert_eq!(
+        (s[2].alignment, s[2].ascii_title),
+        (Some(SlideAlignment::Top), false),
+        "a deck template replaces the built-in of the same name"
+    );
+    assert_eq!(s[3].missing_template.as_deref(), Some("nope"));
+}
+
+#[test]
+fn display_math_blocks_and_math_in_titles() {
+    let s = &parse(concat!(
+        "# Area $\\pi r^2$\n",
+        "$$\n\\frac{a}{b}\n$$\n",
+        "$$ E = mc^2 $$\n",
+        "$$ x\n+ y $$\n",
+        "$$x$$ inline stays a paragraph\n",
+        "<!-- column_layout: [1, 1] -->\n<!-- column: 1 -->\n$$ \\alpha $$",
+    ))[0];
+    assert_eq!(s.title, "Area πr²");
+    assert_eq!(
+        s.blocks,
+        [
+            Block::Math(0),
+            Block::Math(1),
+            Block::Math(2),
+            Block::Paragraph(0),
+            Block::Columns
+        ]
+    );
+    assert_eq!(s.math, ["\\frac{a}{b}", "E = mc^2", "x\n+ y"]);
+    let column = &s.columns.as_ref().unwrap().contents[1];
+    assert_eq!(
+        (column.items.as_slice(), column.math.as_slice()),
+        (
+            [ColumnItem::Math(0)].as_slice(),
+            ["\\alpha".to_string()].as_slice()
+        )
+    );
 }

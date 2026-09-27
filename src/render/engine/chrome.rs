@@ -1,6 +1,8 @@
 //! Screen furniture around the slide: status bar, notes, prompts, help, overview.
 
 use crossterm::style::Color;
+
+use crate::presentation::Callout;
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::text::{ellipsize, wrap_text, StyledLine, StyledSpan};
@@ -49,6 +51,9 @@ fn two_tone(line: StyledLine, fill: usize, fill_bg: Color, bg: Color) -> StyledL
     out
 }
 
+/// How long a notice replaces the deck title in the status bar.
+const NOTICE_TIME: std::time::Duration = std::time::Duration::from_millis(2500);
+
 impl Presenter {
     /// Bottom bar: deck title and section on the left; theme, timer, and slide
     /// number on the right. Its background fills left-to-right with progress.
@@ -60,7 +65,35 @@ impl Presenter {
             right.push(StyledSpan::new(&format!("{}   ", self.theme.name)).with_fg(pal.muted));
         }
         if let Some(t) = self.timer_text() {
-            right.push(StyledSpan::new(&format!("◷ {t}   ")).with_fg(pal.text));
+            let (mut text, mut color) = (format!("◷ {t}"), pal.text);
+            if let (Some((behind, over)), Some(total)) = (self.pace(), self.meta.duration) {
+                text.push_str(&format!(
+                    " / {}",
+                    crate::presentation::rehearsal::clock(total)
+                ));
+                if over {
+                    color = pal.callout(Callout::Caution);
+                } else if let Some(late) = behind {
+                    text.push_str(&format!(
+                        " · {} behind",
+                        crate::presentation::rehearsal::clock(late)
+                    ));
+                    color = pal.callout(Callout::Warning);
+                }
+            }
+            right.push(StyledSpan::new(&format!("{text}   ")).with_fg(color));
+        }
+        let steps = slide.steps.len();
+        if steps > 0 {
+            // One dot per build state; a count once dots would crowd the bar.
+            if steps < 8 {
+                right.push(StyledSpan::new(&"●".repeat(self.step + 1)).with_fg(pal.accent));
+                right.push(StyledSpan::new(&"○".repeat(steps - self.step)).with_fg(pal.muted));
+                right.push(StyledSpan::new("   "));
+            } else {
+                let text = format!("step {} / {}   ", self.step, steps);
+                right.push(StyledSpan::new(&text).with_fg(pal.muted));
+            }
         }
         right.push(
             StyledSpan::new(&format!("{}", self.current + 1))
@@ -85,9 +118,16 @@ impl Presenter {
         if !slide.section.is_empty() {
             left_text.push_str(&format!("  ·  {}", slide.section));
         }
+        let mut left_fg = pal.text;
+        if let Some((text, at)) = &self.notice {
+            if at.elapsed() < NOTICE_TIME {
+                left_text = format!(" {text}");
+                left_fg = pal.accent;
+            }
+        }
         let left = ellipsize(&left_text, width.saturating_sub(right_w + 2));
         let gap = width.saturating_sub(left.width() + right_w);
-        let mut spans = vec![StyledSpan::new(&left).with_fg(pal.text)];
+        let mut spans = vec![StyledSpan::new(&left).with_fg(left_fg)];
         spans.push(StyledSpan::new(&" ".repeat(gap)));
         spans.extend(right);
 
@@ -102,6 +142,10 @@ impl Presenter {
         let pal = &self.palette;
         let (label, hint) = match self.mode {
             super::Mode::Goto => ("go to slide ", format!("   1–{}", self.slides.len())),
+            super::Mode::Search if self.input.is_empty() && !self.last_search.is_empty() => {
+                ("/", format!("   Enter: next “{}”", self.last_search))
+            }
+            super::Mode::Search => ("/", String::new()),
             _ => (":", String::new()),
         };
         let mut line = padded(
@@ -179,21 +223,26 @@ impl Presenter {
             (
                 "Navigate",
                 vec![
-                    ("→ l space", "next slide"),
-                    ("← h ⌫", "previous slide"),
+                    ("→ l space", "next step or slide"),
+                    ("← h ⌫", "previous step or slide"),
                     ("J K", "next / previous section"),
                     ("g", "go to slide number"),
                     ("Home End", "first / last slide"),
                     ("j k ↓ ↑", "scroll (Ctrl+D / Ctrl+U: half page)"),
-                    ("o", "overview"),
+                    ("o", "overview (J / K there move a slide)"),
                 ],
             ),
             (
                 "Present",
                 vec![
                     ("n", "speaker notes (N / P scroll)"),
+                    ("m  { }", "notes beside / below the slide, smaller / larger"),
+                    ("/", "search slides (Enter again: next)"),
+                    ("b", "blank the screen"),
+                    ("e", "edit this slide in $EDITOR"),
                     ("f", "fullscreen"),
                     ("Ctrl+E", "run code block (again: next block)"),
+                    ("1-9", "add a vote to a poll option"),
                     ("t", "start / reset timer"),
                 ],
             ),
@@ -218,29 +267,50 @@ impl Presenter {
             ),
         ];
         let key_w = 15;
-        let mut body: Vec<StyledLine> = Vec::new();
-        for (name, keys) in &sections {
-            if !body.is_empty() {
-                body.push(StyledLine::empty());
-            }
-            body.push(padded(
-                vec![StyledSpan::new(name).with_fg(pal.accent).bold()],
-                0,
-            ));
-            let extra = if *name == "Look" { font } else { None };
-            for (k, what) in keys.iter().copied().chain(extra) {
+        let list = |sections: &[(&str, Vec<(&str, &str)>)]| {
+            let mut body: Vec<StyledLine> = Vec::new();
+            for (name, keys) in sections {
+                if !body.is_empty() {
+                    body.push(StyledLine::empty());
+                }
                 body.push(padded(
-                    vec![
-                        StyledSpan::new(&format!("  {k:<key_w$}"))
-                            .with_fg(pal.text)
-                            .bold(),
-                        StyledSpan::new(what).with_fg(pal.muted),
-                    ],
+                    vec![StyledSpan::new(name).with_fg(pal.accent).bold()],
                     0,
                 ));
+                let extra = if *name == "Look" { font } else { None };
+                for (k, what) in keys.iter().copied().chain(extra) {
+                    body.push(padded(
+                        vec![
+                            StyledSpan::new(&format!("  {k:<key_w$}"))
+                                .with_fg(pal.text)
+                                .bold(),
+                            StyledSpan::new(what).with_fg(pal.muted),
+                        ],
+                        0,
+                    ));
+                }
             }
+            body
+        };
+        let widest = |lines: &[StyledLine]| lines.iter().map(StyledLine::width).max().unwrap_or(0);
+        let mut body = list(&sections);
+        // Too tall for the screen: the first two sections beside the rest.
+        let (left, right) = (list(&sections[..2]), list(&sections[2..]));
+        let left_w = widest(&left) + 4;
+        if body.len() + 6 > height && left_w + widest(&right) + 8 <= width {
+            body = (0..left.len().max(right.len()))
+                .map(|i| {
+                    let mut row = padded(
+                        left.get(i).map(|l| l.spans.clone()).unwrap_or_default(),
+                        left_w,
+                    );
+                    row.spans
+                        .extend(right.get(i).into_iter().flat_map(|r| r.spans.clone()));
+                    row
+                })
+                .collect();
         }
-        let card_w = body.iter().map(StyledLine::width).max().unwrap_or(0);
+        let card_w = widest(&body);
         let footer = format!(
             "{} · {:?} images · press any key",
             self.theme.slug,
@@ -316,7 +386,7 @@ impl Presenter {
             }
         }
         let hint = format!(
-            " ←↑↓→ move   Enter open   Esc back{}",
+            " ←↑↓→ select   J K reorder   Enter open   Esc back{}",
             if pages > 1 {
                 format!("   page {} / {pages}", page + 1)
             } else {
