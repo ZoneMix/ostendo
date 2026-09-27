@@ -157,10 +157,19 @@ fn searchable(slide: &Slide) -> String {
             .iter()
             .flat_map(|c| c.bars.iter().map(|b| b.0.as_str())),
     );
+    parts.extend(
+        slide
+            .polls
+            .iter()
+            .flat_map(|p| std::iter::once(&p.question).chain(&p.options))
+            .map(String::as_str),
+    );
+    parts.extend(slide.math.iter().map(String::as_str));
     for c in columns {
         parts.extend(c.text_lines.iter().map(String::as_str));
         parts.extend(c.bullets.iter().map(|b| b.text.as_str()));
         parts.extend(c.code_blocks.iter().map(|b| b.code.as_str()));
+        parts.extend(c.math.iter().map(String::as_str));
         parts.extend(
             c.quotes
                 .iter()

@@ -567,5 +567,7 @@ mod tests {
         assert!(go.ends_with("2 · 66%"), "{go}");
         p.next_slide();
         assert!(audience(&mut p).get("id").is_none());
+        press(&mut p, "/best language\n");
+        assert_eq!(p.current, 0, "search finds poll questions");
     }
 }
