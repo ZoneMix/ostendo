@@ -67,11 +67,17 @@ impl Presenter {
         if let Some(t) = self.timer_text() {
             let (mut text, mut color) = (format!("◷ {t}"), pal.text);
             if let (Some((behind, over)), Some(total)) = (self.pace(), self.meta.duration) {
-                text.push_str(&format!(" / {}", super::state::clock(total)));
+                text.push_str(&format!(
+                    " / {}",
+                    crate::presentation::rehearsal::clock(total)
+                ));
                 if over {
                     color = pal.callout(Callout::Caution);
                 } else if let Some(late) = behind {
-                    text.push_str(&format!(" · {} behind", super::state::clock(late)));
+                    text.push_str(&format!(
+                        " · {} behind",
+                        crate::presentation::rehearsal::clock(late)
+                    ));
                     color = pal.callout(Callout::Warning);
                 }
             }

@@ -32,7 +32,7 @@ duration: 25m
 | `transition` | Default transition for every slide: `fade`, `slide`, `dissolve` |
 | `align` | Default alignment: `top`, `center`, `vcenter`, `hcenter` |
 | `templates` | Named directive sets for `<!-- template: name -->` (see [Templates](#templates)) |
-| `duration` | Planned length (`20`, `25m`, `1h30m`; minutes by default). The timer then shows the target and how far behind pace you are, and turns red past it |
+| `duration` | Planned length (`20`, `25m`, `1h30m`; minutes by default). The timer then shows the target and how far behind pace you are, and turns red past it; `--report` compares each slide with an even share of it |
 
 ## Slide content
 

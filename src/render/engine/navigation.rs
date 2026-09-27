@@ -15,7 +15,8 @@ impl Presenter {
         if idx == self.current {
             return;
         }
-        self.timer_start.get_or_insert_with(Instant::now);
+        self.clock_slide();
+        self.start_timer();
         let old = std::mem::take(&mut self.last_lines);
         self.current = idx;
         self.step = 0;
@@ -49,7 +50,7 @@ impl Presenter {
     /// The next build step of this slide, or the next slide.
     pub(crate) fn next_slide(&mut self) {
         if self.step < self.slides[self.current].steps.len() {
-            self.timer_start.get_or_insert_with(Instant::now);
+            self.start_timer();
             self.step += 1;
         } else {
             self.goto_slide(self.current + 1);

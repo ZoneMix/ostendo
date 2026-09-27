@@ -92,7 +92,10 @@ impl Presenter {
             .zip(&self.slides)
             .position(|(new, old)| new.fingerprint != old.fingerprint)
             .or_else(|| (slides.len() > self.slides.len()).then_some(self.slides.len()));
+        self.clock_slide();
         self.slides = slides;
+        self.slide_time
+            .resize(self.slides.len(), std::time::Duration::ZERO);
         let last = self.slides.len() - 1;
         match edited {
             Some(i) => {
@@ -143,6 +146,10 @@ impl Presenter {
             c if c == first + 1 => first,
             c => c,
         };
+        self.clock_slide();
+        if first + 1 < self.slide_time.len() {
+            self.slide_time.swap(first, first + 1);
+        }
         self.reload();
         self.current = current.min(self.slides.len() - 1);
         self.step = self.slides[self.current].steps.len();
@@ -189,10 +196,8 @@ impl Presenter {
             RemoteCommand::FontDown if self.font.available() => self.font.adjust(self.current, -1),
             RemoteCommand::FontReset if self.font.available() => self.font.reset(self.current),
             RemoteCommand::ExecuteCode if self.allow_remote_exec => self.execute_code(),
-            RemoteCommand::TimerStart => {
-                self.timer_start.get_or_insert_with(std::time::Instant::now);
-            }
-            RemoteCommand::TimerReset => self.timer_start = None,
+            RemoteCommand::TimerStart => self.start_timer(),
+            RemoteCommand::TimerReset => self.reset_timer(),
             RemoteCommand::SetTheme(slug) => {
                 if let Some(theme) = self.registry.get(&slug) {
                     self.set_base_theme(theme);
@@ -251,7 +256,9 @@ impl Presenter {
             timer: self.timer_text().unwrap_or_default(),
             pace: match self.pace() {
                 Some((_, true)) => "over time".to_string(),
-                Some((Some(late), false)) => format!("{} behind", super::state::clock(late)),
+                Some((Some(late), false)) => {
+                    format!("{} behind", crate::presentation::rehearsal::clock(late))
+                }
                 _ => String::new(),
             },
             up_next: match slide.steps.len() - self.step.min(slide.steps.len()) {

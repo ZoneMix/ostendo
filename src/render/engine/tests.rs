@@ -263,3 +263,37 @@ fn notes_move_beside_the_slide_and_resize() {
     p.resize_notes(10);
     assert!(width_of(&mut p) > before);
 }
+
+#[test]
+fn time_per_slide_is_recorded_for_the_pacing_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("talk.md");
+    let mut p = presenter_at("# One\n---\n# Two\n---\n# Three", path.clone());
+    let ago = |secs| {
+        Instant::now()
+            .checked_sub(Duration::from_secs(secs))
+            .unwrap()
+    };
+    p.goto_slide(1); // Starts the timer.
+    p.entered = ago(40);
+    p.goto_slide(0);
+    p.entered = ago(30);
+    p.goto_slide(1);
+    p.entered = ago(20);
+    p.record_rehearsal();
+
+    let runs = crate::presentation::rehearsal::load(&path);
+    let secs: Vec<(&str, u64)> = runs[0]
+        .slides
+        .iter()
+        .map(|(t, s)| (t.as_str(), s.round() as u64))
+        .collect();
+    assert_eq!(secs, [("One", 30), ("Two", 60), ("Three", 0)]);
+
+    // A reset starts over, and a run under a minute is not a rehearsal.
+    p.entered = ago(50);
+    p.toggle_timer();
+    p.toggle_timer();
+    p.record_rehearsal();
+    assert_eq!(crate::presentation::rehearsal::load(&path).len(), 1);
+}

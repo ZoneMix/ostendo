@@ -125,7 +125,16 @@ demonstrated in `presentations/examples/test_presentation.md`.
 | `q` / `Ctrl+C` | Quit |
 
 Ostendo remembers the slide, theme, and font adjustments for each
-presentation.
+presentation. Every run of a minute or more with the timer going is kept, and
+`ostendo talk.md --report` shows where the time went:
+
+```text
+3 run(s); latest 2026-09-27, 21:40 of 20:00 planned
+
+    #  Slide                  Latest  Average     Plan
+    1  Why terminals             1:05     0:50     2:00
+    2  The render loop           6:20     4:10     2:00  +4:20
+```
 
 ## Command line
 
@@ -147,6 +156,7 @@ presentation.
 | `--record <file>` | Record the talk as an asciicast ([asciinema](https://asciinema.org)) |
 | `--export html\|pdf` | Export and exit (`-o` sets the path) |
 | `--list-themes` | List themes with swatches |
+| `--report` | Time per slide in past runs against the average and the plan |
 | `--count`, `--export-titles` | Print the slide count or titles |
 | `--detect-protocol` | Print the image protocol for this terminal |
 

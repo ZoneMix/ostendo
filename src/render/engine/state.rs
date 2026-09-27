@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::presentation::rehearsal::{self, clock};
 use crate::theme::Theme;
 
 use super::palette::Palette;
@@ -95,10 +96,52 @@ impl Presenter {
 
     /// Starts the timer, or resets it when already running.
     pub(crate) fn toggle_timer(&mut self) {
-        self.timer_start = match self.timer_start {
-            Some(_) => None,
-            None => Some(Instant::now()),
-        };
+        match self.timer_start {
+            Some(_) => self.reset_timer(),
+            None => self.start_timer(),
+        }
+    }
+
+    pub(crate) fn start_timer(&mut self) {
+        if self.timer_start.is_none() {
+            self.timer_start = Some(Instant::now());
+            self.entered = Instant::now();
+        }
+    }
+
+    /// Stops the timer; a reset starts the rehearsal over, so the time per
+    /// slide goes too.
+    pub(crate) fn reset_timer(&mut self) {
+        self.timer_start = None;
+        self.slide_time.fill(Duration::ZERO);
+    }
+
+    /// Credits the time since the last call to the current slide while the
+    /// timer runs; called before the current slide changes.
+    pub(crate) fn clock_slide(&mut self) {
+        let now = Instant::now();
+        if self.timer_start.is_some() {
+            if let Some(time) = self.slide_time.get_mut(self.current) {
+                *time += now - self.entered;
+            }
+        }
+        self.entered = now;
+    }
+
+    /// Saves this run's time per slide for `--report`; runs under a minute
+    /// are a quick look, not a rehearsal.
+    pub(crate) fn record_rehearsal(&mut self) {
+        self.clock_slide();
+        if self.slide_time.iter().sum::<Duration>() < Duration::from_secs(60) {
+            return;
+        }
+        let slides = self
+            .slides
+            .iter()
+            .zip(&self.slide_time)
+            .map(|(s, t)| (s.title.clone(), t.as_secs_f64()))
+            .collect();
+        let _ = rehearsal::record(&self.presentation_path, rehearsal::Run::new(slides));
     }
 
     /// Elapsed time as `m:ss` or `h:mm:ss`, when the timer is running.
@@ -127,16 +170,5 @@ impl Presenter {
         self.state
             .set_notes_layout(self.notes_side, self.notes_share);
         let _ = self.state.save();
-    }
-}
-
-/// `m:ss`, or `h:mm:ss` past an hour.
-pub(crate) fn clock(d: Duration) -> String {
-    let secs = d.as_secs();
-    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
     }
 }

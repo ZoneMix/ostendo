@@ -1,6 +1,7 @@
 /target
 .DS_Store
 .ostendo-state.*.json
+.ostendo-rehearsals.*.json
 tests/integration/results/
 
 # Private presentations

@@ -26,7 +26,7 @@ mod types;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::style::Color;
@@ -75,6 +75,10 @@ pub struct Presenter {
     show_theme_name: bool,
     show_sections: bool,
     timer_start: Option<Instant>,
+    /// Timer time spent on each slide, for the pacing report.
+    slide_time: Vec<Duration>,
+    /// When the current slide's time was last credited.
+    entered: Instant,
     /// `b`: nothing on screen until the next key.
     blank: bool,
     /// A short message shown in the status bar, and when it was posted.
@@ -180,6 +184,8 @@ impl Presenter {
             show_theme_name: false,
             show_sections: false,
             timer_start: cfg.timer.then(Instant::now),
+            slide_time: vec![Duration::ZERO; cfg.slides.len()],
+            entered: Instant::now(),
             blank: false,
             notice: None,
             last_search: String::new(),
@@ -239,6 +245,7 @@ impl Presenter {
         let result = self.event_loop();
         self.font.restore(&mut std::io::stdout());
         self.save_state();
+        self.record_rehearsal();
         result
     }
 }

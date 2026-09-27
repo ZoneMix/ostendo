@@ -60,6 +60,7 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | `markdown/inline.rs`, `tables.rs` | Inline formatting, table cells |
 | `presentation/slide.rs` | `Slide`, `Block`, column and content types |
 | `presentation/state.rs` | Per-presentation state saved between runs (JSON) |
+| `presentation/rehearsal.rs` | Time per slide of timed runs; the `--report` table |
 | `render/engine/mod.rs` | `Presenter` struct, `run()` |
 | `render/engine/input.rs` | Event loop, tick rate, key bindings, `:` commands |
 | `render/engine/navigation.rs`, `state.rs` | Slide changes; themes, toggles, persistence |

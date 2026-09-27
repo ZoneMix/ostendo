@@ -56,8 +56,9 @@ temporary directory with a 20 second limit.
 ## Local state
 
 Ostendo writes `.ostendo-state.<name>.json` next to each presentation (slide,
-theme, and font adjustments) and nothing else outside the export path you
-choose.
+theme, and font adjustments), `.ostendo-rehearsals.<name>.json` (time per
+slide of timed runs, for `--report`), and nothing else outside the export and
+recording paths you choose.
 
 ## Parsing limits
 

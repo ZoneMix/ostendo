@@ -327,9 +327,9 @@ impl Presenter {
             "notes" => self.toggle_notes(),
             "timer" => {
                 if arg.trim() == "reset" {
-                    self.timer_start = None;
+                    self.reset_timer();
                 } else {
-                    self.timer_start.get_or_insert_with(Instant::now);
+                    self.start_timer();
                 }
             }
             "overview" => self.open_overview(),

@@ -112,6 +112,10 @@ struct Cli {
     #[arg(long)]
     export_titles: bool,
 
+    /// Print time per slide from past runs (timer on, a minute or longer) and exit
+    #[arg(long)]
+    report: bool,
+
     /// Print the image protocol this terminal supports and exit
     #[arg(long)]
     detect_protocol: bool,
@@ -180,6 +184,15 @@ fn run(cli: Cli) -> Result<()> {
                 }
             );
         }
+        return Ok(());
+    }
+    if cli.report {
+        let titles: Vec<String> = slides.iter().map(|s| s.title.clone()).collect();
+        let runs = presentation::rehearsal::load(&file);
+        print!(
+            "{}",
+            presentation::rehearsal::report(&titles, &runs, meta.duration)
+        );
         return Ok(());
     }
     if cli.validate {
