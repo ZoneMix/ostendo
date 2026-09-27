@@ -1,5 +1,5 @@
 use super::*;
-use crate::presentation::{FooterAlign, Step, TableAlign};
+use crate::presentation::{Callout, FooterAlign, Step, TableAlign};
 use crate::render::animation::{EntranceAnimation, LoopAnimation, TransitionType};
 
 fn parse(src: &str) -> Vec<Slide> {
@@ -371,4 +371,20 @@ fn pauses_and_highlight_groups_become_build_steps() {
     assert_eq!(s.code_blocks[0].label, "x.rs");
     assert_eq!(s.code_blocks[0].highlights, [vec![(1, 1), (3, 4)], vec![]]);
     assert!(s.code_blocks[1].highlights.is_empty());
+}
+
+#[test]
+fn github_alerts_become_callouts() {
+    let s = &parse("# T\n> [!WARNING]\n> Careful\n\n> [!tip] Pro move\n> x\n\n> [!bogus]\n> y")[0];
+    let callouts: Vec<_> = s.block_quotes.iter().map(|q| q.callout.clone()).collect();
+    assert_eq!(
+        callouts,
+        [
+            Some((Callout::Warning, "Warning".to_string())),
+            Some((Callout::Tip, "Pro move".to_string())),
+            None,
+        ]
+    );
+    assert_eq!(s.block_quotes[0].lines, ["Careful"]);
+    assert_eq!(s.block_quotes[2].lines, ["[!bogus]", "y"]);
 }

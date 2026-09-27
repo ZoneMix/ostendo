@@ -7,7 +7,7 @@ use regex::Regex;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::code::highlight::Highlighter;
-use crate::presentation::{BlockQuote, Bullet, CodeBlock, ExecMode, Table, TableAlign};
+use crate::presentation::{BlockQuote, Bullet, Callout, CodeBlock, ExecMode, Table, TableAlign};
 use crate::render::text::{ellipsize, wrap_text, LineContentType, StyledLine, StyledSpan};
 
 use crate::theme::colors::interpolate_color;
@@ -39,7 +39,12 @@ impl Ctx<'_> {
     }
 
     fn inline(&self, text: &str) -> Vec<StyledSpan> {
-        crate::markdown::parser::parse_inline_formatting(text, self.pal.text, self.pal.code_bg)
+        let mut spans =
+            crate::markdown::parser::parse_inline_formatting(text, self.pal.text, self.pal.code_bg);
+        for span in spans.iter_mut().filter(|s| s.link.is_some()) {
+            span.fg = Some(self.pal.accent);
+        }
+        spans
     }
 }
 
@@ -192,16 +197,26 @@ pub(crate) fn bullets(ctx: &Ctx, items: &[Bullet], spaced: bool) -> Vec<StyledLi
             out.push(StyledLine::empty());
         }
         let indent = "  ".repeat(b.depth.min(3));
-        let (marker, text) = match ORDERED_MARKER.find(&b.text) {
-            Some(m) => (m.as_str().trim_end().to_string(), &b.text[m.end()..]),
-            None => (["•", "◦", "▪"][b.depth.min(2)].to_string(), b.text.as_str()),
+        let (marker, text, color) = match (b.task(), ORDERED_MARKER.find(&b.text)) {
+            (Some((true, text)), _) => ("✓".to_string(), text, ctx.pal.accent),
+            (Some((false, text)), _) => ("☐".to_string(), text, ctx.pal.muted),
+            (None, Some(m)) => (
+                m.as_str().trim_end().to_string(),
+                &b.text[m.end()..],
+                ctx.pal.accent,
+            ),
+            (None, None) => (
+                ["•", "◦", "▪"][b.depth.min(2)].to_string(),
+                b.text.as_str(),
+                ctx.pal.accent,
+            ),
         };
         let hang = [StyledSpan::new(
             &" ".repeat(indent.len() + marker.width() + 1),
         )];
         let first = [
             StyledSpan::new(&indent),
-            StyledSpan::new(&marker).with_fg(ctx.pal.accent).bold(),
+            StyledSpan::new(&marker).with_fg(color).bold(),
             StyledSpan::new(" "),
         ];
         out.extend(rich_text(ctx, text, &first, &hang));
@@ -468,6 +483,9 @@ pub(crate) fn exec_output(ctx: &Ctx, output: &str, running: bool) -> Vec<StyledL
 }
 
 pub(crate) fn quote(ctx: &Ctx, q: &BlockQuote) -> Vec<StyledLine> {
+    if let Some((kind, heading)) = &q.callout {
+        return callout(ctx, &q.lines, *kind, heading);
+    }
     let bar = [StyledSpan::new("┃ ").with_fg(ctx.pal.accent)];
     q.lines
         .iter()
@@ -483,6 +501,38 @@ pub(crate) fn quote(ctx: &Ctx, q: &BlockQuote) -> Vec<StyledLine> {
             lines
         })
         .collect()
+}
+
+/// A GitHub-style alert: a tinted panel with a colored bar and heading.
+fn callout(ctx: &Ctx, body: &[String], kind: Callout, heading: &str) -> Vec<StyledLine> {
+    let color = ctx.pal.callout(kind);
+    let tint = interpolate_color(ctx.pal.bg, color, 0.1);
+    // Text-presentation symbols only: emoji-capable ones (ℹ ⚠) are drawn two
+    // cells wide by some terminals, which would break the panel's edge.
+    let icon = match kind {
+        Callout::Note => "◉",
+        Callout::Tip => "✦",
+        Callout::Important => "◆",
+        Callout::Warning => "▲",
+        Callout::Caution => "⬣",
+    };
+    let bar = [StyledSpan::new("▌ ").with_fg(color)];
+    let heading = ellipsize(&format!("{icon} {heading}"), ctx.width.saturating_sub(2));
+    let mut out = vec![line(vec![
+        bar[0].clone(),
+        StyledSpan::new(&heading).with_fg(color).bold(),
+    ])];
+    for text in body {
+        out.extend(rich_text(ctx, text, &bar, &bar));
+    }
+    for l in &mut out {
+        let free = ctx.width.saturating_sub(l.width());
+        l.push(StyledSpan::new(&" ".repeat(free)));
+        for s in &mut l.spans {
+            s.bg.get_or_insert(tint);
+        }
+    }
+    out
 }
 
 /// A table with rounded borders; columns shrink and cells wrap to fit.
@@ -667,7 +717,7 @@ mod tests {
                     alignments: vec![TableAlign::Center],
                     rows: vec![vec![long.clone(), "".into(), "café".into()]],
                 };
-                let blocks: [Vec<StyledLine>; 6] = [
+                let blocks: [Vec<StyledLine>; 7] = [
                     paragraph(ctx, &long),
                     bullets(
                         ctx,
@@ -684,6 +734,14 @@ mod tests {
                         ctx,
                         &BlockQuote {
                             lines: vec![long.clone()],
+                            callout: None,
+                        },
+                    ),
+                    quote(
+                        ctx,
+                        &BlockQuote {
+                            lines: vec![long.clone()],
+                            callout: Some((Callout::Warning, long.clone())),
                         },
                     ),
                 ];

@@ -79,6 +79,20 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
     opacity: 0.8;
     margin: 0.5em 0;
 }}
+.slide .callout {{
+    --tone: #4493f8;
+    border-left: 4px solid var(--tone);
+    background: color-mix(in srgb, var(--tone) 10%, transparent);
+    padding: 0.4em 1em;
+    margin: 0.5em 0;
+}}
+.slide .callout.tip {{ --tone: #3fb950; }}
+.slide .callout.important {{ --tone: #ab7df8; }}
+.slide .callout.warning {{ --tone: #d29922; }}
+.slide .callout.caution {{ --tone: #f85149; }}
+.slide .callout .heading {{ color: var(--tone); font-weight: bold; margin: 0.2em 0; }}
+.slide a {{ color: var(--accent); }}
+.slide li.task {{ list-style: none; }}
 .slide table {{
     border-collapse: collapse;
     margin: 0.5em 0;
@@ -204,11 +218,23 @@ fn slide_body(slide: &Slide) -> String {
             Block::Code(i) => out.push_str(&code(&slide.code_blocks[i])),
             Block::Table(i) => out.push_str(&table(&slide.tables[i])),
             Block::Quote(i) => {
-                out.push_str("<blockquote>\n");
-                for line in &slide.block_quotes[i].lines {
+                let q = &slide.block_quotes[i];
+                match &q.callout {
+                    Some((kind, heading)) => {
+                        let kind = kind.name().to_lowercase();
+                        let _ = writeln!(out, "<div class=\"callout {kind}\">");
+                        let _ = writeln!(out, "<p class=\"heading\">{}</p>", escape_html(heading));
+                    }
+                    None => out.push_str("<blockquote>\n"),
+                }
+                for line in &q.lines {
                     let _ = writeln!(out, "<p>{}</p>", inline(line));
                 }
-                out.push_str("</blockquote>\n");
+                out.push_str(if q.callout.is_some() {
+                    "</div>\n"
+                } else {
+                    "</blockquote>\n"
+                });
             }
             Block::Diagram(i) => {
                 let d = &slide.diagram_blocks[i];
@@ -280,14 +306,26 @@ fn column(content: &ColumnContent) -> String {
 }
 
 fn list(items: &[Bullet]) -> String {
-    let ordered = regex::Regex::new(r"^\d+[.)]\s").ok();
     let mut out = String::from("<ul>\n");
     for b in items {
         let mut class = format!("d{}", b.depth.min(2));
-        if ordered.as_ref().is_some_and(|re| re.is_match(&b.text)) {
-            class.push_str(" ordered");
-        }
-        let _ = writeln!(out, "<li class=\"{class}\">{}</li>", inline(&b.text));
+        let body = match b.task() {
+            Some((done, text)) => {
+                class.push_str(" task");
+                let checked = if done { " checked" } else { "" };
+                format!(
+                    "<input type=\"checkbox\" disabled{checked}> {}",
+                    inline(text)
+                )
+            }
+            None => {
+                if b.is_ordered() {
+                    class.push_str(" ordered");
+                }
+                inline(&b.text)
+            }
+        };
+        let _ = writeln!(out, "<li class=\"{class}\">{body}</li>");
     }
     out.push_str("</ul>\n");
     out
@@ -351,7 +389,15 @@ fn inline(text: &str) -> String {
                     html = format!("<{tag}>{html}</{tag}>");
                 }
             }
-            html
+            // Only web and mail links: a `javascript:` target must not become live.
+            match span.link.as_deref().filter(|url| {
+                ["http://", "https://", "mailto:"]
+                    .iter()
+                    .any(|scheme| url.starts_with(scheme))
+            }) {
+                Some(url) => format!("<a href=\"{}\">{html}</a>", escape_html(url)),
+                None => html,
+            }
         })
         .collect()
 }
@@ -425,7 +471,10 @@ mod tests {
 
     #[test]
     fn bodies_follow_source_order_with_inline_markup() {
-        let md = "# T\n\nIntro **bold** and `code`\n\n> quote\n\n- item ~~old~~\n";
+        let md = concat!(
+            "# T\n\nIntro **bold** and `code`, [docs](https://x.dev), [x](javascript:alert(1))\n\n",
+            "> quote\n\n> [!WARNING]\n> Careful\n\n- item ~~old~~\n- [x] shipped\n",
+        );
         let (_, slides) = crate::markdown::parse_presentation(md, None).unwrap();
         let html = export(&slides);
         let at = |needle: &str| {
@@ -435,6 +484,13 @@ mod tests {
         assert!(at("<strong>bold</strong>") < at("<blockquote>"));
         assert!(at("<blockquote>") < at("<del>old</del>"));
         assert!(html.contains("<code>code</code>") && html.contains("<title>Deck</title>"));
+        assert!(html.contains("<a href=\"https://x.dev\">docs</a>"));
+        assert!(
+            !html.contains("javascript:alert(1)\""),
+            "script link made live"
+        );
+        assert!(at("<div class=\"callout warning\">") < at("Careful"));
+        assert!(html.contains("<input type=\"checkbox\" disabled checked> shipped"));
     }
 
     #[test]

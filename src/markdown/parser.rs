@@ -5,9 +5,10 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::presentation::{
-    Block, BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnItem, ColumnLayout,
-    DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode,
-    MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Step, Table,
+    Block, BlockQuote, Bullet, Callout, CodeBlock, ColumnContent, ColumnImage, ColumnItem,
+    ColumnLayout, DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition,
+    ImageRenderMode, MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Step,
+    Table,
 };
 use crate::render::animation::{
     parse_entrance, parse_loop_animation, parse_transition, LoopAnimation,
@@ -135,6 +136,27 @@ fn parse_bool(value: &str) -> Option<bool> {
         "false" => Some(false),
         _ => None,
     }
+}
+
+/// `[!TIP]` or `[!tip] Custom heading` opening a quote.
+fn callout_marker(line: &str) -> Option<(Callout, String)> {
+    let rest = line.trim().strip_prefix("[!")?;
+    let (kind, heading) = rest.split_once(']')?;
+    let kind = match kind.to_ascii_lowercase().as_str() {
+        "note" => Callout::Note,
+        "tip" => Callout::Tip,
+        "important" => Callout::Important,
+        "warning" => Callout::Warning,
+        "caution" => Callout::Caution,
+        _ => return None,
+    };
+    let heading = heading.trim();
+    let heading = if heading.is_empty() {
+        kind.name()
+    } else {
+        heading
+    };
+    Some((kind, heading.to_string()))
 }
 
 /// `Path::join` keeps absolute paths as they are.
@@ -642,10 +664,14 @@ impl<'a> SlideBuilder<'a> {
 
     fn flush_quote(&mut self) {
         if !self.quote.is_empty() {
-            let lines = std::mem::take(&mut self.quote);
+            let mut lines = std::mem::take(&mut self.quote);
+            let callout = callout_marker(&lines[0]);
+            if callout.is_some() {
+                lines.remove(0);
+            }
             let s = &mut self.slide;
             s.blocks.push(Block::Quote(s.block_quotes.len()));
-            s.block_quotes.push(BlockQuote { lines });
+            s.block_quotes.push(BlockQuote { lines, callout });
         }
     }
 

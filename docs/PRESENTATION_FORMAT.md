@@ -40,14 +40,21 @@ Elements render in the order they appear in the file.
 - The first line of text right after the title is the subtitle; later text
   becomes paragraphs (consecutive lines join into one paragraph).
 - Lists: `-`, `*`, or `+` followed by a space; indent two spaces per level
-  (three levels). Ordered items (`1.`, `2)`) keep their numbers.
+  (three levels). Ordered items (`1.`, `2)`) keep their numbers, and task
+  items (`- [ ] todo`, `- [x] done`) show a box or a check.
 - Inline: `**bold**`, `*italic*` or `_italic_`, `` `code` ``, `~~strike~~`,
   nestable (`**bold with `code`**`). Underscores inside words (`snake_case`)
   stay literal.
+- Links: `[text](https://…)`, `<https://…>`, and bare `https://…` URLs are
+  underlined and clickable in terminals with hyperlink support (Kitty,
+  Ghostty, iTerm2, WezTerm, GNOME Terminal, Windows Terminal).
 - Tables: standard pipe tables; `:---`, `:---:`, `---:` set alignment. Wide
   tables shrink their columns and wrap cells.
 - Block quotes: `> text`. A line starting with `— ` or `-- ` is shown as an
   attribution.
+- Callouts (GitHub alert syntax): a quote whose first line is `[!NOTE]`,
+  `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]` becomes a colored
+  panel. Text after the marker replaces the heading: `> [!TIP] Pro move`.
 - Images: `![alt](path)`, relative to the markdown file. The alt text becomes a
   caption in text-based rendering.
 - Code fences, diagrams, and Mermaid blocks (below).

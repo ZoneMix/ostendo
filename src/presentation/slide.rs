@@ -178,6 +178,30 @@ pub struct Bullet {
     pub depth: usize,
 }
 
+impl Bullet {
+    /// A task-list item (`[ ] text`, `[x] text`): whether it is done, and its text.
+    pub fn task(&self) -> Option<(bool, &str)> {
+        let rest = self.text.strip_prefix('[')?;
+        let (mark, text) = rest.split_once("] ")?;
+        match mark {
+            " " => Some((false, text)),
+            "x" | "X" => Some((true, text)),
+            _ => None,
+        }
+    }
+
+    /// Whether the item came from an ordered list (`1.` or `1)`).
+    pub fn is_ordered(&self) -> bool {
+        self.text.split_once(' ').is_some_and(|(marker, _)| {
+            marker.len() >= 2
+                && marker.ends_with(['.', ')'])
+                && marker[..marker.len() - 1]
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
     /// Language from the fence info string.
@@ -250,8 +274,33 @@ pub enum TableAlign {
 
 #[derive(Debug, Clone)]
 pub struct BlockQuote {
-    /// Lines with the leading `> ` removed.
+    /// Lines with the leading `> ` removed (and the `[!KIND]` line of a callout).
     pub lines: Vec<String>,
+    /// `> [!NOTE]` (GitHub alert syntax) with the heading to show: the text
+    /// after the marker, or the kind's name.
+    pub callout: Option<(Callout, String)>,
+}
+
+/// GitHub alert kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Callout {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+impl Callout {
+    pub fn name(self) -> &'static str {
+        match self {
+            Callout::Note => "Note",
+            Callout::Tip => "Tip",
+            Callout::Important => "Important",
+            Callout::Warning => "Warning",
+            Callout::Caution => "Caution",
+        }
+    }
 }
 
 /// A ```` ```mermaid ```` block, rendered to an image by the external `mmdc` CLI.
