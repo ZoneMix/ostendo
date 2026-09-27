@@ -106,6 +106,7 @@ pub(crate) fn columns(
                     }
                     ColumnItem::Table(t) => blocks::table(&full, &content.tables[t]),
                     ColumnItem::Quote(q) => blocks::quote(&full, &content.quotes[q]),
+                    ColumnItem::Math(m) => blocks::math(&full, &content.math[m]),
                     ColumnItem::Image => match &content.image {
                         Some(img) => {
                             let scale = usize::from(img.scale.unwrap_or(100).clamp(10, 100));

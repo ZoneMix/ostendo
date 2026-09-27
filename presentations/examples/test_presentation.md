@@ -1573,6 +1573,26 @@ VERIFY: A phone camera opens the GitHub URL, on dark and light themes
 
 ---
 
+# Math: $e^{i\pi} + 1 = 0$
+<!-- section: features -->
+<!-- font_size: 3 -->
+
+For $a \neq 0$, $ax^2 + bx + c = 0$ when
+
+$$
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+$$
+
+$$ \sum_{k=1}^{n} k = \frac{n(n+1)}{2} \qquad A = \begin{pmatrix} a & b \\ c & d \end{pmatrix} $$
+
+<!-- notes:
+FEATURE: Inline and display math
+EXPECTED: Title and text read e^(iπ) + 1 = 0, a ≠ 0, ax² + bx + c = 0 in italics; the formula stacks over a fraction bar with a radical over b² − 4ac; the sum has n above and k=1 below; the matrix has tall parentheses
+VERIFY: HTML export shows the same layout, centered
+-->
+
+---
+
 # Search and Blank
 <!-- section: features -->
 <!-- font_size: 4 -->

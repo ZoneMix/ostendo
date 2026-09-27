@@ -492,3 +492,35 @@ fn templates_apply_their_directives_where_they_appear() {
     );
     assert_eq!(s[3].missing_template.as_deref(), Some("nope"));
 }
+
+#[test]
+fn display_math_blocks_and_math_in_titles() {
+    let s = &parse(concat!(
+        "# Area $\\pi r^2$\n",
+        "$$\n\\frac{a}{b}\n$$\n",
+        "$$ E = mc^2 $$\n",
+        "$$ x\n+ y $$\n",
+        "$$x$$ inline stays a paragraph\n",
+        "<!-- column_layout: [1, 1] -->\n<!-- column: 1 -->\n$$ \\alpha $$",
+    ))[0];
+    assert_eq!(s.title, "Area πr²");
+    assert_eq!(
+        s.blocks,
+        [
+            Block::Math(0),
+            Block::Math(1),
+            Block::Math(2),
+            Block::Paragraph(0),
+            Block::Columns
+        ]
+    );
+    assert_eq!(s.math, ["\\frac{a}{b}", "E = mc^2", "x\n+ y"]);
+    let column = &s.columns.as_ref().unwrap().contents[1];
+    assert_eq!(
+        (column.items.as_slice(), column.math.as_slice()),
+        (
+            [ColumnItem::Math(0)].as_slice(),
+            ["\\alpha".to_string()].as_slice()
+        )
+    );
+}

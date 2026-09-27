@@ -39,4 +39,9 @@ directives are silently ignored.
   miss; one per slide.
 - Numbers that compare belong in a ```` ```chart ````; end a talk with a
   ```` ```qr ```` of the slides' URL.
-- Set `duration:` in the front matter so the timer shows the pace.
+- Formulas go in `$$ … $$` on their own lines; keep inline `$…$` short, as
+  it stays on one line (`a/b`, `x²`).
+- Start title and section slides with `<!-- template: title -->` /
+  `<!-- template: section -->` instead of repeating their directives.
+- Set `duration:` in the front matter so the timer shows the pace, and check
+  `ostendo deck.md --report` after rehearsals.

@@ -20,8 +20,9 @@ notes without leaving the shell.
   hidden parts keep their space, so nothing jumps.
 - **Images everywhere.** Kitty, Ghostty, iTerm2, WezTerm, and Sixel graphics,
   true-color half blocks in every other terminal, and animated GIFs.
-- **Charts, diagrams, and QR codes.** Bar and column charts, arrow-syntax
-  diagrams, Mermaid (with `mmdc`), and scannable QR codes.
+- **Math, charts, diagrams, and QR codes.** TeX math in Unicode, with stacked
+  fractions, roots, and matrices; bar and column charts; arrow-syntax
+  diagrams; Mermaid (with `mmdc`); and scannable QR codes.
 - **Layout.** Columns, tables, callouts, FIGlet titles, footers, and per-slide
   themes, centered and wrapped to any terminal; images shrink so a slide fits.
 - **Animations.** Fade, slide, and dissolve transitions; typewriter and fade-in

@@ -5,6 +5,7 @@ mod diagram;
 mod export;
 mod image_util;
 mod markdown;
+mod math;
 mod presentation;
 mod remote;
 mod render;

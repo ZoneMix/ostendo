@@ -106,6 +106,8 @@ pub struct Slide {
     pub charts: Vec<Chart>,
     /// Text of each ```` ```qr ```` block, drawn as a QR code.
     pub qr_codes: Vec<String>,
+    /// TeX of each `$$…$$` block.
+    pub math: Vec<String>,
     /// What each press of → does before the deck moves on, in source order.
     pub steps: Vec<Step>,
     /// Hash of the slide's source lines; hot reload uses it to find the slide
@@ -137,6 +139,7 @@ pub enum Block {
     Mermaid(usize),
     Chart(usize),
     Qr(usize),
+    Math(usize),
     Image,
     Columns,
 }
@@ -184,6 +187,8 @@ pub struct ColumnContent {
     pub text_lines: Vec<String>,
     pub tables: Vec<Table>,
     pub quotes: Vec<BlockQuote>,
+    /// TeX of each `$$…$$` block.
+    pub math: Vec<String>,
     /// The column's content in source order.
     pub items: Vec<ColumnItem>,
     /// For each of `items`, how many `<!-- pause -->`s come before it on the
@@ -199,6 +204,7 @@ pub enum ColumnItem {
     Code(usize),
     Table(usize),
     Quote(usize),
+    Math(usize),
     Image,
 }
 

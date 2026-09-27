@@ -189,6 +189,7 @@ impl Presenter {
                     );
                 }
                 Block::Chart(i) => lines = super::figures::chart(&ctx, &slide.charts[i]),
+                Block::Math(i) => lines = blocks::math(&ctx, &slide.math[i]),
                 Block::Qr(i) => match super::figures::qr(&slide.qr_codes[i], text_width) {
                     Some(code) => place(&mut out, Rendered::Lines(code), text_width),
                     None => {

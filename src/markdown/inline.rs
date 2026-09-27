@@ -5,6 +5,10 @@
 //! whitespace or control characters stays literal text, so it can never reach the terminal
 //! inside an escape sequence.
 //!
+//! Math is `$…$` or `$$…$$` (pandoc's rules: `$` opens before non-whitespace and closes after it,
+//! and a closing `$` followed by a letter or digit is not one, so `$5 or $10` and `$HOME/$USER`
+//! stay text); `\$` is a literal dollar sign.
+//!
 //! Emphasis follows simplified CommonMark flanking rules: a delimiter run opens only before
 //! non-whitespace and closes only after non-whitespace, `_` never opens or closes inside a
 //! word, and a run without a matching closer is literal text. Styles nest, so code inside bold
@@ -70,6 +74,33 @@ pub fn parse_inline_formatting(text: &str, base_fg: Color, code_bg: Color) -> Ve
     inline.spans
 }
 
+/// `text` with its math as Unicode and the rest as written, for plain-text
+/// places such as titles.
+pub fn with_math(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let scan = Inline {
+        chars: &chars,
+        fg: Color::Reset,
+        code_bg: Color::Reset,
+        spans: Vec::new(),
+    };
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match scan.math_at(i, chars.len()) {
+            Some((tex, next)) => {
+                out += &crate::math::inline(&chars[tex].iter().collect::<String>());
+                i = next;
+            }
+            None => {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 fn is_delimiter(ch: char) -> bool {
     matches!(ch, '*' | '_' | '~' | '`')
 }
@@ -80,6 +111,22 @@ impl Inline<'_> {
         let mut i = start;
         while i < end {
             let ch = self.chars[i];
+            if ch == '\\' && i + 1 < end && self.chars[i + 1] == '$' {
+                plain.push('$');
+                i += 2;
+                continue;
+            }
+            if let Some((tex, next)) = self.math_at(i, end) {
+                self.push(std::mem::take(&mut plain), style, false);
+                let tex: String = self.chars[tex].iter().collect();
+                let math = Style {
+                    italic: true,
+                    ..style
+                };
+                self.push(crate::math::inline(&tex), math, false);
+                i = next;
+                continue;
+            }
             if let Some((text, target, next)) = self.link_at(i, end, style) {
                 self.push(std::mem::take(&mut plain), style, false);
                 let linked = Style {
@@ -224,6 +271,31 @@ impl Inline<'_> {
         }
     }
 
+    /// Math starting at `i`: the TeX's character range and the index after it.
+    fn math_at(&self, i: usize, end: usize) -> Option<(std::ops::Range<usize>, usize)> {
+        let chars = &self.chars[..end];
+        if chars[i] != '$' {
+            return None;
+        }
+        if chars.get(i + 1) == Some(&'$') {
+            let close =
+                (i + 3..end.saturating_sub(1)).find(|&j| chars[j] == '$' && chars[j + 1] == '$')?;
+            return Some((i + 2..close, close + 2));
+        }
+        let opens = chars.get(i + 1).is_some_and(|c| !c.is_whitespace())
+            && !i.checked_sub(1).is_some_and(|p| chars[p].is_alphanumeric());
+        if !opens {
+            return None;
+        }
+        let close = (i + 2..end).find(|&j| {
+            chars[j] == '$'
+                && !chars[j - 1].is_whitespace()
+                && chars[j - 1] != '\\'
+                && !chars.get(j + 1).is_some_and(|c| c.is_alphanumeric())
+        })?;
+        Some((i + 1..close, close + 1))
+    }
+
     fn run_len(&self, i: usize, end: usize) -> usize {
         self.chars[i..end]
             .iter()
@@ -357,6 +429,16 @@ mod tests {
             ("5 * 3 = 15, see *.rs", &[("5 * 3 = 15, see *.rs", "")]),
             ("**unclosed bold", &[("**unclosed bold", "")]),
             ("`unclosed code", &[("`unclosed code", "")]),
+            // Math reads as Unicode; dollar amounts and variables stay text.
+            (
+                "area $\\pi r^2$, or $$\\alpha_1$$",
+                &[("area ", ""), ("πr²", "i"), (", or ", ""), ("α₁", "i")],
+            ),
+            (
+                "costs $5 or $10 in $HOME/$USER",
+                &[("costs $5 or $10 in $HOME/$USER", "")],
+            ),
+            ("\\$x$ stays", &[("$x$ stays", "")]),
         ];
         for (input, expected) in cases {
             let expected: Vec<(String, String)> = expected

@@ -248,6 +248,14 @@ fn callout_marker(line: &str) -> Option<(Callout, String)> {
 }
 
 /// `Path::join` keeps absolute paths as they are.
+/// The text after `$$` when `line` starts display math: `$$` alone, `$$ tex`,
+/// or `$$ tex $$`. A `$$` further in leaves the line to inline math.
+fn opens_math(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix("$$")?;
+    let inner = rest.strip_suffix("$$").unwrap_or(rest);
+    (!inner.contains("$$")).then_some(rest)
+}
+
 fn resolve_path(base_dir: Option<&Path>, path: &str) -> PathBuf {
     base_dir.map_or_else(|| PathBuf::from(path), |base| base.join(path))
 }
@@ -342,6 +350,8 @@ enum OpenBlock {
         lang: String,
         lines: Vec<String>,
     },
+    /// Display math from a line starting `$$` to one ending `$$`.
+    Math(Vec<String>),
 }
 
 enum FenceKind {
@@ -423,6 +433,9 @@ impl<'a> SlideBuilder<'a> {
             let kind = fence_kind(info);
             let lines = Vec::new();
             self.open = Some(OpenBlock::Fence { fence, kind, lines });
+        } else if let Some(first) = opens_math(line) {
+            self.open = Some(OpenBlock::Math(Vec::new()));
+            self.continue_open_block(first);
         } else if opens_comment(line) {
             self.open_comment(line);
         } else if line.trim_start().starts_with("<!--") {
@@ -467,6 +480,11 @@ impl<'a> SlideBuilder<'a> {
                     lines.push(line.to_string());
                 }
                 closed
+            }
+            Some(OpenBlock::Math(lines)) => {
+                let body = line.trim_end().strip_suffix("$$");
+                lines.push(body.unwrap_or(line).to_string());
+                body.is_some()
             }
             Some(OpenBlock::Preamble { lines, .. }) => {
                 let closed = DIRECTIVE_RE
@@ -540,6 +558,19 @@ impl<'a> SlideBuilder<'a> {
             }
             Some(OpenBlock::Preamble { lang, lines }) => {
                 self.slide.code_preambles.insert(lang, lines.join("\n"));
+            }
+            Some(OpenBlock::Math(lines)) => {
+                let tex = lines.join("\n").trim().to_string();
+                match self.column_mut() {
+                    Some(col) => {
+                        col.items.push(ColumnItem::Math(col.math.len()));
+                        col.math.push(tex);
+                    }
+                    None => {
+                        self.push_block(Block::Math(self.slide.math.len()));
+                        self.slide.math.push(tex);
+                    }
+                }
             }
             Some(OpenBlock::Notes | OpenBlock::Comment) | None => {}
         }
@@ -660,7 +691,7 @@ impl<'a> SlideBuilder<'a> {
 
         if let Some(caps) = HEADING_RE.captures(line) {
             if &caps[1] == "#" && !self.title_found {
-                self.slide.title = caps[2].to_string();
+                self.slide.title = super::inline::with_math(&caps[2]);
                 self.title_found = true;
             } else {
                 // Other headings stand alone: shown without markers, never merged with text.

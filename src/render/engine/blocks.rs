@@ -629,6 +629,25 @@ pub(crate) fn table(ctx: &Ctx, t: &Table) -> Vec<StyledLine> {
 }
 
 /// Source listing shown when a Mermaid diagram cannot be rendered.
+/// Display math, centered; its one-line form, wrapped, when the layout is
+/// too wide.
+pub(crate) fn math(ctx: &Ctx, tex: &str) -> Vec<StyledLine> {
+    let mut rows = crate::math::display(tex);
+    let mut widest = rows.iter().map(|r| r.width()).max().unwrap_or(0);
+    if widest > ctx.width {
+        rows = wrap_text(&crate::math::inline(tex), ctx.width);
+        widest = rows.iter().map(|r| r.width()).max().unwrap_or(0);
+    }
+    let pad = " ".repeat(ctx.width.saturating_sub(widest) / 2);
+    rows.iter()
+        .map(|r| {
+            line(vec![
+                StyledSpan::new(&format!("{pad}{r}")).with_fg(ctx.pal.text)
+            ])
+        })
+        .collect()
+}
+
 pub(crate) fn mermaid_fallback(ctx: &Ctx, source: &str, reason: &str) -> Vec<StyledLine> {
     let mut out = vec![line(vec![
         StyledSpan::new("◇ mermaid ").with_fg(ctx.pal.accent).bold(),
@@ -717,7 +736,7 @@ mod tests {
                     alignments: vec![TableAlign::Center],
                     rows: vec![vec![long.clone(), "".into(), "café".into()]],
                 };
-                let blocks: [Vec<StyledLine>; 7] = [
+                let blocks: [Vec<StyledLine>; 8] = [
                     paragraph(ctx, &long),
                     bullets(
                         ctx,
@@ -743,6 +762,10 @@ mod tests {
                             lines: vec![long.clone()],
                             callout: Some((Callout::Warning, long.clone())),
                         },
+                    ),
+                    math(
+                        ctx,
+                        r"\frac{a + b + c + d}{2} = \sum_{i=1}^{n} \sqrt{x_i^2 + y_i^2}",
                     ),
                 ];
                 for lines in blocks {

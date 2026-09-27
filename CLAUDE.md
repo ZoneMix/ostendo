@@ -83,6 +83,7 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | `terminal/ascii_art.rs` | Half-block and character-art image rendering |
 | `image_util/` | Image decoding, protocol encoders, Kitty protocol, Mermaid CLI |
 | `diagram/` | Diagram DSL and renderers (box, bracket, vertical) |
+| `math.rs` | TeX math to Unicode: one line inline, stacked for display |
 | `code/` | Execution sandbox, PTY, syntax highlighting |
 | `export/` | HTML and PDF export |
 | `remote/` | WebSocket remote control server and embedded UI |

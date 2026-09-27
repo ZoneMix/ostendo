@@ -74,6 +74,7 @@ body {{ background: var(--bg); color: var(--text); font-family: monospace; }}
     font-size: 0.9em;
 }}
 .slide code {{ font-family: monospace; }}
+.slide pre.math {{ background: none; width: fit-content; margin: 0.5em auto; white-space: pre; line-height: 1.2; font-size: 1.1em; }}
 .slide blockquote {{
     border-left: 3px solid var(--accent);
     padding-left: 1em;
@@ -247,6 +248,7 @@ fn slide_body(slide: &Slide) -> String {
             }
             Block::Chart(i) => out.push_str(&chart(&slide.charts[i])),
             Block::Qr(i) => out.push_str(&qr_svg(&slide.qr_codes[i])),
+            Block::Math(i) => out.push_str(&math(&slide.math[i])),
             Block::Image => {
                 if let Some(img) = &slide.image {
                     out.push_str(&image(&img.path, &img.alt_text));
@@ -289,6 +291,7 @@ fn column(content: &ColumnContent) -> String {
             ColumnItem::Code(i) => out.push_str(&code(&content.code_blocks[i])),
             ColumnItem::Table(i) => out.push_str(&table(&content.tables[i])),
             ColumnItem::Quote(i) => out.push_str(&quote(&content.quotes[i])),
+            ColumnItem::Math(i) => out.push_str(&math(&content.math[i])),
             ColumnItem::Image => {
                 if let Some(img) = &content.image {
                     out.push_str(&image(Path::new(&img.path), ""));
@@ -473,6 +476,12 @@ fn image_data_uri(path: &Path) -> Option<String> {
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
     Some(format!("data:{mime};base64,{encoded}"))
+}
+
+/// Display math as the terminal draws it; a `<pre>` keeps the rows aligned.
+fn math(tex: &str) -> String {
+    let rows = crate::math::display(tex).join("\n");
+    format!("<pre class=\"math\">{}</pre>\n", escape_html(&rows))
 }
 
 fn escape_html(s: &str) -> String {

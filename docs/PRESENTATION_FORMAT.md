@@ -60,6 +60,7 @@ diagram gives up rows when the slide would otherwise need scrolling;
 - Callouts (GitHub alert syntax): a quote whose first line is `[!NOTE]`,
   `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]` becomes a colored
   panel. Text after the marker replaces the heading: `> [!TIP] Pro move`.
+- Math: `$…$` inside text, `$$…$$` on lines of its own (see [Math](#math)).
 - Images: `![alt](path)`, relative to the markdown file. The alt text becomes a
   caption in text-based rendering.
 - Code fences, diagrams, and Mermaid blocks (below).
@@ -170,6 +171,35 @@ https://github.com/ZoneMix/ostendo
 Draws the text as a QR code, black on white so phones can scan it from any
 theme. It needs about as many columns as the code has modules plus four;
 exports embed it as SVG.
+
+## Math
+
+```markdown
+The roots of $ax^2 + bx + c$ are
+
+$$
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+$$
+```
+
+TeX math is drawn with Unicode characters, so it works in every terminal and
+in exports. Inline math (`$…$`) stays on one line: `x^2` becomes `x²`,
+`\frac{a}{b}` becomes `a/b`. Display math (`$$` on its own line, or
+`$$ … $$` alone on a line) is centered and stacks fractions, roots, sums and
+limits with their bounds above and below, `\left( … \right)` and matrices
+with tall brackets, and `\\` line breaks.
+
+Supported: Greek letters, operators, relations and arrows; `^` and `_`;
+`\frac`, `\binom`, `\sqrt[n]{…}`; `\sum`, `\prod`, `\int`, `\lim` and
+friends; `\sin`, `\log` and other function names; `\text`,
+`\operatorname`; `\mathbb`, `\mathcal`, `\mathfrak`, `\mathbf`; accents
+such as `\hat` and `\vec`; and the `matrix`, `pmatrix`, `bmatrix`,
+`vmatrix`, `cases`, and `aligned` environments. An unknown command shows as
+written.
+
+A `$` opens math only before a non-space character and closes only after one,
+and not when a digit or letter follows it, so `$5 or $10` and `$HOME/$USER`
+stay text. Write `\$` for a literal dollar sign.
 
 ## Mermaid
 
