@@ -3,10 +3,6 @@
 Ideas that would make Ostendo better. Open an issue to discuss the approach
 before starting on one.
 
-- **Incremental reveal.** `<!-- reveal: incremental -->` shows one bullet per
-  keypress, optionally dimming the earlier ones.
-- **Presenter view.** A `/presenter` page on the remote server with the current
-  and next slide, notes, and timer, for a second screen.
 - **Slide editing.** Fix a typo in place during rehearsal and write the slide
   back to the markdown file.
 - **Slide sorter.** Reorder slides from the overview (`o`) and write the new
@@ -21,3 +17,4 @@ before starting on one.
 - **Audience polls.** Vote from the remote page; results render as a live bar
   chart.
 - **Pacing report.** Time spent per slide, compared across rehearsals.
+- **Pauses in columns.** Reveal one column at a time.

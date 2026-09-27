@@ -5,6 +5,7 @@ date: 2026-03-10
 accent: "#00FFAA"
 align: top
 transition: fade
+duration: 90m
 ---
 
 <!-- ascii_title -->
@@ -1430,13 +1431,222 @@ VERIFY: '?' toggles help, keybindings visible
 
 - Edit the markdown file while presenting
 - Changes reload automatically (500ms poll)
-- Slide position preserved on reload
+- Saving jumps to the slide you edited, fully built
+- Front-matter-only edits keep your position
 - Force reload with `:reload` command
 
 <!-- notes:
-FEATURE: Hot reload file watching
-EXPECTED: File changes auto-reload the presentation
-VERIFY: Edit file externally, presentation updates
+FEATURE: Hot reload that follows edits
+EXPECTED: Saving a change to another slide shows that slide, fully built
+VERIFY: On this slide, edit the Thank You slide and save; the view jumps there
+-->
+
+---
+
+# Build Steps
+<!-- section: features -->
+<!-- font_size: 4 -->
+
+- First point
+<!-- pause -->
+- Second point
+<!-- pause -->
+- Third point, and the slide is built
+
+<!-- notes:
+FEATURE: <!-- pause --> build steps
+EXPECTED: One item per press of →; ○ dots in the status bar fill as it builds
+VERIFY: ← hides the last item again; coming back from the next slide shows all three
+-->
+
+---
+
+# Code Walkthrough
+<!-- section: features -->
+<!-- font_size: 4 -->
+
+```python +exec {1-2|4-5|7|all}
+import math
+radius = 3
+
+def area(r):
+    return math.pi * r * r
+
+print(f"{area(radius):.2f}")
+```
+
+<!-- notes:
+FEATURE: Code line highlight groups {1-2|4-5|7|all}
+EXPECTED: The emphasized lines carry an accent bar and lifted background; the rest dim
+VERIFY: → walks the groups; the last step removes emphasis; Ctrl+E prints 28.27
+-->
+
+---
+
+# Callouts
+<!-- section: features -->
+<!-- font_size: 3 -->
+
+> [!NOTE]
+> A note.
+
+> [!TIP] Custom heading
+> A tip with its own heading.
+
+> [!IMPORTANT]
+> Important.
+
+> [!WARNING]
+> A warning with **bold** text.
+
+> [!CAUTION]
+> Caution.
+
+<!-- notes:
+FEATURE: GitHub alert callouts
+EXPECTED: Five tinted panels (blue, green, purple, amber, red) with icons and headings
+VERIFY: Press D for the light variant; every panel stays readable
+-->
+
+---
+
+# Links and Task Lists
+<!-- section: features -->
+<!-- font_size: 4 -->
+
+- Inline: [Ostendo on GitHub](https://github.com/ZoneMix/ostendo)
+- Autolink: <https://asciinema.org>
+- Bare: https://example.com/path?q=1.
+
+- [x] Done item
+- [ ] Open item
+
+<!-- notes:
+FEATURE: OSC 8 hyperlinks and task lists
+EXPECTED: Links underlined in the accent color; ✓ and ☐ markers
+VERIFY: Cmd/Ctrl+click opens each link (the trailing period is not part of the last one)
+-->
+
+---
+
+# Charts
+<!-- section: features -->
+<!-- font_size: 3 -->
+
+```chart
+# Requests per second
+Rust: 92,000
+Go: 64,000
+Node: 31,000
+Python: 12,500
+```
+
+```chart style=columns
+v1: 3
+v2: 5
+v3: 8
+v4: 13
+```
+
+<!-- notes:
+FEATURE: Bar and column charts
+EXPECTED: Bars proportional to the values with values aligned; columns over a baseline
+VERIFY: Rust's bar is about 7.4 times Python's; v4's column is the tallest
+-->
+
+---
+
+# QR Code
+<!-- section: features -->
+<!-- font_size: 3 -->
+<!-- align: center -->
+
+```qr
+https://github.com/ZoneMix/ostendo
+```
+
+<!-- notes:
+FEATURE: QR codes
+EXPECTED: Black-on-white code with a white margin, centered
+VERIFY: A phone camera opens the GitHub URL, on dark and light themes
+-->
+
+---
+
+# Search and Blank
+<!-- section: features -->
+<!-- font_size: 4 -->
+
+- `/walkthrough` + Enter jumps to the Code Walkthrough slide
+- `/` + Enter again finds the next match
+- `b` blanks the screen; any key brings it back
+
+<!-- notes:
+FEATURE: Search and blank screen
+EXPECTED: Search matches titles, text, code, and notes, wrapping around; misses show in the status bar
+VERIFY: The key that ends a blank does not also change the slide
+-->
+
+---
+
+# Tables in Columns
+<!-- section: features -->
+<!-- font_size: 4 -->
+
+<!-- column_layout: [1, 1] -->
+<!-- column: 0 -->
+**Left**
+- A list
+
+<!-- column: 1 -->
+**Right**
+
+| Key | Value |
+|-----|-------|
+| a   | 1     |
+
+> [!TIP]
+> A callout in a column.
+
+<!-- reset_layout -->
+
+<!-- notes:
+FEATURE: Tables, quotes, and callouts inside columns
+EXPECTED: The table and the tip sit under "Right", not below the columns
+VERIFY: Nothing renders below the column divider
+-->
+
+---
+
+# Pace Timer
+<!-- section: features -->
+<!-- font_size: 4 -->
+
+- This deck sets `duration: 90m`
+- The timer shows `◷ elapsed / 1:30:00`
+- Falling behind adds `· m:ss behind` in amber; past the end it turns red
+
+<!-- notes:
+FEATURE: duration front matter and pace
+EXPECTED: Target time next to the timer
+VERIFY: Start the timer with t, jump to the last slide early: no "behind"; the remote shows the same
+-->
+
+---
+
+# Record and Check
+<!-- section: features -->
+<!-- font_size: 4 -->
+
+```bash
+ostendo talk.md --record talk.cast     # asciinema play talk.cast
+ostendo --validate talk.md --size 100x30
+```
+
+<!-- notes:
+FEATURE: --record and --validate --size
+EXPECTED: talk.cast is asciicast v2; validation lists slides that would scroll
+VERIFY: asciinema play talk.cast replays the session
 -->
 
 ---
@@ -1497,15 +1707,13 @@ VERIFY: J/K jump sections; S toggles the label above titles
 <!-- section: navigation -->
 <!-- font_size: 4 -->
 
-- Mouse click advances slides
 - Scroll wheel scrolls long content
-- Right-click goes to previous slide
-- Touch/swipe on mobile remote
+- Clicks are ignored, so selecting text never changes slides
 
 <!-- notes:
-FEATURE: Mouse and scroll support
-EXPECTED: Mouse interactions work for navigation
-VERIFY: Click advances, scroll works, right-click goes back
+FEATURE: Mouse wheel scrolling
+EXPECTED: The wheel scrolls slides taller than the screen
+VERIFY: On Scroll Test, the wheel moves the content and the ▲/▼ markers
 -->
 
 ---
@@ -1553,13 +1761,13 @@ VERIFY: Commands work as documented
 <!-- section: export -->
 <!-- font_size: 4 -->
 
-- Export with `--export output.html`
+- Export with `--export html -o output.html`
 - Self-contained single HTML file
 - Themed with current theme colors
 - All content preserved
 
 ```bash
-ostendo presentation.md --export slides.html
+ostendo presentation.md --export html -o slides.html
 ```
 
 <!-- notes:
@@ -1776,7 +1984,7 @@ Every directive available in Ostendo:
 - `transition`, `animation`, `loop_animation`
 - `column_layout`, `column`, `reset_layout`, `column_separator`, `column_text_scale`
 - `image_position`, `image_render`, `image_scale`, `image_color`
-- `notes`, `preamble_start`, `preamble_end`
+- `notes`, `pause`, `preamble_start`, `preamble_end`
 
 <!-- notes:
 FEATURE: Directive reference
@@ -1803,6 +2011,8 @@ VERIFY: Names match docs/PRESENTATION_FORMAT.md
 | `--validate` | Validate presentation |
 | `--list-themes` | List available themes |
 | `--detect-protocol` | Show detected image protocol |
+| `--record file` | Record an asciicast |
+| `--size WxH` | With --validate: report slides that scroll |
 
 <!-- notes:
 FEATURE: CLI flags reference
@@ -1829,6 +2039,7 @@ VERIFY: All flags documented and current
 | t | Start/reset timer | T | Toggle theme name |
 | D | Dark/light toggle | S | Section labels |
 | Home | First slide | End | Last slide |
+| / | Search | b | Blank screen |
 | o | Overview mode | ? | Help screen |
 | Ctrl+E | Execute code | q | Quit |
 

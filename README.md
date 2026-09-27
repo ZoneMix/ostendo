@@ -11,29 +11,39 @@ notes without leaving the shell.
 ## Features
 
 - **Plain markdown.** Slides are separated by `---`; directives are HTML
-  comments, so decks still read well on GitHub.
+  comments, and GitHub callouts, task lists, links, and tables all work, so
+  decks read just as well on GitHub.
 - **Live code.** Run Python, Bash, JavaScript, Ruby, Rust, C, C++, or Go
-  blocks with Ctrl+E and watch the output stream in, with colors.
+  blocks with Ctrl+E and watch the output stream in, with colors. Walk
+  through code one highlighted group of lines at a time.
+- **Build slides step by step.** `<!-- pause -->` reveals a slide in parts;
+  hidden parts keep their space, so nothing jumps.
 - **Images everywhere.** Kitty, Ghostty, iTerm2, WezTerm, and Sixel graphics,
   true-color half blocks in every other terminal, and animated GIFs.
-- **Diagrams.** A small arrow syntax renders box, bracket, or vertical flow
-  diagrams; Mermaid renders when `mmdc` is installed.
-- **Layout.** Columns, tables, quotes, FIGlet titles, footers, and per-slide
-  themes, centered and wrapped to any terminal size.
+- **Charts, diagrams, and QR codes.** Bar and column charts, arrow-syntax
+  diagrams, Mermaid (with `mmdc`), and scannable QR codes.
+- **Layout.** Columns, tables, callouts, FIGlet titles, footers, and per-slide
+  themes, centered and wrapped to any terminal; images shrink so a slide fits.
 - **Animations.** Fade, slide, and dissolve transitions; typewriter and fade-in
   entrances; matrix, sparkle, pulse, bounce, and spin loops.
-- **Presenter tools.** Speaker notes, a timer, a slide overview, sections,
-  hot reload on save, and a phone remote over WebSocket.
+- **Presenter tools.** Speaker notes, search, a blank screen, an overview, a
+  timer that tracks your pace against the planned length, and a phone remote
+  that shows what comes next.
+- **Authoring.** Hot reload jumps to the slide you just edited, and
+  `--validate --size 100x30` names slides that would not fit.
 - **Themes.** Every built-in theme passes WCAG contrast checks, with
   dark/light pairs you can switch on stage.
 - **Fast.** Only the rows that change are redrawn, inside synchronized
   updates: no flicker, even over SSH and tmux.
-- **Export.** Self-contained HTML, or PDF through headless Chrome.
+- **Export and record.** Self-contained HTML, PDF through headless Chrome, and
+  asciinema recordings.
 
 | | |
 |:-:|:-:|
-| ![Two code blocks side by side in columns, one with its output](docs/screenshots/columns.png) | ![The slide overview grid](docs/screenshots/overview.png) |
-| Columns with live code | Overview (`o`) |
+| ![A code block with a group of lines highlighted](docs/screenshots/walkthrough.png) | ![Note, tip, and warning callouts](docs/screenshots/callouts.png) |
+| Code walkthroughs | Callouts |
+| ![A bar chart drawn with block characters](docs/screenshots/charts.png) | ![The slide overview grid](docs/screenshots/overview.png) |
+| Charts | Overview (`o`) |
 
 ## Install
 

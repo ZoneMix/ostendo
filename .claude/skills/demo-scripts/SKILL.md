@@ -19,6 +19,8 @@ Implementation: `src/code/executor.rs`.
 - Keep the visible code short; move imports and helpers into a
   `preamble_start: <lang>` block.
 - Label blocks (`{label: "server.py"}`) when a slide has more than one.
+- Walk the audience through the code before running it: `{1-2|4-6|all}`
+  emphasizes each group in turn, and Ctrl+E works at any step.
 - Run every block before presenting; `--validate` only checks that the
   language is runnable, not that the code works.
 - Presenters can disable execution with `--no-exec`; the slide should still

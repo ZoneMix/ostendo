@@ -13,8 +13,9 @@ directives are silently ignored.
 
 1. Front matter: `title`, `author`, `theme` (`ostendo --list-themes`).
 2. One idea per slide, slides separated by `---`.
-3. `ostendo --validate deck.md` — must report no problems (missing images,
-   unknown themes, unrunnable `+exec` languages, empty slides).
+3. `ostendo --validate deck.md --size 100x30` — must report no problems
+   (missing images, unknown themes, unrunnable `+exec` languages, empty
+   slides, and slides too tall to fit without scrolling at that size).
 4. Present it and page through every slide at the terminal size you will use;
    `presentations/examples/test_presentation.md` shows every feature.
 
@@ -32,3 +33,10 @@ directives are silently ignored.
 - Use `align: center` for title and section-break slides only.
 - Animations sparingly: a transition in front matter is enough for most decks;
   loops (`sparkle(figlet)`, `matrix`) belong on title slides.
+- Build arguments with `<!-- pause -->` and walk through code with
+  `{1-3|5|all}` groups instead of splitting one idea across slides.
+- Use callouts (`> [!WARNING]`) for the one thing the audience must not
+  miss; one per slide.
+- Numbers that compare belong in a ```` ```chart ````; end a talk with a
+  ```` ```qr ```` of the slides' URL.
+- Set `duration:` in the front matter so the timer shows the pace.
