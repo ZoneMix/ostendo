@@ -76,4 +76,18 @@ pub(crate) struct FrameImage {
 pub(crate) struct SlideFrame {
     pub lines: Vec<StyledLine>,
     pub images: Vec<FrameImage>,
+    /// Line ranges of whole elements (title, a list, a table), which
+    /// horizontal centering moves as one so their left edges stay aligned.
+    pub units: Vec<std::ops::Range<usize>>,
+}
+
+impl SlideFrame {
+    /// Appends an element's lines as one centering unit.
+    pub fn push_unit(&mut self, lines: impl IntoIterator<Item = StyledLine>) {
+        let start = self.lines.len();
+        self.lines.extend(lines);
+        if self.lines.len() > start {
+            self.units.push(start..self.lines.len());
+        }
+    }
 }

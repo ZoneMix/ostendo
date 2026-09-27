@@ -47,6 +47,8 @@ pub struct Presenter {
     meta: PresentationMeta,
     presentation_path: PathBuf,
     current: usize,
+    /// How many of the current slide's build steps have been shown.
+    step: usize,
     mode: Mode,
     /// Text typed at the `:` or goto prompt.
     input: String,
@@ -140,6 +142,7 @@ impl Presenter {
             )),
             presentation_path: cfg.presentation_path,
             current,
+            step: 0,
             mode: Mode::Normal,
             input: String::new(),
             overview_sel: current,
@@ -218,3 +221,6 @@ fn exec_blocks(slide: &Slide) -> Vec<&CodeBlock> {
         .filter(|cb| cb.exec_mode.is_some())
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

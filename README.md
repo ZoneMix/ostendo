@@ -88,8 +88,8 @@ demonstrated in `presentations/examples/test_presentation.md`.
 
 | Key | Action |
 |---|---|
-| `→` `l` `Space` `Enter` `PgDn` | Next slide |
-| `←` `h` `Backspace` `PgUp` | Previous slide |
+| `→` `l` `Space` `Enter` `PgDn` | Next build step or slide |
+| `←` `h` `Backspace` `PgUp` | Previous build step or slide |
 | `Home` / `End` | First / last slide |
 | `↓` `j` / `↑` `k` | Scroll the slide |
 | `Ctrl+D` / `Ctrl+U` | Scroll half a page |

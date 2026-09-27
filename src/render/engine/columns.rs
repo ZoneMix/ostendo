@@ -82,7 +82,7 @@ pub(crate) fn columns(
                     ColumnItem::Code(c) => {
                         let cb = &content.code_blocks[c];
                         let cctx = ctx.with_width(width);
-                        let mut lines = blocks::code_block(&cctx, cb);
+                        let mut lines = blocks::code_block(&cctx, cb, cb.highlights.first());
                         if cb.exec_mode.is_some() {
                             if let Some(view) = ctx.exec.as_ref().filter(|v| v.block == exec_index)
                             {

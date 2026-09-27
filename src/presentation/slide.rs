@@ -96,6 +96,20 @@ pub struct Slide {
     pub diagram_blocks: Vec<DiagramBlock>,
     /// `<!-- theme: slug -->` for this slide only.
     pub theme_override: Option<String>,
+    /// What each press of → does before the deck moves on, in source order.
+    pub steps: Vec<Step>,
+    /// Hash of the slide's source lines; hot reload uses it to find the slide
+    /// an edit touched.
+    pub fingerprint: u64,
+}
+
+/// One build step of a slide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// `<!-- pause -->`: `blocks[n..]` stay hidden until this step.
+    Pause(usize),
+    /// Code block `code` moves to its highlight group `group`.
+    Highlight { code: usize, group: usize },
 }
 
 /// One body element of a slide; indexes point into the matching `Slide` vector.
@@ -173,6 +187,10 @@ pub struct CodeBlock {
     pub label: String,
     /// `+exec` or `+pty` on the fence line.
     pub exec_mode: Option<ExecMode>,
+    /// `{1,3-5|7|all}` on the fence line: groups of 1-based inclusive line
+    /// ranges emphasized one step at a time. An empty group (`all`) emphasizes
+    /// nothing; no groups means no emphasis at all.
+    pub highlights: Vec<Vec<(usize, usize)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

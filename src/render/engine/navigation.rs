@@ -7,17 +7,17 @@ use crate::render::animation::{parse_transition, AnimationState};
 use super::Presenter;
 
 impl Presenter {
-    /// Shows slide `idx` (clamped), resetting per-slide state and starting its animations.
+    /// Shows slide `idx` (clamped) before any of its build steps, resetting
+    /// per-slide state and starting its animations.
     pub(crate) fn goto_slide(&mut self, idx: usize) {
         let idx = idx.min(self.slides.len() - 1);
         if idx == self.current {
             return;
         }
-        if self.timer_start.is_none() {
-            self.timer_start = Some(Instant::now());
-        }
+        self.timer_start.get_or_insert_with(Instant::now);
         let old = std::mem::take(&mut self.last_lines);
         self.current = idx;
+        self.step = 0;
         self.scroll = 0;
         self.notes_scroll = 0;
         self.exec = None;
@@ -45,12 +45,24 @@ impl Presenter {
         self.font.request(Some(idx));
     }
 
+    /// The next build step of this slide, or the next slide.
     pub(crate) fn next_slide(&mut self) {
-        self.goto_slide(self.current + 1);
+        if self.step < self.slides[self.current].steps.len() {
+            self.timer_start.get_or_insert_with(Instant::now);
+            self.step += 1;
+        } else {
+            self.goto_slide(self.current + 1);
+        }
     }
 
+    /// Undoes one build step, or goes back to the previous slide fully built.
     pub(crate) fn prev_slide(&mut self) {
-        self.goto_slide(self.current.saturating_sub(1));
+        if self.step > 0 {
+            self.step -= 1;
+        } else if self.current > 0 {
+            self.goto_slide(self.current - 1);
+            self.step = self.slides[self.current].steps.len();
+        }
     }
 
     /// First slide of the next section.

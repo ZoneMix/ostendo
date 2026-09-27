@@ -62,6 +62,18 @@ impl Presenter {
         if let Some(t) = self.timer_text() {
             right.push(StyledSpan::new(&format!("◷ {t}   ")).with_fg(pal.text));
         }
+        let steps = slide.steps.len();
+        if steps > 0 {
+            // One dot per build state; a count once dots would crowd the bar.
+            if steps < 8 {
+                right.push(StyledSpan::new(&"●".repeat(self.step + 1)).with_fg(pal.accent));
+                right.push(StyledSpan::new(&"○".repeat(steps - self.step)).with_fg(pal.muted));
+                right.push(StyledSpan::new("   "));
+            } else {
+                let text = format!("step {} / {}   ", self.step, steps);
+                right.push(StyledSpan::new(&text).with_fg(pal.muted));
+            }
+        }
         right.push(
             StyledSpan::new(&format!("{}", self.current + 1))
                 .with_fg(pal.accent)
@@ -179,8 +191,8 @@ impl Presenter {
             (
                 "Navigate",
                 vec![
-                    ("→ l space", "next slide"),
-                    ("← h ⌫", "previous slide"),
+                    ("→ l space", "next step or slide"),
+                    ("← h ⌫", "previous step or slide"),
                     ("J K", "next / previous section"),
                     ("g", "go to slide number"),
                     ("Home End", "first / last slide"),

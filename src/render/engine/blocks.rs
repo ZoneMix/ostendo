@@ -10,6 +10,8 @@ use crate::code::highlight::Highlighter;
 use crate::presentation::{BlockQuote, Bullet, CodeBlock, ExecMode, Table, TableAlign};
 use crate::render::text::{ellipsize, wrap_text, LineContentType, StyledLine, StyledSpan};
 
+use crate::theme::colors::interpolate_color;
+
 use super::ansi::parse_ansi_line;
 use super::palette::Palette;
 
@@ -322,10 +324,16 @@ pub(crate) fn figlet(ctx: &Ctx, text: &str) -> Option<Vec<StyledLine>> {
 }
 
 /// A code block on a tinted panel with a header showing the label and language.
-pub(crate) fn code_block(ctx: &Ctx, cb: &CodeBlock) -> Vec<StyledLine> {
+/// `emphasis` lists 1-based line ranges to stand out; the other lines dim.
+pub(crate) fn code_block(
+    ctx: &Ctx,
+    cb: &CodeBlock,
+    emphasis: Option<&Vec<(usize, usize)>>,
+) -> Vec<StyledLine> {
     let (pal, width) = (ctx.pal, ctx.width);
-    let bg = pal.code_bg;
-    let panel = |mut spans: Vec<StyledSpan>| {
+    let emphasis = emphasis.filter(|ranges| !ranges.is_empty());
+    let lifted = interpolate_color(pal.code_bg, pal.accent, 0.12);
+    let row_panel = |mut spans: Vec<StyledSpan>, bg| {
         let used: usize = spans.iter().map(StyledSpan::width).sum();
         spans.push(StyledSpan::new(&" ".repeat(width.saturating_sub(used))));
         for s in &mut spans {
@@ -333,6 +341,7 @@ pub(crate) fn code_block(ctx: &Ctx, cb: &CodeBlock) -> Vec<StyledLine> {
         }
         line(spans)
     };
+    let panel = |spans| row_panel(spans, pal.code_bg);
     let lang = cb.language.to_lowercase();
     let label = if cb.label.is_empty() {
         ""
@@ -352,19 +361,31 @@ pub(crate) fn code_block(ctx: &Ctx, cb: &CodeBlock) -> Vec<StyledLine> {
     ])];
 
     let body_width = width.saturating_sub(4).max(1);
-    for hl in ctx
+    for (n, hl) in ctx
         .highlighter
         .highlight(&cb.code, &cb.language, pal.is_dark())
+        .into_iter()
+        .enumerate()
     {
+        let focus = emphasis.map(|r| r.iter().any(|&(a, b)| (a..=b).contains(&(n + 1))));
         let spans: Vec<StyledSpan> = hl
             .iter()
-            .map(|s| StyledSpan::new(&s.text).with_fg(s.fg))
+            .map(|s| match focus {
+                Some(false) => {
+                    StyledSpan::new(&s.text).with_fg(interpolate_color(s.fg, pal.code_bg, 0.6))
+                }
+                _ => StyledSpan::new(&s.text).with_fg(s.fg),
+            })
             .collect();
         for (i, chunk) in wrap_code(&spans, body_width).into_iter().enumerate() {
-            let lead = if i == 0 { "  " } else { "  ↪ " };
-            let mut row = vec![StyledSpan::new(lead).with_fg(pal.muted)];
+            let (bar, bg) = match focus {
+                Some(true) => (StyledSpan::new("▌").with_fg(pal.accent), lifted),
+                _ => (StyledSpan::new(" "), pal.code_bg),
+            };
+            let lead = if i == 0 { " " } else { " ↪ " };
+            let mut row = vec![bar, StyledSpan::new(lead).with_fg(pal.muted)];
             row.extend(chunk);
-            out.push(panel(row));
+            out.push(row_panel(row, bg));
         }
     }
     out.push(panel(Vec::new()));
@@ -639,6 +660,7 @@ mod tests {
                     code: format!("\tfmt.Println(\"{long}\")\n\n界界界"),
                     label: "demo".into(),
                     exec_mode: Some(ExecMode::Exec),
+                    highlights: vec![vec![(1, 2)]],
                 };
                 let t = Table {
                     headers: vec!["Feature".into(), "".into(), "Notes".into()],
@@ -655,7 +677,7 @@ mod tests {
                         }],
                         false,
                     ),
-                    code_block(ctx, &cb),
+                    code_block(ctx, &cb, cb.highlights.first()),
                     exec_output(ctx, &format!("\x1b[31m{long}"), true),
                     table(ctx, &t),
                     quote(

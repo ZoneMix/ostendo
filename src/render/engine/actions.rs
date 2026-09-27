@@ -69,7 +69,8 @@ impl Presenter {
         changed
     }
 
-    /// Re-reads the presentation, keeping the current position.
+    /// Re-reads the presentation and shows the first slide whose source
+    /// changed, fully built; otherwise keeps the current position.
     pub(crate) fn reload(&mut self) {
         let Ok(source) = std::fs::read_to_string(&self.presentation_path) else {
             return;
@@ -86,8 +87,26 @@ impl Presenter {
         self.meta = meta;
         self.images.preload(&slides);
         self.font.set_directives(&slides);
-        self.current = self.current.min(slides.len() - 1);
+        let edited = slides
+            .iter()
+            .zip(&self.slides)
+            .position(|(new, old)| new.fingerprint != old.fingerprint)
+            .or_else(|| (slides.len() > self.slides.len()).then_some(self.slides.len()));
         self.slides = slides;
+        let last = self.slides.len() - 1;
+        match edited {
+            Some(i) => {
+                if i.min(last) != self.current {
+                    self.scroll = 0;
+                }
+                self.current = i.min(last);
+                self.step = self.slides[self.current].steps.len();
+            }
+            None => {
+                self.current = self.current.min(last);
+                self.step = self.step.min(self.slides[self.current].steps.len());
+            }
+        }
         self.exec = None;
         self.exec_output = None;
         self.apply_slide_theme();

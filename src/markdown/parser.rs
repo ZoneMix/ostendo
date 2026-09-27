@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::presentation::{
     Block, BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnItem, ColumnLayout,
     DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode,
-    MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Table,
+    MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Step, Table,
 };
 use crate::render::animation::{
     parse_entrance, parse_loop_animation, parse_transition, LoopAnimation,
@@ -143,7 +143,7 @@ fn resolve_path(base_dir: Option<&Path>, path: &str) -> PathBuf {
 }
 
 /// Info string: first word is the language (`diagram` selects the diagram engine), plus
-/// optional `+exec`/`+pty`, `style=<name>` and `{label: "..."}`.
+/// optional `+exec`/`+pty`, `style=<name>`, `{label: "..."}` and `{1,3-5|all}` highlights.
 fn fence_kind(info: &str) -> FenceKind {
     let mut language = "";
     let mut exec_mode = None;
@@ -167,7 +167,34 @@ fn fence_kind(info: &str) -> FenceKind {
             .captures(info)
             .map_or(String::new(), |c| c[1].to_string()),
         exec_mode,
+        highlights: info
+            .split('{')
+            .skip(1)
+            .filter_map(|group| parse_highlights(group.split('}').next()?))
+            .next()
+            .unwrap_or_default(),
     }
+}
+
+/// `1,3-5|7|all`: groups separated by `|`, each `all` or comma-separated lines
+/// and ranges. Anything else (such as `label: ...`) is not a highlight spec.
+fn parse_highlights(spec: &str) -> Option<Vec<Vec<(usize, usize)>>> {
+    spec.split('|')
+        .map(|group| {
+            let group = group.trim();
+            if group == "all" {
+                return Some(Vec::new());
+            }
+            group
+                .split(',')
+                .map(|item| {
+                    let (a, b) = item.split_once('-').unwrap_or((item, item));
+                    let (a, b) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+                    (1 <= a && a <= b).then_some((a, b))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn parse_slide(
@@ -184,6 +211,9 @@ fn parse_slide(
     if slide.section.is_empty() {
         slide.section = inherited_section.to_string();
     }
+    let mut hasher = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(lines, &mut hasher);
+    slide.fingerprint = std::hash::Hasher::finish(&hasher);
     slide
 }
 
@@ -208,6 +238,7 @@ enum FenceKind {
         language: String,
         label: String,
         exec_mode: Option<ExecMode>,
+        highlights: Vec<Vec<(usize, usize)>>,
     },
     Diagram(DiagramStyle),
 }
@@ -351,12 +382,14 @@ impl<'a> SlideBuilder<'a> {
                         language,
                         label,
                         exec_mode,
+                        highlights,
                     } => {
                         let block = CodeBlock {
                             language,
                             code: source,
                             label,
                             exec_mode,
+                            highlights,
                         };
                         match self.column_mut() {
                             Some(col) => {
@@ -364,8 +397,13 @@ impl<'a> SlideBuilder<'a> {
                                 col.code_blocks.push(block);
                             }
                             None => {
-                                self.push_block(Block::Code(self.slide.code_blocks.len()));
+                                let code = self.slide.code_blocks.len();
+                                self.push_block(Block::Code(code));
+                                let groups = 1..block.highlights.len();
                                 self.slide.code_blocks.push(block);
+                                self.slide
+                                    .steps
+                                    .extend(groups.map(|group| Step::Highlight { code, group }));
                             }
                         }
                     }
@@ -405,6 +443,11 @@ impl<'a> SlideBuilder<'a> {
             }
             "column" => set(&mut self.column, v.parse().ok()),
             "reset_layout" => self.column = None,
+            "pause" if self.column.is_none() => {
+                // A quote continues after the pause as a separate block.
+                self.flush_quote();
+                self.slide.steps.push(Step::Pause(self.slide.blocks.len()));
+            }
             _ => slide_directive(&mut self.slide, name, value),
         }
     }
@@ -536,8 +579,9 @@ impl<'a> SlideBuilder<'a> {
             return;
         }
         let s = &mut self.slide;
+        let paused_here = s.steps.contains(&Step::Pause(s.blocks.len()));
         match (s.blocks.last(), s.bullet_groups.last_mut()) {
-            (Some(Block::Bullets(_)), Some(group)) => group.end += 1,
+            (Some(Block::Bullets(_)), Some(group)) if !paused_here => group.end += 1,
             _ => {
                 let start = s.bullets.len();
                 s.blocks.push(Block::Bullets(s.bullet_groups.len()));
@@ -562,7 +606,11 @@ impl<'a> SlideBuilder<'a> {
                 paragraph.push(' ');
                 paragraph.push_str(text);
             }
-        } else if self.title_found && s.subtitle.is_empty() && s.blocks.is_empty() {
+        } else if self.title_found
+            && s.subtitle.is_empty()
+            && s.blocks.is_empty()
+            && s.steps.is_empty()
+        {
             s.subtitle = text.to_string();
             return;
         } else {

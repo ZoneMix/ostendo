@@ -69,6 +69,7 @@ The info string is the language, then optional flags in any order:
 | `+exec` | Ctrl+E runs the block; output streams underneath |
 | `+pty` | Like `+exec`, in a pseudo-terminal (programs see a TTY and keep colors) |
 | `{label: "name"}` | Label shown in the block's header |
+| `{1,3-5\|7\|all}` | Emphasize lines 1 and 3–5, then 7, then none, one group per press of → (see [Building a slide](#building-a-slide)) |
 
 Runnable languages: `python`, `bash`/`sh`, `javascript`/`node`, `ruby`, `rust`,
 `c`, `cpp`/`c++`, `go`. Rust, C, C++, and Go snippets without a `main` are
@@ -85,6 +86,33 @@ to every block of that language on the slide:
 import math, random
 <!-- preamble_end -->
 ```
+
+## Building a slide
+
+`<!-- pause -->` on its own line hides everything after it until the next
+press of →. Code blocks with highlight groups (`{1-2|4|all}`) step through
+their groups the same way, in source order with any pauses:
+
+````markdown
+# Rollout plan
+
+- Ship behind a flag
+<!-- pause -->
+- Watch the error budget
+<!-- pause -->
+
+```rust {1|3-4|all}
+let flag = Flag::new("new-parser");
+if flag.enabled() {
+    parse_v2(input)
+}
+```
+````
+
+Hidden content keeps its space, so centered slides do not shift as they
+build. ← steps back; returning to a slide with ← shows it fully built. Dots
+in the status bar show how far the current slide has built. Pauses inside
+columns are ignored, and exports show every slide fully built.
 
 ## Diagrams
 

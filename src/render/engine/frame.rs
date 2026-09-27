@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::presentation::{Block, ImagePosition, SlideAlignment};
+use crate::presentation::{Block, ImagePosition, SlideAlignment, Step};
 use crate::render::text::{StyledLine, StyledSpan};
 use crate::theme::colors::interpolate_color;
 
@@ -17,6 +17,7 @@ use super::Presenter;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FrameKey {
     slide: usize,
+    step: usize,
     layout: Layout,
     image_scale: i8,
     gif_frame: usize,
@@ -29,6 +30,7 @@ impl Presenter {
     pub(crate) fn slide_frame(&mut self, layout: &Layout) -> Rc<SlideFrame> {
         let key = FrameKey {
             slide: self.current,
+            step: self.step,
             layout: *layout,
             image_scale: self.image_scale_offset,
             gif_frame: self.images.gif_frame(),
@@ -104,7 +106,7 @@ impl Presenter {
         let ctx = ctx.with_width(text_width);
 
         if slide.show_section.unwrap_or(self.show_sections) && !slide.section.is_empty() {
-            out.lines.push(blocks::section_label(&ctx, &slide.section));
+            out.push_unit([blocks::section_label(&ctx, &slide.section)]);
         }
         let title_in_columns = slide.ascii_title && slide.columns.is_some();
         if !slide.title.is_empty() && !title_in_columns {
@@ -112,7 +114,7 @@ impl Presenter {
                 .title_decoration
                 .as_deref()
                 .or(self.theme.title_decoration.as_deref());
-            out.lines.extend(blocks::title(
+            out.push_unit(blocks::title(
                 &ctx,
                 &slide.title,
                 slide.ascii_title,
@@ -128,7 +130,7 @@ impl Presenter {
                     s.fg = Some(interpolate_color(pal.text, pal.accent, 0.25));
                 }
             }
-            out.lines.extend(sub);
+            out.push_unit(sub);
             blank(&mut out);
         }
 
@@ -138,7 +140,16 @@ impl Presenter {
                 .filter(|c| c.exec_mode.is_some())
                 .count()
         };
-        for block in &slide.blocks {
+        let (shown, pending) = slide.steps.split_at(self.step.min(slide.steps.len()));
+        let hidden_block = pending.iter().find_map(|s| match s {
+            Step::Pause(n) => Some(*n),
+            Step::Highlight { .. } => None,
+        });
+        let mut hidden_from = None;
+        for (index, block) in slide.blocks.iter().enumerate() {
+            if Some(index) == hidden_block {
+                hidden_from = Some(out.lines.len());
+            }
             let mut lines = Vec::new();
             match *block {
                 Block::Paragraph(i) => lines = blocks::paragraph(&ctx, &slide.paragraphs[i]),
@@ -148,7 +159,11 @@ impl Presenter {
                 }
                 Block::Code(i) => {
                     let cb = &slide.code_blocks[i];
-                    lines = blocks::code_block(&ctx, cb);
+                    let group = shown
+                        .iter()
+                        .filter(|s| matches!(s, Step::Highlight { code, .. } if *code == i))
+                        .count();
+                    lines = blocks::code_block(&ctx, cb, cb.highlights.get(group));
                     let index = exec_before(i);
                     if let Some(view) = exec.filter(|v| cb.exec_mode.is_some() && v.block == index)
                     {
@@ -225,13 +240,28 @@ impl Presenter {
                     );
                 }
             }
-            if !lines.is_empty() {
-                out.lines.extend(lines);
+            out.push_unit(lines);
+            // A list split by `<!-- pause -->` still centers as one list.
+            let continued = index > 0
+                && matches!(block, Block::Bullets(_))
+                && matches!(slide.blocks[index - 1], Block::Bullets(_));
+            if continued && out.units.len() >= 2 {
+                let last = out.units.pop().map_or(0, |u| u.end);
+                if let Some(list) = out.units.last_mut() {
+                    list.end = last;
+                }
             }
             blank(&mut out);
         }
         while out.lines.last().is_some_and(StyledLine::is_blank) {
             out.lines.pop();
+        }
+        if let Some(from) = hidden_from {
+            conceal(
+                &mut out,
+                from,
+                slide.blocks[hidden_block.unwrap_or(0)..].contains(&Block::Image),
+            );
         }
         align(
             &mut out,
@@ -277,26 +307,52 @@ fn place(out: &mut SlideFrame, image: Rendered, width: usize) {
     }
 }
 
-/// Applies vertical and horizontal centering.
+/// Blanks lines from `from` on, keeping their space so the visible part does
+/// not move as the slide builds. A right-pinned image goes too when its
+/// `![]()` line is among the hidden blocks.
+fn conceal(out: &mut SlideFrame, from: usize, image_hidden: bool) {
+    for line in out.lines.iter_mut().skip(from) {
+        *line = StyledLine::empty();
+    }
+    out.images.retain(|img| {
+        if img.pinned_right {
+            !image_hidden
+        } else {
+            img.line < from
+        }
+    });
+}
+
+/// Applies horizontal centering (per element) and vertical centering.
 fn align(out: &mut SlideFrame, alignment: Option<SlideAlignment>, layout: &Layout) {
     let alignment = alignment.unwrap_or(SlideAlignment::Top);
     let vcenter = matches!(alignment, SlideAlignment::Center | SlideAlignment::VCenter);
     let hcenter = matches!(alignment, SlideAlignment::Center | SlideAlignment::HCenter);
+    if hcenter {
+        for unit in &out.units {
+            // Trailing blank rows may have been trimmed off the last element.
+            let end = unit.end.min(out.lines.len());
+            let Some(lines) = out.lines.get_mut(unit.start..end) else {
+                continue;
+            };
+            let widest = lines.iter().map(StyledLine::width).max().unwrap_or(0);
+            let free = layout.content_width.saturating_sub(widest);
+            if free < 2 {
+                continue;
+            }
+            let pad = StyledSpan::new(&" ".repeat(free / 2));
+            // content_type is kept so targeted loop animations still apply.
+            for line in lines.iter_mut().filter(|l| !l.is_blank()) {
+                line.spans.insert(0, pad.clone());
+            }
+        }
+    }
     if vcenter && out.lines.len() < layout.content_rows {
         let top = (layout.content_rows - out.lines.len()) / 2;
         out.lines
             .splice(0..0, (0..top).map(|_| StyledLine::empty()));
         for img in out.images.iter_mut().filter(|i| !i.pinned_right) {
             img.line += top;
-        }
-    }
-    if hcenter {
-        for line in &mut out.lines {
-            let free = layout.content_width.saturating_sub(line.width());
-            if free >= 2 && !line.is_blank() {
-                // content_type is kept so targeted loop animations still apply.
-                line.spans.insert(0, StyledSpan::new(&" ".repeat(free / 2)));
-            }
         }
     }
 }
@@ -318,12 +374,12 @@ mod tests {
     }
 
     #[test]
-    fn centering_preserves_content_type_and_shifts_images() {
+    fn centering_moves_elements_whole_and_keeps_content_type() {
+        let art = |text: &str| StyledLine {
+            spans: vec![StyledSpan::new(text)],
+            content_type: LineContentType::FigletTitle,
+        };
         let mut frame = SlideFrame {
-            lines: vec![StyledLine {
-                spans: vec![StyledSpan::new("art")],
-                content_type: LineContentType::FigletTitle,
-            }],
             images: vec![FrameImage {
                 line: 0,
                 col: 0,
@@ -331,12 +387,18 @@ mod tests {
                 kind: ImageKind::Kitty { id: 1, cols: 1 },
                 pinned_right: false,
             }],
+            ..SlideFrame::default()
         };
-        align(&mut frame, Some(SlideAlignment::Center), &layout(9, 11));
-        assert_eq!(frame.lines.len(), 5);
-        let title = &frame.lines[4];
-        assert_eq!(title.content_type, LineContentType::FigletTitle);
-        assert_eq!(title.spans[0].text, "    ");
+        frame.push_unit([art("wide art"), art("art")]);
+        align(&mut frame, Some(SlideAlignment::Center), &layout(10, 12));
+        assert_eq!(frame.lines.len(), 6);
+        for line in &frame.lines[4..] {
+            assert_eq!(line.content_type, LineContentType::FigletTitle);
+            assert_eq!(
+                line.spans[0].text, "  ",
+                "rows of one element shift together"
+            );
+        }
         assert_eq!(frame.images[0].line, 4);
     }
 }

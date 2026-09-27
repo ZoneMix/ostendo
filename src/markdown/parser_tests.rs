@@ -1,5 +1,5 @@
 use super::*;
-use crate::presentation::{FooterAlign, TableAlign};
+use crate::presentation::{FooterAlign, Step, TableAlign};
 use crate::render::animation::{EntranceAnimation, LoopAnimation, TransitionType};
 
 fn parse(src: &str) -> Vec<Slide> {
@@ -337,4 +337,38 @@ fn bundled_decks_parse_into_titled_slides() {
     assert!(slides.iter().any(|s| !s.tables.is_empty()));
     assert!(slides.iter().any(|s| !s.block_quotes.is_empty()));
     assert!(slides.iter().any(|s| s.columns.is_some()));
+}
+
+#[test]
+fn pauses_and_highlight_groups_become_build_steps() {
+    let s = &parse(concat!(
+        "# T\n<!-- pause -->\nIntro\n- a\n<!-- pause -->\n- b\n",
+        "```rust {label: \"x.rs\"} {1,3-4|all}\nfn main() {}\n```\n",
+        "```py {label: \"bad\"} {2-1}\npass\n```",
+    ))[0];
+    assert_eq!(
+        s.subtitle, "",
+        "text after a pause is not the always-visible subtitle"
+    );
+    assert_eq!(
+        s.blocks,
+        [
+            Block::Paragraph(0),
+            Block::Bullets(0),
+            Block::Bullets(1),
+            Block::Code(0),
+            Block::Code(1)
+        ]
+    );
+    assert_eq!(
+        s.steps,
+        [
+            Step::Pause(0),
+            Step::Pause(2),
+            Step::Highlight { code: 0, group: 1 }
+        ]
+    );
+    assert_eq!(s.code_blocks[0].label, "x.rs");
+    assert_eq!(s.code_blocks[0].highlights, [vec![(1, 1), (3, 4)], vec![]]);
+    assert!(s.code_blocks[1].highlights.is_empty());
 }
