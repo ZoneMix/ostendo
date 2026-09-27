@@ -267,29 +267,50 @@ impl Presenter {
             ),
         ];
         let key_w = 15;
-        let mut body: Vec<StyledLine> = Vec::new();
-        for (name, keys) in &sections {
-            if !body.is_empty() {
-                body.push(StyledLine::empty());
-            }
-            body.push(padded(
-                vec![StyledSpan::new(name).with_fg(pal.accent).bold()],
-                0,
-            ));
-            let extra = if *name == "Look" { font } else { None };
-            for (k, what) in keys.iter().copied().chain(extra) {
+        let list = |sections: &[(&str, Vec<(&str, &str)>)]| {
+            let mut body: Vec<StyledLine> = Vec::new();
+            for (name, keys) in sections {
+                if !body.is_empty() {
+                    body.push(StyledLine::empty());
+                }
                 body.push(padded(
-                    vec![
-                        StyledSpan::new(&format!("  {k:<key_w$}"))
-                            .with_fg(pal.text)
-                            .bold(),
-                        StyledSpan::new(what).with_fg(pal.muted),
-                    ],
+                    vec![StyledSpan::new(name).with_fg(pal.accent).bold()],
                     0,
                 ));
+                let extra = if *name == "Look" { font } else { None };
+                for (k, what) in keys.iter().copied().chain(extra) {
+                    body.push(padded(
+                        vec![
+                            StyledSpan::new(&format!("  {k:<key_w$}"))
+                                .with_fg(pal.text)
+                                .bold(),
+                            StyledSpan::new(what).with_fg(pal.muted),
+                        ],
+                        0,
+                    ));
+                }
             }
+            body
+        };
+        let widest = |lines: &[StyledLine]| lines.iter().map(StyledLine::width).max().unwrap_or(0);
+        let mut body = list(&sections);
+        // Too tall for the screen: the first two sections beside the rest.
+        let (left, right) = (list(&sections[..2]), list(&sections[2..]));
+        let left_w = widest(&left) + 4;
+        if body.len() + 6 > height && left_w + widest(&right) + 8 <= width {
+            body = (0..left.len().max(right.len()))
+                .map(|i| {
+                    let mut row = padded(
+                        left.get(i).map(|l| l.spans.clone()).unwrap_or_default(),
+                        left_w,
+                    );
+                    row.spans
+                        .extend(right.get(i).into_iter().flat_map(|r| r.spans.clone()));
+                    row
+                })
+                .collect();
         }
-        let card_w = body.iter().map(StyledLine::width).max().unwrap_or(0);
+        let card_w = widest(&body);
         let footer = format!(
             "{} · {:?} images · press any key",
             self.theme.slug,
