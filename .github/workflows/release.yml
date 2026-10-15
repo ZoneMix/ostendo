@@ -85,7 +85,7 @@ jobs:
           body: |
             ## Ostendo ${{ github.ref_name }}
 
-                        Markdown slides, presented in your terminal.
+            Markdown slides, presented in your terminal.
 
             ### Downloads
 

@@ -235,6 +235,7 @@ fn encode_row(buf: &mut Vec<u8>, row: &Row, width: usize, default_fg: Color) -> 
             span.text.clone()
         };
         used += unicode_width::UnicodeWidthStr::width(text.as_str()) * scale;
+        let text = crate::render::text::printable(&text);
         if scale >= 2 {
             write!(buf, "\x1b]66;s={scale};{text}\x07")?;
         } else {
@@ -342,6 +343,16 @@ mod tests {
         encode_row(&mut buf, &r, 5, Color::White).unwrap();
         let text = String::from_utf8(buf).unwrap();
         assert!(text.ends_with("日本 "), "{text:?}");
+    }
+
+    #[test]
+    fn control_characters_in_slide_text_never_reach_the_terminal() {
+        let mut buf = Vec::new();
+        let r = row(vec![StyledSpan::new("a\tb\x1b]52;c;aGk=\x07c")]);
+        encode_row(&mut buf, &r, 40, Color::White).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        assert!(text.contains("a b ]52;c;aGk= c"), "{text:?}");
+        assert!(!text.contains('\x07') && !text.contains('\t'), "{text:?}");
     }
 
     #[test]

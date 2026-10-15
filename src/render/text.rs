@@ -111,6 +111,21 @@ impl StyledLine {
     }
 }
 
+/// Replaces control characters with spaces. Slide text comes from an untrusted
+/// deck, and a raw ESC would let it drive the terminal (OSC 52 clipboard
+/// writes, Kitty remote control); a space keeps the one column `width()`
+/// counted for it.
+pub fn printable(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(char::is_control) {
+        s.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .into()
+    } else {
+        s.into()
+    }
+}
+
 /// Truncates `s` to at most `max_cols` display columns.
 pub fn truncate_to_width(s: &str, max_cols: usize) -> String {
     let mut out = String::new();

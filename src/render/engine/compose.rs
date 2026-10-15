@@ -123,11 +123,16 @@ impl Presenter {
                 row.line.push(StyledSpan::new(glyph).with_fg(pal.muted));
             }
         };
+        // On a terminal shorter than the header, the content rows do not exist.
         if self.scroll > 0 {
-            marker(&mut rows[layout.content_top], "▲");
+            if let Some(row) = rows.get_mut(layout.content_top) {
+                marker(row, "▲");
+            }
         }
         if self.scroll < self.max_scroll {
-            marker(&mut rows[layout.content_top + layout.content_rows - 1], "▼");
+            if let Some(row) = rows.get_mut(layout.content_top + layout.content_rows - 1) {
+                marker(row, "▼");
+            }
         }
 
         let (bar, notes_rows, _) = self.chrome_rows();

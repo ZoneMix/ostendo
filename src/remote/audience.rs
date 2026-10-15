@@ -18,6 +18,7 @@ use tokio_tungstenite::tungstenite::handshake::server::{
 };
 use tokio_tungstenite::tungstenite::http::header::{HOST, ORIGIN};
 use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
@@ -30,6 +31,14 @@ const VOTE_HTML: &str = include_str!("vote.html");
 const MAX_VOTERS: usize = 256;
 
 const MAX_VOTE_BYTES: usize = 256;
+
+/// Anyone on the network can connect, so tungstenite must refuse a large
+/// message while reading it; its defaults buffer up to 64 MiB per connection.
+pub(super) fn ws_limits(max: usize) -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(max))
+        .max_frame_size(Some(max))
+}
 
 /// Serves the voting page on every interface at `port`, sending votes to
 /// `commands`. Returns the sender for the poll JSON pages show, and the
@@ -111,9 +120,13 @@ async fn accept(stream: TcpStream) -> Option<WebSocketStream<TcpStream>> {
         serve_page(stream, VOTE_HTML, &csp).await;
         return None;
     }
-    tokio_tungstenite::accept_hdr_async(stream, SameOrigin)
-        .await
-        .ok()
+    tokio_tungstenite::accept_hdr_async_with_config(
+        stream,
+        SameOrigin,
+        Some(ws_limits(MAX_VOTE_BYTES)),
+    )
+    .await
+    .ok()
 }
 
 /// Only the voting page itself may connect: a browser's Origin must name the
@@ -150,6 +163,7 @@ async fn handle_voter(
     mut polls: watch::Receiver<String>,
 ) {
     let (mut sink, mut incoming) = ws.split();
+    let shown = polls.clone();
     let forward = tokio::spawn(async move {
         loop {
             let poll = polls.borrow_and_update().clone();
@@ -169,7 +183,11 @@ async fn handle_voter(
                 let Ok(vote) = serde_json::from_str::<Vote>(&text) else {
                     continue;
                 };
-                if vote.kind == "vote" && voted.insert(vote.poll.clone()) {
+                // Only the poll on screen counts votes, which also keeps `voted`
+                // as small as the deck's list of polls.
+                let open = serde_json::from_str::<serde_json::Value>(&shown.borrow())
+                    .is_ok_and(|p| p["id"].as_str() == Some(vote.poll.as_str()));
+                if vote.kind == "vote" && open && voted.insert(vote.poll.clone()) {
                     let _ = commands.send(RemoteCommand::Vote {
                         poll: vote.poll,
                         option: vote.option,
@@ -235,6 +253,15 @@ mod tests {
         ] {
             ws.send(Message::Text(msg.into())).await.unwrap();
         }
+        let oversized = format!(
+            r#"{{"type":"vote","poll":"{}","option":0}}"#,
+            "x".repeat(4096)
+        );
+        let _ = ws.send(Message::Text(oversized.into())).await;
+        assert!(
+            !matches!(ws.next().await, Some(Ok(_))),
+            "an oversized message closes the connection"
+        );
         let received: Vec<String> = tokio::task::spawn_blocking(move || {
             std::iter::from_fn(|| commands.recv_timeout(Duration::from_secs(2)).ok())
                 .map(|c| format!("{c:?}"))
@@ -244,10 +271,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             received,
-            [
-                r#"Vote { poll: "p1", option: 2 }"#,
-                r#"Vote { poll: "p2", option: 1 }"#
-            ]
+            [r#"Vote { poll: "p1", option: 2 }"#],
+            "one vote per poll, and only for the poll on screen"
         );
     }
 }

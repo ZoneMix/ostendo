@@ -48,9 +48,11 @@ temporary directory with a 20 second limit.
   the fragment so the control page can send it. Tokens are limited to
   `A-Z a-z 0-9 . _ ~ -`.
 - At most 8 connections at once; a connection that does not finish its
-  handshake within 5 seconds is dropped; messages over 4 KB are rejected.
+  handshake within 5 seconds is dropped; a message over 4 KB closes the
+  connection before it is buffered.
 - The remote can navigate, toggle views, and change themes. It can run code
-  only with `--remote-exec`, and never with `--no-exec`.
+  only with `--remote-exec`, which requires `--remote-token` (without one, any
+  local process could connect), and never with `--no-exec`.
 - The control page is served with a restrictive Content-Security-Policy.
 
 ## Audience voting (`--audience`)
@@ -65,8 +67,8 @@ temporary directory with a 20 second limit.
   votes are anonymous and not authenticated: someone who reconnects on
   purpose can vote again. Use polls for a show of hands, not decisions.
 - WebSocket connections must come from the page's own origin; at most 256 at
-  once, dropped after 5 seconds without a handshake; messages over 256 bytes
-  are ignored. The page has a Content-Security-Policy allowing only its own
+  once, dropped after 5 seconds without a handshake; a message over 256 bytes
+  closes the connection before it is buffered. The page has a Content-Security-Policy allowing only its own
   WebSocket.
 
 ## Local state
@@ -79,4 +81,7 @@ recording paths you choose.
 ## Parsing limits
 
 Presentations are capped at 10,000 slides; directive values are clamped to
-their documented ranges.
+their documented ranges. Control characters in slide text (an ESC byte in a
+title, bullet, or code block) are shown as spaces, so a deck cannot send
+escape sequences to your terminal, such as OSC 52 clipboard writes or Kitty
+remote-control commands.

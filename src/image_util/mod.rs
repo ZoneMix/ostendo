@@ -65,13 +65,15 @@ pub fn load_image(path: &Path) -> Result<RgbaImage> {
     }
 }
 
-/// Decode every frame of an animated GIF. Returns `None` for non-GIF paths
+/// Decode the frames of an animated GIF, up to `MAX_GIF_BYTES` of pixels.
+/// Returns `None` for non-GIF paths
 /// and single-frame GIFs, which load through [`load_image`].
 pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
     use image::AnimationDecoder;
     use std::io::BufReader;
 
     const MAX_DIM: u32 = 800;
+    const MAX_GIF_BYTES: usize = 256 << 20;
 
     let is_gif = path
         .extension()
@@ -103,6 +105,12 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
                 raw
             };
             GifFrame { image, delay_ms }
+        })
+        // A small file can expand to thousands of full-size frames; past the
+        // budget the animation loops over what was decoded.
+        .scan(0usize, |decoded, frame| {
+            *decoded += frame.image.as_raw().len();
+            (*decoded <= MAX_GIF_BYTES).then_some(frame)
         })
         .collect();
 

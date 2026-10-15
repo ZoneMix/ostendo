@@ -201,6 +201,14 @@ fn overflow_report_names_slides_that_would_scroll() {
 }
 
 #[test]
+fn a_one_row_terminal_shows_a_scrolling_slide_without_panicking() {
+    let long: String = (1..=30).map(|i| format!("- item {i}\n")).collect();
+    let mut p = presenter(&format!("# Long\n{long}"));
+    p.height = 1;
+    assert_eq!(screen(&mut p).len(), 1);
+}
+
+#[test]
 fn the_remote_learns_what_comes_next() {
     let mut p = presenter("# Build\n- a\n<!-- pause -->\n- b\n---\n# Summary");
     let (tx, mut rx) = tokio::sync::broadcast::channel(8);

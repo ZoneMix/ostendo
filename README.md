@@ -152,7 +152,7 @@ presentation. Every run of a minute or more with the timer going is kept, and
 | `--remote` | Serve a remote control page on `127.0.0.1` |
 | `--remote-port <port>` | Remote port (default 8765) |
 | `--remote-token <token>` | Require a token for the remote |
-| `--remote-exec` | Let the remote run code blocks |
+| `--remote-exec` | Let the remote run code blocks (requires `--remote-token`) |
 | `--audience` | Serve a voting page for poll slides to your network |
 | `--audience-port <port>` | Voting page port (default 8766) |
 | `--validate` | Check the deck and exit |
