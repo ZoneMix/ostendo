@@ -6,6 +6,7 @@
 //! ```
 
 use crossterm::style::Color;
+use unicode_width::UnicodeWidthStr;
 
 use crate::diagram::parser::DiagramGraph;
 use crate::render::text::{LineContentType, StyledLine, StyledSpan};
@@ -35,12 +36,12 @@ pub fn render(
             .iter()
             .enumerate()
             .map(|(i, node)| {
-                let label_w = node.label.chars().count() + 2; // +2 for brackets
+                let label_w = node.label.width() + 2; // +2 for brackets
                 let ann_w = row
                     .annotations
                     .get(i)
                     .and_then(|a| a.as_ref())
-                    .map(|a| a.chars().count())
+                    .map(|a| a.width())
                     .unwrap_or(0);
                 label_w.max(ann_w)
             })
@@ -53,7 +54,7 @@ pub fn render(
 
         for (i, node) in row.nodes.iter().enumerate() {
             let bracket_text = format!("[{}]", node.label);
-            let bracket_chars = bracket_text.chars().count();
+            let bracket_chars = bracket_text.width();
             let right_pad = col_widths[i].saturating_sub(bracket_chars);
 
             node_line.push(StyledSpan::new("[").with_fg(accent));
@@ -79,7 +80,7 @@ pub fn render(
 
             for (i, ann) in row.annotations.iter().take(col_widths.len()).enumerate() {
                 let text = ann.as_deref().unwrap_or("");
-                let text_chars = text.chars().count();
+                let text_chars = text.width();
                 // Align to col_width (which includes bracket chars)
                 let right_pad = col_widths[i].saturating_sub(text_chars + 1); // +1 for leading space offset
 

@@ -318,12 +318,18 @@ impl Presenter {
         let (name, arg) = cmd.trim().split_once(' ').unwrap_or((cmd.trim(), ""));
         match name {
             "q" | "quit" => return true,
-            "theme" => {
-                if let Some(theme) = self.registry.get(arg.trim()) {
+            "theme" => match self.registry.get(arg.trim()) {
+                Some(theme) => {
                     self.set_base_theme(theme);
                     self.save_state();
                 }
-            }
+                None => {
+                    let slugs = self.registry.list();
+                    let slugs: Vec<&str> = slugs.iter().map(String::as_str).collect();
+                    let msg = crate::markdown::parser::unknown("theme", arg.trim(), &slugs);
+                    self.notify(msg);
+                }
+            },
             "goto" => self.goto_number(arg),
             n if n.parse::<usize>().is_ok() => self.goto_number(n),
             "notes" => self.toggle_notes(),
@@ -337,7 +343,7 @@ impl Presenter {
             "overview" => self.open_overview(),
             "help" => self.mode = Mode::Help,
             "reload" => self.reload(),
-            _ => {}
+            _ => self.notify(format!("unknown command “{name}”")),
         }
         false
     }
@@ -527,6 +533,22 @@ mod tests {
         assert_eq!(p.current, 1);
         let bar = screen(&mut p).pop().unwrap();
         assert!(bar.contains("no slide mentions “haystack”"), "{bar}");
+    }
+
+    #[test]
+    fn mistyped_commands_say_so() {
+        let mut p = presenter("# One");
+        for (typed, expected) in [
+            (
+                ":theme nrod\n",
+                "unknown theme 'nrod' (did you mean 'nord'?)",
+            ),
+            (":thme nord\n", "unknown command “thme”"),
+        ] {
+            press(&mut p, typed);
+            let bar = screen(&mut p).pop().unwrap();
+            assert!(bar.contains(expected), "{bar}");
+        }
     }
 
     #[test]

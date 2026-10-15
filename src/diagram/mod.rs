@@ -14,7 +14,7 @@ pub mod render_vertical;
 use crossterm::style::Color;
 
 use crate::presentation::DiagramStyle;
-use crate::render::text::StyledLine;
+use crate::render::text::{ellipsize, StyledLine};
 use parser::DiagramGraph;
 
 /// Render `graph` no wider than `max_width` columns, degrading the style and
@@ -93,7 +93,7 @@ fn truncate_graph_labels_for_style(
                     .nodes
                     .iter()
                     .map(|node| parser::DiagramNode {
-                        label: truncate(&node.label, max_label),
+                        label: ellipsize(&node.label, max_label),
                     })
                     .collect(),
                 annotations: row
@@ -105,10 +105,10 @@ fn truncate_graph_labels_for_style(
                             // Box annotations wrap, so only single words must fit.
                             DiagramStyle::Box => text
                                 .split_whitespace()
-                                .map(|word| truncate(word, max_label))
+                                .map(|word| ellipsize(word, max_label))
                                 .collect::<Vec<_>>()
                                 .join(" "),
-                            _ => truncate(text, max_label),
+                            _ => ellipsize(text, max_label),
                         })
                     })
                     .collect(),
@@ -120,15 +120,6 @@ fn truncate_graph_labels_for_style(
         title: graph.title.clone(),
         rows,
     }
-}
-
-fn truncate(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    cut.push('…');
-    cut
 }
 
 #[cfg(test)]
@@ -165,6 +156,21 @@ mod tests {
 
     fn widest(lines: &[StyledLine]) -> usize {
         lines.iter().map(|l| l.width()).max().unwrap_or(0)
+    }
+
+    #[test]
+    fn wide_characters_keep_boxes_closed() {
+        let graph = parser::parse("日本語 -> 東京 -> ok");
+        let (accent, text, dim) = test_colors();
+        for style in [DiagramStyle::Box, DiagramStyle::Bracket] {
+            let lines = render_adaptive(&graph, style, 120, accent, text, dim, "");
+            let rows: Vec<usize> = lines.iter().take(3).map(|l| l.width()).collect();
+            if style == DiagramStyle::Box {
+                assert!(rows.iter().all(|&w| w == rows[0]), "{rows:?}");
+            }
+            let narrow = render_adaptive(&graph, style, 12, accent, text, dim, "");
+            assert!(widest(&narrow) <= 12, "{style:?}");
+        }
     }
 
     #[test]

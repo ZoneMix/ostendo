@@ -4,7 +4,8 @@ use crossterm::style::Color;
 
 use crate::presentation::Callout;
 use crate::theme::colors::{
-    color_to_rgb, contrast_ratio, hex_to_color, interpolate_color, relative_luminance,
+    accent_is_readable, color_to_rgb, contrast_ratio, hex_to_color, interpolate_color,
+    relative_luminance,
 };
 use crate::theme::Theme;
 
@@ -37,7 +38,7 @@ impl Palette {
             bg,
             text,
             accent: accent
-                .filter(|&a| contrast_ratio(a, bg) >= 3.0)
+                .filter(|&a| accent_is_readable(a, bg))
                 .unwrap_or_else(|| color(&theme.colors.accent, Color::Green)),
             code_bg,
             muted: interpolate_color(text, bg, 0.45),

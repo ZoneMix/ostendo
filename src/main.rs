@@ -13,7 +13,7 @@ mod terminal;
 mod theme;
 mod watch;
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -159,6 +159,13 @@ enum ExportFormat {
 fn main() -> std::process::ExitCode {
     match run(Cli::parse()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
+        // `ostendo --list-themes | head` closing the pipe early is not an error.
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe) =>
+        {
+            std::process::ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("error: {e:#}");
             std::process::ExitCode::FAILURE
@@ -169,9 +176,9 @@ fn main() -> std::process::ExitCode {
 fn run(cli: Cli) -> Result<()> {
     let registry = ThemeRegistry::load();
 
+    let mut stdout = std::io::stdout();
     if cli.list_themes {
-        list_themes(&registry);
-        return Ok(());
+        return list_themes(&registry, &mut stdout);
     }
     if cli.detect_protocol {
         println!("{:?}", terminal::protocols::detect_protocol());
@@ -187,19 +194,20 @@ fn run(cli: Cli) -> Result<()> {
     }
 
     if cli.count {
-        println!("{}", slides.len());
+        writeln!(stdout, "{}", slides.len())?;
         return Ok(());
     }
     if cli.export_titles {
         for slide in &slides {
-            println!(
+            writeln!(
+                stdout,
                 "{}",
                 if slide.title.is_empty() {
                     "(untitled)".into()
                 } else {
                     printable(&slide.title)
                 }
-            );
+            )?;
         }
         return Ok(());
     }
@@ -209,10 +217,11 @@ fn run(cli: Cli) -> Result<()> {
             .map(|s| printable(&s.title).into_owned())
             .collect();
         let runs = presentation::rehearsal::load(&file);
-        print!(
+        write!(
+            stdout,
             "{}",
             presentation::rehearsal::report(&titles, &runs, meta.duration)
-        );
+        )?;
         return Ok(());
     }
     if cli.validate {
@@ -245,7 +254,11 @@ fn run(cli: Cli) -> Result<()> {
             &meta.title
         };
         let mut theme = theme;
-        if theme::colors::hex_to_color(&meta.accent).is_some() {
+        let bg = theme::colors::hex_to_color(&theme.colors.background);
+        let readable = theme::colors::hex_to_color(&meta.accent)
+            .zip(bg)
+            .is_some_and(|(accent, bg)| theme::colors::accent_is_readable(accent, bg));
+        if readable {
             theme.colors.accent = meta.accent.clone();
         }
         match format {
@@ -348,7 +361,7 @@ fn unknown_theme(registry: &ThemeRegistry, slug: &str) -> String {
     markdown::parser::unknown("theme", slug, &slugs)
 }
 
-fn list_themes(registry: &ThemeRegistry) {
+fn list_themes(registry: &ThemeRegistry, out: &mut impl Write) -> Result<()> {
     let color = std::io::stdout().is_terminal();
     for slug in registry.list() {
         let Some(theme) = registry.get(&slug) else {
@@ -366,8 +379,9 @@ fn list_themes(registry: &ThemeRegistry) {
         } else {
             String::new()
         };
-        println!("{swatch}{slug:<24} {}", theme.name);
+        writeln!(out, "{swatch}{slug:<24} {}", theme.name)?;
     }
+    Ok(())
 }
 
 /// Reports problems that would show up during the talk.

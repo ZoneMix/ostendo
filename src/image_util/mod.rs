@@ -124,8 +124,20 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
 /// premultiplied alpha internally, so pixel values are un-premultiplied before
 /// returning.
 fn load_svg(path: &Path) -> Result<RgbaImage> {
-    let tree =
-        resvg::usvg::Tree::from_data(&std::fs::read(path)?, &resvg::usvg::Options::default())?;
+    use resvg::usvg::{fontdb, Options};
+    // usvg starts with no fonts, which drops every `<text>`; scanning the
+    // system's fonts takes a moment, so it happens once and only for SVGs.
+    static FONTS: std::sync::LazyLock<std::sync::Arc<fontdb::Database>> =
+        std::sync::LazyLock::new(|| {
+            let mut db = fontdb::Database::new();
+            db.load_system_fonts();
+            std::sync::Arc::new(db)
+        });
+    let options = Options {
+        fontdb: FONTS.clone(),
+        ..Options::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(&std::fs::read(path)?, &options)?;
 
     let size = tree.size();
     // Render at 2x for quality, capped at 2048px
