@@ -20,6 +20,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 
 use presentation::{PresentationMeta, Slide};
+use render::text::printable;
 use terminal::protocols::ImageProtocol;
 use theme::{Theme, ThemeRegistry};
 
@@ -76,8 +77,9 @@ struct Cli {
     #[arg(long, value_name = "TOKEN", requires = "remote")]
     remote_token: Option<String>,
 
-    /// Let the remote run code blocks
-    #[arg(long, requires = "remote")]
+    /// Let the remote run code blocks (needs --remote-token: without one, any
+    /// local process could run the deck's code as you)
+    #[arg(long, requires = "remote_token")]
     remote_exec: bool,
 
     /// Serve a voting page for poll slides to everyone on the network
@@ -193,16 +195,19 @@ fn run(cli: Cli) -> Result<()> {
             println!(
                 "{}",
                 if slide.title.is_empty() {
-                    "(untitled)"
+                    "(untitled)".into()
                 } else {
-                    &slide.title
+                    printable(&slide.title)
                 }
             );
         }
         return Ok(());
     }
     if cli.report {
-        let titles: Vec<String> = slides.iter().map(|s| s.title.clone()).collect();
+        let titles: Vec<String> = slides
+            .iter()
+            .map(|s| printable(&s.title).into_owned())
+            .collect();
         let runs = presentation::rehearsal::load(&file);
         print!(
             "{}",
@@ -329,9 +334,18 @@ fn parse_size(value: &str) -> Result<(u16, u16), String> {
 
 fn resolve_theme(registry: &ThemeRegistry, slug: Option<&str>) -> Result<Theme> {
     let slug = slug.unwrap_or(DEFAULT_THEME);
-    registry
-        .get(slug)
-        .with_context(|| format!("unknown theme '{slug}' (run `ostendo --list-themes`)"))
+    registry.get(slug).with_context(|| {
+        format!(
+            "{}; run `ostendo --list-themes`",
+            unknown_theme(registry, slug)
+        )
+    })
+}
+
+fn unknown_theme(registry: &ThemeRegistry, slug: &str) -> String {
+    let slugs = registry.list();
+    let slugs: Vec<&str> = slugs.iter().map(String::as_str).collect();
+    markdown::parser::unknown("theme", slug, &slugs)
 }
 
 fn list_themes(registry: &ThemeRegistry) {
@@ -365,13 +379,20 @@ fn validate(
     cli_theme: Option<&str>,
     size: Option<(u16, u16)>,
 ) -> Result<()> {
-    let mut issues = Vec::new();
+    // (file line, message); a deck-wide problem points at line 1.
+    let mut issues: Vec<(usize, String)> = meta
+        .warnings
+        .iter()
+        .map(|w| (w.line, w.message.clone()))
+        .collect();
     let theme = cli_theme.or(meta.theme.as_deref()).unwrap_or(DEFAULT_THEME);
     if registry.get(theme).is_none() {
-        issues.push(format!("unknown theme '{theme}'"));
+        issues.push((1, unknown_theme(registry, theme)));
     }
     for slide in slides {
         let n = slide.number;
+        let mut issue =
+            |message: String| issues.push((slide.line, format!("slide {n}: {message}")));
         let images = slide.image.iter().map(|i| i.path.clone()).chain(
             slide
                 .columns
@@ -381,12 +402,12 @@ fn validate(
         );
         for path in images {
             if !path.exists() {
-                issues.push(format!("slide {n}: image not found: {}", path.display()));
+                issue(format!("image not found: {}", path.display()));
             }
         }
         if let Some(slug) = &slide.theme_override {
             if registry.get(slug).is_none() {
-                issues.push(format!("slide {n}: unknown theme '{slug}'"));
+                issue(unknown_theme(registry, slug));
             }
         }
         let columns = slide.columns.iter().flat_map(|c| &c.contents);
@@ -396,25 +417,22 @@ fn validate(
             .chain(columns.flat_map(|c| &c.code_blocks))
         {
             if cb.exec_mode.is_some() && !code::executor::is_supported(&cb.language) {
-                issues.push(format!("slide {n}: cannot run '{}' code", cb.language));
+                issue(format!("cannot run '{}' code", cb.language));
             }
         }
         if slide.title.is_empty() && slide.subtitle.is_empty() && slide.blocks.is_empty() {
-            issues.push(format!("slide {n}: empty"));
+            issue("empty".to_string());
         }
         for data in &slide.qr_codes {
             if qrcode::QrCode::new(data.as_bytes()).is_err() {
-                issues.push(format!("slide {n}: too much text for a QR code"));
+                issue("too much text for a QR code".to_string());
             }
         }
-        if let Some(name) = &slide.missing_template {
-            issues.push(format!("slide {n}: unknown template '{name}'"));
-        }
         if slide.charts.iter().any(|c| c.bars.is_empty()) {
-            issues.push(format!("slide {n}: chart without `label: value` lines"));
+            issue("chart without `label: value` lines".to_string());
         }
         if slide.polls.iter().any(|p| p.options.len() < 2) {
-            issues.push(format!("slide {n}: poll with fewer than two options"));
+            issue("poll with fewer than two options".to_string());
         }
     }
     if let Some((cols, rows)) = size {
@@ -437,18 +455,25 @@ fn validate(
             record: None,
         };
         for (n, extra) in render::overflowing_slides(config, cols, rows) {
-            issues.push(format!(
-                "slide {n}: {extra} row(s) too tall for {cols}x{rows} (it will scroll)"
+            issues.push((
+                slides.get(n - 1).map_or(1, |s| s.line),
+                format!("slide {n}: {extra} row(s) too tall for {cols}x{rows} (it will scroll)"),
             ));
         }
     }
-    println!("{}: {} slides, theme {theme}", file.display(), slides.len());
+    let count = match slides.len() {
+        1 => "1 slide".to_string(),
+        n => format!("{n} slides"),
+    };
+    println!("{}: {count}, theme {theme}", file.display());
     if issues.is_empty() {
         println!("OK");
         return Ok(());
     }
-    for issue in &issues {
-        println!("  - {issue}");
+    // `file:line: message`, which editors and terminals can jump to.
+    issues.sort_by_key(|&(line, _)| line);
+    for (line, message) in &issues {
+        println!("{}:{line}: {}", file.display(), printable(message));
     }
     bail!("{} problem(s) found", issues.len())
 }

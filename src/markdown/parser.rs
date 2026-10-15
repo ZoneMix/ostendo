@@ -9,7 +9,7 @@ use crate::presentation::{
     Block, BlockQuote, Bullet, Callout, Chart, CodeBlock, ColumnContent, ColumnImage, ColumnItem,
     ColumnLayout, DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition,
     ImageRenderMode, MermaidBlock, Poll, PresentationMeta, Slide, SlideAlignment, SlideImage, Step,
-    Table,
+    Table, Warning,
 };
 use crate::render::animation::{
     parse_entrance, parse_loop_animation, parse_transition, LoopAnimation,
@@ -32,11 +32,13 @@ pub fn parse_presentation(
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let lines: Vec<&str> = source.lines().collect();
     let (front_matter, body) = split_front_matter(&lines);
-    let meta = front_matter.map(parse_front_matter).unwrap_or_default();
+    let body_start = lines.len() - body.len();
+    let mut meta = front_matter
+        .map(|fm| parse_front_matter(fm, body_start - fm.len()))
+        .unwrap_or_default();
 
     let mut slides: Vec<Slide> = Vec::new();
     let mut section = String::new();
-    let body_start = lines.len() - body.len();
     for range in split_slides(body) {
         let block = &body[range.clone()];
         if block.iter().all(|l| l.trim().is_empty()) {
@@ -46,23 +48,33 @@ pub fn parse_presentation(
             anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
         }
         let builder = SlideBuilder::new(slides.len() + 1, base_dir, &meta.templates);
-        let mut slide = parse_slide(builder, block, &section);
-        slide.line = body_start + range.start + 1;
+        let first_line = body_start + range.start + 1;
+        let (mut slide, warnings) = parse_slide(builder, block, first_line, &section);
+        slide.line = first_line;
         section.clone_from(&slide.section);
         slides.push(slide);
+        meta.warnings.extend(warnings);
     }
     Ok((meta, slides))
 }
 
-fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
+/// `first_line` is the 1-based file line of `lines[0]`, for warnings.
+fn parse_front_matter(lines: &[&str], first_line: usize) -> PresentationMeta {
     let mut meta = PresentationMeta::default();
+    let mut warnings = Vec::new();
     // Inside `templates:`, an indented `name:` starts a template and deeper
     // `directive: value` lines fill it.
     let mut in_templates = false;
     let mut template: Option<String> = None;
-    for line in lines {
+    for (i, line) in lines.iter().enumerate() {
         let Some(caps) = FRONT_MATTER_KV_RE.captures(line.trim()) else {
             continue;
+        };
+        let mut warn = |msg: String| {
+            warnings.push(Warning {
+                line: first_line + i,
+                message: msg,
+            })
         };
         let val = caps[2].trim().trim_matches('"').to_string();
         let indented = line.starts_with([' ', '\t']);
@@ -78,19 +90,118 @@ fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
         }
         in_templates = !indented && &caps[1] == "templates";
         template = None;
-        match &caps[1] {
-            "title" => meta.title = val,
-            "author" => meta.author = val,
-            "date" => meta.date = val,
-            "accent" => meta.accent = val,
-            "transition" => meta.transition = val,
-            "theme" if !val.is_empty() => meta.theme = Some(val),
-            "align" | "alignment" => meta.default_alignment = parse_alignment(&val),
-            "duration" => meta.duration = parse_duration(&val),
-            _ => {}
+        let valid = match &caps[1] {
+            "title" => {
+                meta.title = val;
+                true
+            }
+            "author" => {
+                meta.author = val;
+                true
+            }
+            "date" => {
+                meta.date = val;
+                true
+            }
+            "accent" => {
+                let valid = crate::theme::colors::hex_to_color(&val).is_some();
+                meta.accent = val;
+                valid
+            }
+            "transition" => {
+                let valid = parse_transition(&val).is_some();
+                meta.transition = val;
+                valid
+            }
+            "theme" => {
+                meta.theme = (!val.is_empty()).then_some(val);
+                true
+            }
+            "align" | "alignment" => {
+                meta.default_alignment = parse_alignment(&val);
+                meta.default_alignment.is_some()
+            }
+            "duration" => {
+                meta.duration = parse_duration(&val);
+                meta.duration.is_some()
+            }
+            "templates" => true,
+            key => {
+                warn(unknown("front matter key", key, FRONT_MATTER_KEYS));
+                continue;
+            }
+        };
+        if !valid {
+            warn(format!(
+                "invalid value '{}' for '{}'",
+                caps[2].trim(),
+                &caps[1]
+            ));
         }
     }
+    meta.warnings = warnings;
     meta
+}
+
+const FRONT_MATTER_KEYS: &[&str] = &[
+    "title",
+    "author",
+    "date",
+    "accent",
+    "transition",
+    "theme",
+    "align",
+    "duration",
+    "templates",
+];
+
+/// Every `<!-- name -->` the parser acts on, for spelling suggestions.
+const DIRECTIVES: &[&str] = &[
+    "notes",
+    "pause",
+    "template",
+    "preamble_start",
+    "image_position",
+    "image_render",
+    "image_scale",
+    "image_color",
+    "column_layout",
+    "column",
+    "reset_layout",
+    "column_separator",
+    "column_text_scale",
+    "section",
+    "ascii_title",
+    "font_size",
+    "text_scale",
+    "footer",
+    "footer_align",
+    "align",
+    "title_decoration",
+    "transition",
+    "animation",
+    "loop_animation",
+    "fullscreen",
+    "show_section",
+    "theme",
+];
+
+/// "unknown directive 'algn' (did you mean 'align'?)".
+pub(crate) fn unknown(what: &str, name: &str, known: &[&str]) -> String {
+    match closest(name, known) {
+        Some(k) => format!("unknown {what} '{name}' (did you mean '{k}'?)"),
+        None => format!("unknown {what} '{name}'"),
+    }
+}
+
+/// The entry of `known` within two edits of `name`.
+fn closest<'a>(name: &str, known: &[&'a str]) -> Option<&'a str> {
+    known
+        .iter()
+        .map(|&k| (strsim::levenshtein(name, k), k))
+        .min()
+        .filter(|&(distance, _)| distance <= 2)
+        .map(|(_, k)| k)
 }
 
 /// `20` (minutes), `45m`, `45min`, `1h`, `1h30m`.
@@ -135,41 +246,68 @@ fn parse_loop_directive(value: &str) -> Option<(LoopAnimation, Option<String>)> 
     Some((parse_loop_animation(name)?, target))
 }
 
-/// Directives that only set a `Slide` field. Unknown names and invalid values are ignored.
-fn slide_directive(s: &mut Slide, name: &str, value: Option<&str>) {
+/// Directives that only set a `Slide` field. Returns `None` for an unknown
+/// name and `Some(false)` for a value that was ignored.
+fn slide_directive(s: &mut Slide, name: &str, value: Option<&str>) -> Option<bool> {
     let v = value.unwrap_or("");
     let text = || (!v.is_empty()).then(|| v.to_string());
-    match name {
-        "section" if !v.is_empty() => s.section = v.to_string(),
-        "ascii_title" => s.ascii_title = true,
+    Some(match name {
+        "section" => {
+            if !v.is_empty() {
+                s.section = v.to_string();
+            }
+            !v.is_empty()
+        }
+        "ascii_title" => {
+            s.ascii_title = true;
+            true
+        }
         "font_size" => set(&mut s.font_size, parse_clamped(v, -20, 20).map(|n| n as i8)),
         "text_scale" => set(&mut s.text_scale, parse_clamped(v, 1, 7).map(|n| n as u8)),
-        "footer" => s.footer = Some(v.to_string()),
-        "footer_align" => match v {
-            "left" => s.footer_align = FooterAlign::Left,
-            "center" => s.footer_align = FooterAlign::Center,
-            "right" => s.footer_align = FooterAlign::Right,
-            _ => {}
-        },
+        "footer" => {
+            s.footer = Some(v.to_string());
+            true
+        }
+        "footer_align" => {
+            let align = match v {
+                "left" => FooterAlign::Left,
+                "center" => FooterAlign::Center,
+                "right" => FooterAlign::Right,
+                _ => return Some(false),
+            };
+            s.footer_align = align;
+            true
+        }
         "align" => set(&mut s.alignment, parse_alignment(v)),
-        "title_decoration" if matches!(v, "underline" | "box" | "banner" | "none") => {
-            s.title_decoration = text();
+        "title_decoration" => {
+            let valid = matches!(v, "underline" | "box" | "banner" | "none");
+            if valid {
+                s.title_decoration = text();
+            }
+            valid
         }
         "transition" => set(&mut s.transition, parse_transition(v)),
         "animation" => set(&mut s.entrance_animation, parse_entrance(v)),
-        "loop_animation" => s.loop_animations.extend(parse_loop_directive(v)),
+        "loop_animation" => {
+            let animation = parse_loop_directive(v);
+            let valid = animation.is_some();
+            s.loop_animations.extend(animation);
+            valid
+        }
         "fullscreen" => set(&mut s.fullscreen, value.map_or(Some(true), parse_bool)),
         "show_section" => set(&mut s.show_section, parse_bool(v)),
         "theme" => set(&mut s.theme_override, text()),
-        _ => {}
-    }
+        _ => return None,
+    })
 }
 
-/// Overwrites `field` only when the directive value parsed.
-fn set<T>(field: &mut Option<T>, value: Option<T>) {
-    if value.is_some() {
+/// Overwrites `field` only when the directive value parsed; returns whether it did.
+fn set<T>(field: &mut Option<T>, value: Option<T>) -> bool {
+    let parsed = value.is_some();
+    if parsed {
         *field = value;
     }
+    parsed
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -268,15 +406,16 @@ fn callout_marker(line: &str) -> Option<(Callout, String)> {
     Some((kind, heading.to_string()))
 }
 
-/// `Path::join` keeps absolute paths as they are.
 /// The text after `$$` when `line` starts display math: `$$` alone, `$$ tex`,
-/// or `$$ tex $$`. A `$$` further in leaves the line to inline math.
+/// or `$$ tex $$`. A `$$` further in leaves the line to inline math, and
+/// `$$$` is text.
 fn opens_math(line: &str) -> Option<&str> {
     let rest = line.trim().strip_prefix("$$")?;
     let inner = rest.strip_suffix("$$").unwrap_or(rest);
-    (!inner.contains("$$")).then_some(rest)
+    (!rest.starts_with('$') && !inner.contains("$$")).then_some(rest)
 }
 
+/// `Path::join` keeps absolute paths as they are.
 fn resolve_path(base_dir: Option<&Path>, path: &str) -> PathBuf {
     base_dir.map_or_else(|| PathBuf::from(path), |base| base.join(path))
 }
@@ -344,10 +483,20 @@ fn parse_highlights(spec: &str) -> Option<Vec<Vec<(usize, usize)>>> {
         .collect()
 }
 
-fn parse_slide(mut builder: SlideBuilder, lines: &[&str], inherited_section: &str) -> Slide {
-    for line in lines {
+fn parse_slide(
+    mut builder: SlideBuilder,
+    lines: &[&str],
+    first_line: usize,
+    inherited_section: &str,
+) -> (Slide, Vec<Warning>) {
+    // A `$$` with no closing line is text, so it cannot swallow the slide.
+    let last_math_close = lines.iter().rposition(|l| l.trim_end().ends_with("$$"));
+    for (i, line) in lines.iter().enumerate() {
+        builder.at = first_line + i;
+        builder.math_closes_below = last_math_close.is_some_and(|end| end > i);
         builder.line(line);
     }
+    let warnings = std::mem::take(&mut builder.warnings);
     let mut slide = builder.finish();
     if slide.section.is_empty() {
         slide.section = inherited_section.to_string();
@@ -355,7 +504,7 @@ fn parse_slide(mut builder: SlideBuilder, lines: &[&str], inherited_section: &st
     let mut hasher = std::hash::DefaultHasher::new();
     std::hash::Hash::hash(lines, &mut hasher);
     slide.fingerprint = std::hash::Hasher::finish(&hasher);
-    slide
+    (slide, warnings)
 }
 
 /// Multi-line constructs that consume lines until their closing marker. One left open at the
@@ -407,6 +556,13 @@ struct SlideBuilder<'a> {
     notes: Vec<String>,
     quote: Vec<String>,
     table: Option<TableParseState>,
+    /// Indents of the open list items, outermost first; top level is 0.
+    list_indents: Vec<usize>,
+    /// A later line of the slide ends with `$$`.
+    math_closes_below: bool,
+    /// File line being parsed, for warnings.
+    at: usize,
+    warnings: Vec<Warning>,
 }
 
 impl<'a> SlideBuilder<'a> {
@@ -443,7 +599,18 @@ impl<'a> SlideBuilder<'a> {
             notes: Vec::new(),
             quote: Vec::new(),
             table: None,
+            list_indents: vec![0],
+            math_closes_below: false,
+            at: 0,
+            warnings: Vec::new(),
         }
+    }
+
+    fn warn(&mut self, message: String) {
+        self.warnings.push(Warning {
+            line: self.at,
+            message,
+        });
     }
 
     fn line(&mut self, line: &str) {
@@ -456,7 +623,9 @@ impl<'a> SlideBuilder<'a> {
             let kind = fence_kind(info);
             let lines = Vec::new();
             self.open = Some(OpenBlock::Fence { fence, kind, lines });
-        } else if let Some(first) = opens_math(line) {
+        } else if let Some(first) = opens_math(line)
+            .filter(|rest| rest.trim_end().ends_with("$$") || self.math_closes_below)
+        {
             self.open = Some(OpenBlock::Math(Vec::new()));
             self.continue_open_block(first);
         } else if opens_comment(line) {
@@ -476,7 +645,6 @@ impl<'a> SlideBuilder<'a> {
         let body = line.trim_start()["<!--".len()..].trim_start();
         match body.strip_prefix("notes:") {
             Some(first) => {
-                self.notes.clear();
                 if !first.trim().is_empty() {
                     self.notes.push(first.trim().to_string());
                 }
@@ -605,57 +773,91 @@ impl<'a> SlideBuilder<'a> {
 
     fn directive(&mut self, name: &str, value: Option<&str>) {
         let v = value.unwrap_or("");
-        match name {
-            "notes" => self.notes = vec![v.to_string()],
-            "preamble_start" if !v.is_empty() => {
-                let lang = v.to_string();
-                self.open = Some(OpenBlock::Preamble {
-                    lang,
-                    lines: Vec::new(),
-                });
+        let valid = match name {
+            "notes" => {
+                self.notes.push(v.to_string());
+                true
             }
-            "image_position" => match v {
-                "left" => self.image.position = ImagePosition::Left,
-                "right" => self.image.position = ImagePosition::Right,
-                _ => {}
-            },
-            "image_render" | "image_scale" | "image_color" if !v.is_empty() => {
-                self.image_directive(name, v);
+            "preamble_start" => {
+                if !v.is_empty() {
+                    let lang = v.to_string();
+                    self.open = Some(OpenBlock::Preamble {
+                        lang,
+                        lines: Vec::new(),
+                    });
+                }
+                !v.is_empty()
+            }
+            "image_position" => {
+                self.image.position = match v {
+                    "right" => ImagePosition::Right,
+                    _ => return self.invalid(name, v),
+                };
+                true
+            }
+            "image_render" | "image_scale" | "image_color" => {
+                !v.is_empty() && self.image_directive(name, v)
             }
             // A quote or table ends where the column it is in does.
             "column_layout" | "column" | "reset_layout" => {
                 self.flush_quote();
                 self.flush_table();
-                self.column_directive(name, v);
+                self.column_directive(name, v)
             }
-            "column_separator" if v.eq_ignore_ascii_case("none") => self.columns.separator = false,
+            "column_separator" => {
+                if v.eq_ignore_ascii_case("none") {
+                    self.columns.separator = false;
+                }
+                v.eq_ignore_ascii_case("none")
+            }
             "column_text_scale" => {
                 let scale = v.parse().ok().filter(|n| (2..=7).contains(n));
-                set(&mut self.columns.text_scale, scale);
+                set(&mut self.columns.text_scale, scale)
             }
-            "template" => self.template(v),
+            "template" => {
+                self.template(v);
+                true
+            }
             "pause" => {
                 // A quote or table continues after the pause as a separate one.
                 self.flush_quote();
                 self.flush_table();
                 self.sync_column_pauses();
                 self.slide.steps.push(Step::Pause(self.slide.blocks.len()));
+                true
             }
-            _ => slide_directive(&mut self.slide, name, value),
+            _ => match slide_directive(&mut self.slide, name, value) {
+                Some(valid) => valid,
+                // A one-word comment such as `<!-- TODO -->` is not a typo.
+                None if value.is_some() || closest(name, DIRECTIVES).is_some() => {
+                    self.warn(unknown("directive", name, DIRECTIVES));
+                    return;
+                }
+                None => return,
+            },
+        };
+        if !valid {
+            self.invalid(name, v);
         }
     }
 
+    fn invalid(&mut self, name: &str, value: &str) {
+        self.warn(format!("invalid value '{value}' for '{name}'"));
+    }
+
     /// Image directives after a column image apply to that image.
-    fn image_directive(&mut self, name: &str, v: &str) {
+    fn image_directive(&mut self, name: &str, v: &str) -> bool {
         let scale = parse_clamped(v, 1, 100).map(|n| n as u8);
         if let Some(img) = self.column_mut().and_then(|c| c.image.as_mut()) {
-            match name {
-                "image_scale" if scale.is_some() => img.scale = scale,
-                "image_color" => img.color = Some(v.to_string()),
+            return match name {
+                "image_scale" => set(&mut img.scale, scale),
+                "image_color" => {
+                    img.color = Some(v.to_string());
+                    true
+                }
                 // Column images always render as ASCII.
-                _ => {}
-            }
-            return;
+                _ => true,
+            };
         }
         match name {
             "image_render" => {
@@ -664,23 +866,36 @@ impl<'a> SlideBuilder<'a> {
                     "kitty" => ImageRenderMode::Kitty,
                     "iterm" | "iterm2" => ImageRenderMode::Iterm,
                     "sixel" => ImageRenderMode::Sixel,
-                    _ => return,
+                    _ => return false,
                 };
             }
-            "image_scale" => self.image.scale = scale.unwrap_or(self.image.scale),
+            "image_scale" => match scale {
+                Some(scale) => self.image.scale = scale,
+                None => return false,
+            },
             _ => self.image.color_override = v.to_string(),
         }
+        true
     }
 
-    fn column_directive(&mut self, name: &str, v: &str) {
+    fn column_directive(&mut self, name: &str, v: &str) -> bool {
         match name {
             "column_layout" => self.column_layout(v),
-            "column" => set(&mut self.column, v.parse().ok()),
-            _ => self.column = None,
+            "column" => {
+                // Past the layout, content falls back to the slide; say so.
+                let count = self.columns.contents.len();
+                let index = v.parse().ok();
+                let fits = index.is_some_and(|i| count == 0 || i < count);
+                set(&mut self.column, index) && fits
+            }
+            _ => {
+                self.column = None;
+                true
+            }
         }
     }
 
-    fn column_layout(&mut self, v: &str) {
+    fn column_layout(&mut self, v: &str) -> bool {
         let ratios: Vec<u8> = v
             .trim_start_matches('[')
             .trim_end_matches(']')
@@ -693,6 +908,9 @@ impl<'a> SlideBuilder<'a> {
             }
             self.columns.contents = vec![ColumnContent::default(); ratios.len()];
             self.columns.ratios = ratios;
+            true
+        } else {
+            false
         }
     }
 
@@ -737,7 +955,8 @@ impl<'a> SlideBuilder<'a> {
                 } else {
                     rest.to_string()
                 };
-                self.bullet(caps[1].len(), text);
+                let indent = caps[1].chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
+                self.bullet(indent, text);
             }
         } else {
             self.text(line.trim(), continues_paragraph);
@@ -768,11 +987,15 @@ impl<'a> SlideBuilder<'a> {
     }
 
     fn bullet(&mut self, indent: usize, text: String) {
-        let depth = match indent {
-            0..=1 => 0,
-            2..=3 => 1,
-            _ => 2,
-        };
+        // An item is one level deeper than the nearest shallower item above
+        // it, so 2-space, 4-space and tab indents all nest the same way.
+        while self.list_indents.last().is_some_and(|&i| i > indent) {
+            self.list_indents.pop();
+        }
+        if self.list_indents.last() != Some(&indent) {
+            self.list_indents.push(indent);
+        }
+        let depth = (self.list_indents.len() - 1).min(2);
         let bullet = Bullet { text, depth };
         if let Some(col) = self.column_mut() {
             col.items.push(ColumnItem::Bullet(col.bullets.len()));
@@ -896,7 +1119,7 @@ impl<'a> SlideBuilder<'a> {
                     .map(|&(k, v)| (k.to_string(), v.map(str::to_string)))
                     .collect(),
                 None => {
-                    self.slide.missing_template = Some(name.to_string());
+                    self.warn(format!("unknown template '{name}'"));
                     return;
                 }
             },

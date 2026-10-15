@@ -144,13 +144,13 @@ fn sections_carry_over_to_later_slides() {
 #[test]
 fn comments_and_legacy_directives_are_hidden() {
     let slides = parse(
-        "# T\n<!-- some random comment -->\n<!-- timing: 2.0 -->\n<!-- title_scale: 3 -->\n<!-- font_transition: none -->\n<!--\nTODO\n-->\n<!-- notes: first\nsecond\n-->\n- bullet",
+        "# T\n<!-- some random comment -->\n<!-- timing: 2.0 -->\n<!-- title_scale: 3 -->\n<!-- font_transition: none -->\n<!--\nTODO\n-->\n<!-- notes: first\nsecond\n-->\n- bullet\n<!-- notes: third -->",
     );
     let s = &slides[0];
     assert!(s.subtitle.is_empty());
     assert!(s.paragraphs.is_empty());
     assert_eq!(s.bullets.len(), 1);
-    assert_eq!(s.notes, "first\nsecond");
+    assert_eq!(s.notes, "first\nsecond\nthird", "notes add up");
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn list_items_need_a_marker_and_whitespace() {
         ("* star", Some(("star", 0))),
         ("+ plus", Some(("plus", 0))),
         ("  - nested", Some(("nested", 1))),
-        ("    - deep", Some(("deep", 2))),
+        ("    - deep", Some(("deep", 1))),
         ("1. first", Some(("1. first", 0))),
         ("   12) twelfth", Some(("12) twelfth", 1))),
         ("**Bold** text", None),
@@ -182,6 +182,13 @@ fn list_items_need_a_marker_and_whitespace() {
             }
         }
     }
+}
+
+#[test]
+fn list_depth_follows_the_parent_item_whatever_the_indent_width() {
+    let slide = &parse("# T\n- a\n    - b\n        - c\n\t- d\n- e\n  - f")[0];
+    let depths: Vec<usize> = slide.bullets.iter().map(|b| b.depth).collect();
+    assert_eq!(depths, [0, 1, 2, 1, 0, 1]);
 }
 
 #[test]
@@ -263,14 +270,14 @@ fn preamble_is_stored_per_language() {
 
 #[test]
 fn image_directives_and_path_resolution() {
-    let src = "# S\n<!-- image_scale: 50 -->\n<!-- image_render: ascii -->\n<!-- image_position: left -->\n<!-- image_color: #FF0000 -->\n![alt text](img/a.png)";
+    let src = "# S\n<!-- image_scale: 50 -->\n<!-- image_render: ascii -->\n<!-- image_position: right -->\n<!-- image_color: #FF0000 -->\n![alt text](img/a.png)";
     let (_, slides) = parse_presentation(src, Some(Path::new("/deck"))).unwrap();
     let img = slides[0].image.as_ref().unwrap();
     assert_eq!(img.path, Path::new("/deck/img/a.png"));
     assert_eq!(img.alt_text, "alt text");
     assert_eq!(img.scale, 50);
     assert_eq!(img.render_mode, ImageRenderMode::Ascii);
-    assert_eq!(img.position, ImagePosition::Left);
+    assert_eq!(img.position, ImagePosition::Right);
     assert_eq!(img.color_override, "#FF0000");
 }
 
@@ -498,7 +505,32 @@ fn templates_apply_their_directives_where_they_appear() {
         (Some(SlideAlignment::Top), false),
         "a deck template replaces the built-in of the same name"
     );
-    assert_eq!(s[3].missing_template.as_deref(), Some("nope"));
+    assert_eq!(meta.warnings[0].message, "unknown template 'nope'");
+}
+
+#[test]
+fn ignored_keys_and_directives_are_reported_at_their_line() {
+    let src = concat!(
+        "---\nthme: nord\nduration: 20 minutes\n---\n",
+        "# A\n<!-- algn: center -->\n<!-- transition: zoom -->\n<!-- TODO -->\n",
+        "<!-- column_layout: [1, 1] -->\n<!-- column: 2 -->\n<!-- pause -->",
+    );
+    let (meta, _) = parse_presentation(src, None).unwrap();
+    let got: Vec<(usize, &str)> = meta
+        .warnings
+        .iter()
+        .map(|w| (w.line, w.message.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (2, "unknown front matter key 'thme' (did you mean 'theme'?)"),
+            (3, "invalid value '20 minutes' for 'duration'"),
+            (6, "unknown directive 'algn' (did you mean 'align'?)"),
+            (7, "invalid value 'zoom' for 'transition'"),
+            (10, "invalid value '2' for 'column'"),
+        ]
+    );
 }
 
 #[test]
@@ -509,6 +541,7 @@ fn display_math_blocks_and_math_in_titles() {
         "$$ E = mc^2 $$\n",
         "$$ x\n+ y $$\n",
         "$$x$$ inline stays a paragraph\n",
+        "$$$ premium tier\n",
         "<!-- column_layout: [1, 1] -->\n<!-- column: 1 -->\n$$ \\alpha $$",
     ))[0];
     assert_eq!(s.title, "Area πr²");
@@ -521,6 +554,12 @@ fn display_math_blocks_and_math_in_titles() {
             Block::Paragraph(0),
             Block::Columns
         ]
+    );
+    assert!(s.paragraphs[0].contains("premium tier"), "`$$$` is text");
+    let unclosed = &parse("# T\n$$ \\alpha\n- kept")[0];
+    assert!(
+        unclosed.math.is_empty() && unclosed.bullets.len() == 1,
+        "an unclosed `$$` does not swallow the slide"
     );
     assert_eq!(s.math, ["\\frac{a}{b}", "E = mc^2", "x\n+ y"]);
     let column = &s.columns.as_ref().unwrap().contents[1];
