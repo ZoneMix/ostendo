@@ -379,7 +379,7 @@ pub(crate) fn code_block(
     for (n, hl) in ctx
         .highlighter
         .highlight(&cb.code, &cb.language, pal.is_dark())
-        .into_iter()
+        .iter()
         .enumerate()
     {
         let focus = emphasis.map(|r| r.iter().any(|&(a, b)| (a..=b).contains(&(n + 1))));

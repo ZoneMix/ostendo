@@ -45,6 +45,8 @@ struct Key {
     rows: usize,
     protocol: ImageProtocol,
     color: String,
+    /// Theme colors: ASCII art and captions are drawn in them.
+    text: (u8, u8, u8),
     bg: (u8, u8, u8),
 }
 
@@ -311,6 +313,7 @@ impl ImageStore {
             rows,
             protocol,
             color: img.color_override.clone(),
+            text: crate::theme::colors::color_to_rgb(text).unwrap_or_default(),
             bg: crate::theme::colors::color_to_rgb(bg).unwrap_or_default(),
         };
         if let Some(hit) = self.cache.get(&key) {
@@ -348,7 +351,7 @@ impl ImageStore {
         };
         // GIF frames on Kitty would otherwise pile up in terminal memory: keep
         // only the current frame of each animation.
-        if frame > 0 || self.is_animated(&img.path) {
+        if protocol == ImageProtocol::Kitty && (frame > 0 || self.is_animated(&img.path)) {
             let stale: Vec<Key> = self
                 .cache
                 .keys()

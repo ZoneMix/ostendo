@@ -84,9 +84,14 @@ pub fn render_slide_image(
     bg_color: Color,
     window_size: &WindowSize,
 ) -> RenderedImage {
+    // Kitty and iTerm2 scale the image to its cells themselves, so a small
+    // source is sent as is; Sixel draws pixels one to one. Compositing after
+    // the resize keeps it to the pixels actually sent.
     let fit = || {
-        let composited = composite_on_bg(img, bg_color);
-        crate::image_util::scale_image_pixels(&composited, window_size, max_cols, max_rows)
+        let upscale = protocol == ImageProtocol::Sixel;
+        let (scaled, cols, rows) =
+            crate::image_util::scale_image_pixels(img, window_size, max_cols, max_rows, upscale);
+        (composite_on_bg(&scaled, bg_color), cols, rows)
     };
     let escape = |escape: Option<String>, cols, rows| match escape {
         Some(escape_data) => RenderedImage::Protocol {

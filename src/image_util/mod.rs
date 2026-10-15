@@ -163,11 +163,13 @@ fn load_svg(path: &Path) -> Result<RgbaImage> {
 /// Resize `img` to the largest pixel size that fits `max_cols` x `max_rows`
 /// cells (less a 5% horizontal margin) at the terminal's cell size, keeping
 /// its aspect ratio. Returns the image and the `(cols, rows)` it occupies.
+/// Without `upscale`, a smaller image is returned at its own size.
 pub fn scale_image_pixels(
     img: &RgbaImage,
     window: &WindowSize,
     max_cols: usize,
     max_rows: usize,
+    upscale: bool,
 ) -> (RgbaImage, usize, usize) {
     let (iw, ih) = img.dimensions();
     if iw == 0 || ih == 0 {
@@ -198,6 +200,9 @@ pub fn scale_image_pixels(
     let cols = (width_px as f64 / ppc).ceil() as usize;
     let rows = (height_px as f64 / ppr).ceil() as usize;
 
+    if !upscale && width_px >= iw {
+        return (img.clone(), cols, rows);
+    }
     let scaled = fast_resize(img, width_px, height_px, fir::FilterType::Lanczos3);
     (scaled, cols, rows)
 }

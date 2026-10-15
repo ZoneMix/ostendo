@@ -1,5 +1,9 @@
 //! Syntax highlighting for code blocks via syntect's bundled grammars.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crossterm::style::Color;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Theme, ThemeSet};
@@ -10,7 +14,16 @@ pub struct Highlighter {
     syntaxes: SyntaxSet,
     dark: Theme,
     light: Theme,
+    /// Slides are rebuilt for every build step, GIF frame and line of program
+    /// output, and syntect costs ~0.1 ms a line.
+    cache: RefCell<HashMap<(String, String, bool), Rc<Highlighted>>>,
 }
+
+pub type Highlighted = Vec<Vec<HighlightedSpan>>;
+
+/// Enough for every code block of a long deck; past it the cache starts over,
+/// so hot reloads cannot grow it without bound.
+const CACHE_ENTRIES: usize = 512;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HighlightedSpan {
@@ -25,12 +38,27 @@ impl Highlighter {
             syntaxes: SyntaxSet::load_defaults_newlines(),
             dark: themes.remove("base16-eighties.dark").unwrap_or_default(),
             light: themes.remove("InspiredGitHub").unwrap_or_default(),
+            cache: RefCell::default(),
         }
     }
 
     /// Highlights `code` line by line (without line endings). `dark` selects
     /// colors readable on a dark code background.
-    pub fn highlight(&self, code: &str, language: &str, dark: bool) -> Vec<Vec<HighlightedSpan>> {
+    pub fn highlight(&self, code: &str, language: &str, dark: bool) -> Rc<Highlighted> {
+        let key = (code.to_string(), language.to_string(), dark);
+        if let Some(hit) = self.cache.borrow().get(&key) {
+            return Rc::clone(hit);
+        }
+        let lines = Rc::new(self.highlight_uncached(code, language, dark));
+        let mut cache = self.cache.borrow_mut();
+        if cache.len() >= CACHE_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, Rc::clone(&lines));
+        lines
+    }
+
+    fn highlight_uncached(&self, code: &str, language: &str, dark: bool) -> Highlighted {
         let theme = if dark { &self.dark } else { &self.light };
         let mut h = HighlightLines::new(self.syntax(language), theme);
         LinesWithEndings::from(code)
