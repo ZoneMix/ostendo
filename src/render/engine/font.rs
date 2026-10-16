@@ -57,7 +57,8 @@ impl Presenter {
     /// simulation.  Resets to the config default first (Cmd+0), then sends
     /// the right number of Cmd+= or Cmd+- keystrokes to reach `target`.
     pub(crate) fn ghostty_set_font_size(&self, target: f64) {
-        let base = self.original_font_size
+        let base = self
+            .original_font_size
             .as_ref()
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(13.0);
@@ -67,7 +68,10 @@ impl Presenter {
         if steps == 0 {
             // Just reset to default
             let _ = std::process::Command::new("osascript")
-                .args(["-e", r#"tell application "System Events" to keystroke "0" using {command down}"#])
+                .args([
+                    "-e",
+                    r#"tell application "System Events" to keystroke "0" using {command down}"#,
+                ])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -177,7 +181,10 @@ end tell"#,
             FontSizeCapability::GhosttyKeystroke => {
                 // Cmd+0 resets to config default
                 let _ = std::process::Command::new("osascript")
-                    .args(["-e", r#"tell application "System Events" to keystroke "0" using {command down}"#])
+                    .args([
+                        "-e",
+                        r#"tell application "System Events" to keystroke "0" using {command down}"#,
+                    ])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -219,7 +226,11 @@ end tell"#,
         if !self.font_capability.is_available() {
             return;
         }
-        let offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
+        let offset = self
+            .slide_font_offsets
+            .get(&self.current)
+            .copied()
+            .unwrap_or(0);
         let target = if let Some(ref orig) = self.original_font_size {
             if let Ok(base) = orig.parse::<f64>() {
                 base + (offset as f64 * 2.0)
@@ -311,7 +322,8 @@ end tell"#,
                     {
                         let stdout = io::stdout();
                         let mut fw = BufWriter::with_capacity(64 * 1024, stdout.lock());
-                        let dis_has_grad = self.gradient_from.is_some() && self.gradient_to.is_some();
+                        let dis_has_grad =
+                            self.gradient_from.is_some() && self.gradient_to.is_some();
                         let grad_total = (self.height.saturating_sub(status_rows)) as usize;
                         queue!(fw, BeginSynchronizedUpdate)?;
                         for row in 0..self.height {
@@ -324,22 +336,32 @@ end tell"#,
                             if let Some(line) = screen_buf.get(row as usize) {
                                 let mut col = 0usize;
                                 for span in &line.spans {
-                                    if col >= tw { break; }
+                                    if col >= tw {
+                                        break;
+                                    }
                                     let span_bg = span.bg.unwrap_or(row_bg);
                                     let fg = span.fg.unwrap_or(self.text_color);
                                     let dimmed_fg = interpolate_color(fg, span_bg, progress * 0.7);
-                                    let dimmed_bg = interpolate_color(span_bg, row_bg, progress * 0.7);
+                                    let dimmed_bg =
+                                        interpolate_color(span_bg, row_bg, progress * 0.7);
                                     for ch in span.text.chars() {
-                                        if col >= tw { break; }
-                                        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                                        if col >= tw {
+                                            break;
+                                        }
+                                        let cw =
+                                            unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
                                         let group = col / 2;
-                                        let hash = (row as u64).wrapping_mul(31)
+                                        let hash = (row as u64)
+                                            .wrapping_mul(31)
                                             .wrapping_add(group as u64)
-                                            .wrapping_mul(7919) % 1000;
+                                            .wrapping_mul(7919)
+                                            % 1000;
                                         let threshold = hash as f64 / 1000.0;
                                         if threshold < progress {
                                             queue!(fw, SetBackgroundColor(row_bg))?;
-                                            for _ in 0..cw { write!(fw, " ")?; }
+                                            for _ in 0..cw {
+                                                write!(fw, " ")?;
+                                            }
                                         } else {
                                             queue!(fw, SetBackgroundColor(dimmed_bg))?;
                                             queue!(fw, SetForegroundColor(dimmed_fg))?;
@@ -365,7 +387,9 @@ end tell"#,
                     let frame_target_ms = target_duration_ms / dissolve_frames;
                     let frame_start = std::time::Instant::now();
 
-                    if num_font_steps > 0 && matches!(self.font_capability, FontSizeCapability::KittyRemote) {
+                    if num_font_steps > 0
+                        && matches!(self.font_capability, FontSizeCapability::KittyRemote)
+                    {
                         let target_steps = ((num_font_steps as f64 * progress).round() as usize)
                             .min(num_font_steps);
                         let batch = target_steps - font_steps_sent;
@@ -420,7 +444,11 @@ end tell"#,
                     if skip_stepping {
                         queue!(pre, BeginSynchronizedUpdate)?;
                         for row in 0..self.height {
-                            queue!(pre, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                            queue!(
+                                pre,
+                                cursor::MoveTo(0, row),
+                                SetBackgroundColor(self.bg_color)
+                            )?;
                             write!(pre, "{:width$}", "", width = self.width as usize)?;
                         }
                         queue!(pre, EndSynchronizedUpdate, ResetColor)?;
@@ -486,7 +514,11 @@ end tell"#,
             let mut pre = stdout.lock();
             queue!(pre, BeginSynchronizedUpdate)?;
             for row in 0..self.height {
-                queue!(pre, cursor::MoveTo(0, row), SetBackgroundColor(self.bg_color))?;
+                queue!(
+                    pre,
+                    cursor::MoveTo(0, row),
+                    SetBackgroundColor(self.bg_color)
+                )?;
                 write!(pre, "{:width$}", "", width = self.width as usize)?;
             }
             queue!(pre, EndSynchronizedUpdate, ResetColor)?;
@@ -555,7 +587,9 @@ end tell"#,
 
             // Content: per-cell scatter reveal
             for (i, line) in dissolve_lines[..dis_visible].iter().enumerate() {
-                if line.is_scale_placeholder { continue; }
+                if line.is_scale_placeholder {
+                    continue;
+                }
                 let row = (dis_status as usize + i) as u16;
                 let row_bg = if din_has_grad {
                     self.row_bg_color(din_grad_offset + i, din_grad_total.max(1))
@@ -565,22 +599,31 @@ end tell"#,
                 queue!(dw, cursor::MoveTo(0, row), SetBackgroundColor(row_bg))?;
                 let mut col = 0usize;
                 for span in &line.spans {
-                    if col >= dis_tw { break; }
+                    if col >= dis_tw {
+                        break;
+                    }
                     let span_bg = span.bg.unwrap_or(row_bg);
                     let fg = span.fg.unwrap_or(self.text_color);
                     let dimmed_fg = interpolate_color(fg, span_bg, dim);
                     let dimmed_bg = interpolate_color(span_bg, row_bg, dim);
                     for ch in span.text.chars() {
-                        if col >= dis_tw { break; }
+                        if col >= dis_tw {
+                            break;
+                        }
                         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
                         let group = col / 2;
-                        let hash = (row as u64).wrapping_mul(31)
+                        let hash = (row as u64)
+                            .wrapping_mul(31)
                             .wrapping_add(group as u64)
-                            .wrapping_mul(7919) % 1000;
+                            .wrapping_mul(7919)
+                            % 1000;
                         let threshold = hash as f64 / 1000.0;
                         if threshold < progress {
-                            queue!(dw, SetBackgroundColor(dimmed_bg),
-                                       SetForegroundColor(dimmed_fg))?;
+                            queue!(
+                                dw,
+                                SetBackgroundColor(dimmed_bg),
+                                SetForegroundColor(dimmed_fg)
+                            )?;
                             write!(dw, "{}", ch)?;
                         } else {
                             queue!(dw, SetBackgroundColor(row_bg))?;

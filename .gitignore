@@ -7,7 +7,9 @@
 
 # Custom presentations (not distributed)
 presentations/dakotacon-2026/
+presentations/bsides-soflo-2026/
 
 # Claude Code local settings
 CLAUDE.md.bak
+CLAUDE.local.md
 tests/integration/results/

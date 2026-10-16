@@ -74,21 +74,32 @@ impl FontSizeCapability {
 /// escape sequences and keystroke simulation target the wrong process when
 /// multiplexed.
 pub fn detect_font_capability() -> FontSizeCapability {
-    // Font control doesn't work reliably through tmux — env vars become stale
-    // and keystroke simulation targets the wrong pane.
-    if env::var("TMUX").is_ok() {
-        return FontSizeCapability::None;
-    }
+    let in_tmux = env::var("TMUX").is_ok();
+
     if env::var("KITTY_WINDOW_ID").is_ok() {
-        return FontSizeCapability::KittyRemote;
-    }
-    // Ghostty sets TERM_PROGRAM=ghostty when running directly
-    if env::var("TERM_PROGRAM").unwrap_or_default().to_lowercase() == "ghostty" {
-        // Only available on macOS (uses AppleScript for keystroke simulation)
-        if cfg!(target_os = "macos") {
-            return FontSizeCapability::GhosttyKeystroke;
+        if !in_tmux {
+            return FontSizeCapability::KittyRemote;
+        }
+        // Kitty RC font control works through tmux DCS passthrough if
+        // KITTY_PID is still alive (not a stale env var).
+        if let Ok(pid_str) = env::var("KITTY_PID") {
+            if let Ok(pid) = pid_str.parse::<i32>() {
+                if unsafe { libc::kill(pid, 0) } == 0 {
+                    return FontSizeCapability::KittyRemote;
+                }
+            }
         }
     }
+
+    // Ghostty keystroke simulation targets the wrong pane inside tmux
+    if !in_tmux {
+        if env::var("TERM_PROGRAM").unwrap_or_default().to_lowercase() == "ghostty" {
+            if cfg!(target_os = "macos") {
+                return FontSizeCapability::GhosttyKeystroke;
+            }
+        }
+    }
+
     FontSizeCapability::None
 }
 
@@ -185,14 +196,24 @@ pub fn detect_protocol() -> ImageProtocol {
         return ImageProtocol::Kitty;
     }
 
-    // Kitty detection — only trust KITTY_WINDOW_ID when NOT in tmux.
-    // Inside tmux, KITTY_WINDOW_ID can be stale (inherited from a previous
-    // Kitty session but now running in iTerm2/another terminal).
-    if !in_tmux {
-        let term = env::var("TERM").unwrap_or_default();
-        if term.contains("kitty") || env::var("KITTY_WINDOW_ID").is_ok() {
+    // Kitty detection — KITTY_WINDOW_ID can be stale inside tmux (inherited
+    // from a previous session). Outside tmux, trust it directly. Inside tmux,
+    // verify Kitty is still running by checking KITTY_PID.
+    if env::var("KITTY_WINDOW_ID").is_ok() {
+        if !in_tmux {
             return ImageProtocol::Kitty;
         }
+        if let Ok(pid_str) = env::var("KITTY_PID") {
+            if let Ok(pid) = pid_str.parse::<i32>() {
+                if unsafe { libc::kill(pid, 0) } == 0 {
+                    return ImageProtocol::Kitty;
+                }
+            }
+        }
+    }
+    let term = env::var("TERM").unwrap_or_default();
+    if !in_tmux && term.contains("kitty") {
+        return ImageProtocol::Kitty;
     }
 
     // Sixel detection (some terminals set SIXEL capability)
@@ -329,7 +350,10 @@ mod tests {
         let _term = EnvGuard::remove("TERM_PROGRAM");
         let _kitty = EnvGuard::set("KITTY_WINDOW_ID", "1");
         let _tmux = EnvGuard::remove("TMUX");
-        assert_eq!(detect_kitty_animation(), KittyAnimationCapability::Supported);
+        assert_eq!(
+            detect_kitty_animation(),
+            KittyAnimationCapability::Supported
+        );
     }
 
     #[test]

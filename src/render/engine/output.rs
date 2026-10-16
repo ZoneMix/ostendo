@@ -11,7 +11,10 @@ use crate::render::text::StyledSpan;
 /// Parse a line containing ANSI color escape sequences into styled spans.
 /// Converts SGR codes (e.g., \x1B[31m for red) into StyledSpan foreground colors.
 /// Falls back to `default_fg` for unrecognized codes or when reset (\x1B[0m) is used.
-pub(crate) fn parse_ansi_styled_spans(s: &str, default_fg: crossterm::style::Color) -> Vec<StyledSpan> {
+pub(crate) fn parse_ansi_styled_spans(
+    s: &str,
+    default_fg: crossterm::style::Color,
+) -> Vec<StyledSpan> {
     use crossterm::style::Color;
 
     let mut spans: Vec<StyledSpan> = Vec::new();
@@ -24,10 +27,12 @@ pub(crate) fn parse_ansi_styled_spans(s: &str, default_fg: crossterm::style::Col
         if c == '\x1B' {
             if chars.peek() == Some(&'[') {
                 chars.next(); // consume '['
-                // Flush accumulated text
+                              // Flush accumulated text
                 if !text.is_empty() {
                     let mut span = StyledSpan::new(&text).with_fg(current_fg);
-                    if is_bold { span = span.bold(); }
+                    if is_bold {
+                        span = span.bold();
+                    }
                     spans.push(span);
                     text.clear();
                 }
@@ -40,9 +45,16 @@ pub(crate) fn parse_ansi_styled_spans(s: &str, default_fg: crossterm::style::Col
                             // Process SGR codes
                             for code in params.split(';') {
                                 match code.trim() {
-                                    "0" | "" => { current_fg = default_fg; is_bold = false; }
-                                    "1" => { is_bold = true; }
-                                    "22" => { is_bold = false; }
+                                    "0" | "" => {
+                                        current_fg = default_fg;
+                                        is_bold = false;
+                                    }
+                                    "1" => {
+                                        is_bold = true;
+                                    }
+                                    "22" => {
+                                        is_bold = false;
+                                    }
                                     "30" => current_fg = Color::Black,
                                     "31" => current_fg = Color::Red,
                                     "32" => current_fg = Color::Green,
@@ -73,7 +85,9 @@ pub(crate) fn parse_ansi_styled_spans(s: &str, default_fg: crossterm::style::Col
                 chars.next();
                 while let Some(&next) = chars.peek() {
                     chars.next();
-                    if next == '\x07' { break; }
+                    if next == '\x07' {
+                        break;
+                    }
                     if next == '\x1B' && chars.peek() == Some(&'\\') {
                         chars.next();
                         break;
@@ -89,7 +103,9 @@ pub(crate) fn parse_ansi_styled_spans(s: &str, default_fg: crossterm::style::Col
     // Flush remaining text
     if !text.is_empty() {
         let mut span = StyledSpan::new(&text).with_fg(current_fg);
-        if is_bold { span = span.bold(); }
+        if is_bold {
+            span = span.bold();
+        }
         spans.push(span);
     }
     spans
@@ -102,8 +118,8 @@ pub(crate) fn comment_prefix_for(lang: &str) -> &'static str {
         "html" | "xml" => "<!-- ",
         "css" => "/* ",
         "sql" | "lua" | "haskell" => "-- ",
-        "c" | "cpp" | "c++" | "java" | "javascript" | "js" | "typescript" | "go" | "golang" | "rust"
-        | "swift" | "kotlin" | "scala" | "php" | "dart" | "zig" => "// ",
+        "c" | "cpp" | "c++" | "java" | "javascript" | "js" | "typescript" | "go" | "golang"
+        | "rust" | "swift" | "kotlin" | "scala" | "php" | "dart" | "zig" => "// ",
         _ => "// ",
     }
 }
@@ -157,7 +173,11 @@ pub(crate) fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in words {
-        let test = if current.is_empty() { word.to_string() } else { format!("{} {}", current, word) };
+        let test = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{} {}", current, word)
+        };
         if unicode_width::UnicodeWidthStr::width(test.as_str()) > width && !current.is_empty() {
             lines.push(current);
             current = word.to_string();

@@ -55,7 +55,8 @@ impl Presenter {
         };
 
         // Cap footer to prevent overflow
-        let max_footer_len = width.saturating_sub(slide_info.len() + timer.len() + theme_part.len() + 10);
+        let max_footer_len =
+            width.saturating_sub(slide_info.len() + timer.len() + theme_part.len() + 10);
         let footer_part = if footer_part.len() > max_footer_len && max_footer_len > 4 {
             format!(" {}… ", &footer_part[1..max_footer_len.saturating_sub(2)])
         } else if footer_part.len() > max_footer_len {
@@ -66,23 +67,57 @@ impl Presenter {
 
         // Progress bar fills remaining space
         let footer_sep = if footer_part.is_empty() { 0 } else { 3 }; // " · "
-        let fixed_len = slide_info.len() + timer.len() + theme_part.len() + footer_part.len() + footer_sep + 2;
+        let fixed_len =
+            slide_info.len() + timer.len() + theme_part.len() + footer_part.len() + footer_sep + 2;
         let bar_width = width.saturating_sub(fixed_len);
         let progress = render_progress_bar(self.current + 1, self.slides.len(), bar_width);
 
         let mut line = StyledLine::empty();
-        line.push(StyledSpan::new(&slide_info).with_fg(self.bg_color).with_bg(self.accent_color).bold());
-        line.push(StyledSpan::new(&timer).with_fg(self.text_color).with_bg(self.code_bg_color));
+        line.push(
+            StyledSpan::new(&slide_info)
+                .with_fg(self.bg_color)
+                .with_bg(self.accent_color)
+                .bold(),
+        );
+        line.push(
+            StyledSpan::new(&timer)
+                .with_fg(self.text_color)
+                .with_bg(self.code_bg_color),
+        );
         if !theme_part.is_empty() {
-            line.push(StyledSpan::new(&theme_part).with_fg(self.text_color).with_bg(self.code_bg_color).dim());
+            line.push(
+                StyledSpan::new(&theme_part)
+                    .with_fg(self.text_color)
+                    .with_bg(self.code_bg_color)
+                    .dim(),
+            );
         }
-        line.push(StyledSpan::new(&progress).with_fg(self.accent_color).with_bg(self.code_bg_color));
+        line.push(
+            StyledSpan::new(&progress)
+                .with_fg(self.accent_color)
+                .with_bg(self.code_bg_color),
+        );
         if !footer_part.is_empty() {
-            line.push(StyledSpan::new(" · ").with_fg(self.text_color).with_bg(self.code_bg_color).dim());
-            line.push(StyledSpan::new(&footer_part).with_fg(self.text_color).with_bg(self.code_bg_color).dim());
+            line.push(
+                StyledSpan::new(" · ")
+                    .with_fg(self.text_color)
+                    .with_bg(self.code_bg_color)
+                    .dim(),
+            );
+            line.push(
+                StyledSpan::new(&footer_part)
+                    .with_fg(self.text_color)
+                    .with_bg(self.code_bg_color)
+                    .dim(),
+            );
         }
         // Fill any remaining space
-        let used: usize = slide_info.len() + timer.len() + theme_part.len() + progress.len() + footer_part.len() + footer_sep;
+        let used: usize = slide_info.len()
+            + timer.len()
+            + theme_part.len()
+            + progress.len()
+            + footer_part.len()
+            + footer_sep;
         if used < width {
             line.push(StyledSpan::new(&" ".repeat(width - used)).with_bg(self.code_bg_color));
         }
@@ -117,15 +152,26 @@ impl Presenter {
 
         // Fill background for all rows
         for row in 0..th {
-            queue!(w, cursor::MoveTo(0, row as u16), SetBackgroundColor(self.bg_color))?;
+            queue!(
+                w,
+                cursor::MoveTo(0, row as u16),
+                SetBackgroundColor(self.bg_color)
+            )?;
             write!(w, "{}", " ".repeat(tw))?;
         }
 
         // Section = "H" (header), "K" (key/desc), "S" (separator), "I" (info dim)
         let detected_proto = format!("{:?}", self.image_protocol);
-        let slide_offset = self.slide_font_offsets.get(&self.current).copied().unwrap_or(0);
-        let font_info = format!("slide {}: {:+} ({}pt/step)",
-            self.current + 1, slide_offset, 2,
+        let slide_offset = self
+            .slide_font_offsets
+            .get(&self.current)
+            .copied()
+            .unwrap_or(0);
+        let font_info = format!(
+            "slide {}: {:+} ({}pt/step)",
+            self.current + 1,
+            slide_offset,
+            2,
         );
 
         // Two-column layout
@@ -164,8 +210,16 @@ impl Presenter {
             ("S", "", ""),
             ("H", "Animations", ""),
             ("K", "<!-- transition: fade -->", "fade|slide|dissolve"),
-            ("K", "<!-- animation: typewriter -->", "typewriter|fade_in|slide_down"),
-            ("K", "<!-- loop_animation: pulse -->", "matrix|bounce|pulse|sparkle|spin"),
+            (
+                "K",
+                "<!-- animation: typewriter -->",
+                "typewriter|fade_in|slide_down",
+            ),
+            (
+                "K",
+                "<!-- loop_animation: pulse -->",
+                "matrix|bounce|pulse|sparkle|spin",
+            ),
             ("S", "", ""),
             ("H", "Text Scaling (OSC 66)", ""),
             ("K", "<!-- title_scale: 3 -->", "Scale title (2-7x, Kitty)"),
@@ -189,7 +243,11 @@ impl Presenter {
             ("K", "--slide <N>", "Start at slide N"),
             ("K", "--image-mode <mode>", "auto|kitty|iterm|sixel|ascii"),
             ("K", "--remote", "Enable WebSocket remote control"),
-            ("K", "--remote-port <N>", "Remote control port (default: 8765)"),
+            (
+                "K",
+                "--remote-port <N>",
+                "Remote control port (default: 8765)",
+            ),
             ("K", "--validate", "Validate without running TUI"),
             ("K", "--list-themes", "List available themes"),
         ];
@@ -197,13 +255,23 @@ impl Presenter {
         // Title
         let title = "Ostendo Help";
         let title_x = (tw.saturating_sub(title.len())) / 2;
-        queue!(w, cursor::MoveTo(title_x as u16, 1), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
+        queue!(
+            w,
+            cursor::MoveTo(title_x as u16, 1),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Bold)
+        )?;
         write!(w, "{}", title)?;
         queue!(w, SetAttribute(Attribute::Reset))?;
 
         // Separator
         let sep_str = "─".repeat(tw.saturating_sub(8));
-        queue!(w, cursor::MoveTo(4, 2), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Dim))?;
+        queue!(
+            w,
+            cursor::MoveTo(4, 2),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Dim)
+        )?;
         write!(w, "{}", sep_str)?;
         queue!(w, SetAttribute(Attribute::Reset))?;
 
@@ -217,11 +285,18 @@ impl Presenter {
             ($w:expr, $entries:expr, $x:expr, $max_w:expr) => {
                 for (i, (kind, key, desc)) in $entries.iter().enumerate() {
                     let y = start_y + i as u16;
-                    if y >= th as u16 - 1 { break; }
+                    if y >= th as u16 - 1 {
+                        break;
+                    }
                     queue!($w, cursor::MoveTo($x, y))?;
                     match *kind {
                         "H" => {
-                            queue!($w, SetBackgroundColor(self.bg_color), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
+                            queue!(
+                                $w,
+                                SetBackgroundColor(self.bg_color),
+                                SetForegroundColor(self.accent_color),
+                                SetAttribute(Attribute::Bold)
+                            )?;
                             let text = format!("▸ {}", key);
                             let truncated = truncate_to_width(&text, $max_w);
                             write!($w, "{}", truncated)?;
@@ -232,7 +307,11 @@ impl Presenter {
                             if !key.is_empty() {
                                 let badge = format!(" {} ", key);
                                 let badge_t = truncate_to_width(&badge, $max_w);
-                                queue!($w, SetBackgroundColor(self.help_badge_bg), SetForegroundColor(self.accent_color))?;
+                                queue!(
+                                    $w,
+                                    SetBackgroundColor(self.help_badge_bg),
+                                    SetForegroundColor(self.accent_color)
+                                )?;
                                 write!($w, "{}", badge_t)?;
                                 written += unicode_width::UnicodeWidthStr::width(badge_t.as_str());
                                 queue!($w, SetBackgroundColor(self.bg_color))?;
@@ -246,14 +325,22 @@ impl Presenter {
                             queue!($w, SetAttribute(Attribute::Reset))?;
                         }
                         "I" => {
-                            queue!($w, SetForegroundColor(self.text_color), SetAttribute(Attribute::Dim))?;
+                            queue!(
+                                $w,
+                                SetForegroundColor(self.text_color),
+                                SetAttribute(Attribute::Dim)
+                            )?;
                             let text = format!("  {}", desc);
                             let truncated = truncate_to_width(&text, $max_w);
                             write!($w, "{}", truncated)?;
                             queue!($w, SetAttribute(Attribute::Reset))?;
                         }
                         "S" => {
-                            queue!($w, SetForegroundColor(self.accent_color), SetAttribute(Attribute::Dim))?;
+                            queue!(
+                                $w,
+                                SetForegroundColor(self.accent_color),
+                                SetAttribute(Attribute::Dim)
+                            )?;
                             write!($w, "{}", "─".repeat($max_w.min(30)))?;
                             queue!($w, SetAttribute(Attribute::Reset))?;
                         }
@@ -269,57 +356,129 @@ impl Presenter {
         // Status info at the bottom
         let info_y = th as u16 - 4;
         let info_sep = "─".repeat(tw.saturating_sub(8));
-        queue!(w, cursor::MoveTo(4, info_y), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Dim))?;
+        queue!(
+            w,
+            cursor::MoveTo(4, info_y),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Dim)
+        )?;
         write!(w, "{}", info_sep)?;
         queue!(w, SetAttribute(Attribute::Reset))?;
 
         // Status info
-        queue!(w, cursor::MoveTo(4, info_y + 1), SetBackgroundColor(self.bg_color), SetForegroundColor(self.text_color), SetAttribute(Attribute::Dim))?;
+        queue!(
+            w,
+            cursor::MoveTo(4, info_y + 1),
+            SetBackgroundColor(self.bg_color),
+            SetForegroundColor(self.text_color),
+            SetAttribute(Attribute::Dim)
+        )?;
         write!(w, "Image protocol: ")?;
-        queue!(w, SetAttribute(Attribute::NormalIntensity), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
+        queue!(
+            w,
+            SetAttribute(Attribute::NormalIntensity),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Bold)
+        )?;
         write!(w, "{}", detected_proto)?;
-        queue!(w, SetAttribute(Attribute::NoBold), SetAttribute(Attribute::Dim), SetForegroundColor(self.text_color))?;
+        queue!(
+            w,
+            SetAttribute(Attribute::NoBold),
+            SetAttribute(Attribute::Dim),
+            SetForegroundColor(self.text_color)
+        )?;
         write!(w, "   Font size: ")?;
-        queue!(w, SetAttribute(Attribute::NormalIntensity), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
+        queue!(
+            w,
+            SetAttribute(Attribute::NormalIntensity),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Bold)
+        )?;
         write!(w, "{}", font_info)?;
-        queue!(w, SetAttribute(Attribute::NoBold), SetAttribute(Attribute::Dim), SetForegroundColor(self.text_color))?;
+        queue!(
+            w,
+            SetAttribute(Attribute::NoBold),
+            SetAttribute(Attribute::Dim),
+            SetForegroundColor(self.text_color)
+        )?;
         write!(w, "   Theme: ")?;
-        queue!(w, SetAttribute(Attribute::NormalIntensity), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
+        queue!(
+            w,
+            SetAttribute(Attribute::NormalIntensity),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Bold)
+        )?;
         write!(w, "{}", self.theme.name)?;
-        queue!(w, SetAttribute(Attribute::Reset), SetBackgroundColor(self.bg_color))?;
+        queue!(
+            w,
+            SetAttribute(Attribute::Reset),
+            SetBackgroundColor(self.bg_color)
+        )?;
 
         // Close hint
-        queue!(w, cursor::MoveTo(4, info_y + 2), SetBackgroundColor(self.bg_color), SetForegroundColor(self.text_color), SetAttribute(Attribute::Dim))?;
+        queue!(
+            w,
+            cursor::MoveTo(4, info_y + 2),
+            SetBackgroundColor(self.bg_color),
+            SetForegroundColor(self.text_color),
+            SetAttribute(Attribute::Dim)
+        )?;
         write!(w, "Press any key to close")?;
-        queue!(w, SetAttribute(Attribute::Reset), SetBackgroundColor(self.bg_color))?;
+        queue!(
+            w,
+            SetAttribute(Attribute::Reset),
+            SetBackgroundColor(self.bg_color)
+        )?;
 
         // Markdown directives help
         if tw > 100 {
             let dir_y = start_y + (left_col.len().max(right_col.len()) as u16) + 2;
             if dir_y < info_y - 2 {
-                queue!(w, cursor::MoveTo(4, dir_y), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
+                queue!(
+                    w,
+                    cursor::MoveTo(4, dir_y),
+                    SetForegroundColor(self.accent_color),
+                    SetAttribute(Attribute::Bold)
+                )?;
                 write!(w, "▸ Markdown Directives")?;
                 queue!(w, SetAttribute(Attribute::Reset))?;
                 let directives = [
                     ("<!-- section: name -->", "Set slide section"),
                     ("<!-- timing: 1.0 -->", "Set timing in minutes"),
                     ("<!-- ascii_title -->", "Render title as FIGlet ASCII art"),
-                    ("<!-- font_size: 2 -->", "Set font size (-3..7, requires kitty)"),
+                    (
+                        "<!-- font_size: 2 -->",
+                        "Set font size (-3..7, requires kitty)",
+                    ),
                     ("<!-- column_layout: [1,1] -->", "Define column ratios"),
                     ("<!-- column: 0 -->", "Start column content"),
-                    ("<!-- image_render: ascii|kitty|iterm|sixel -->", "Per-image render mode"),
+                    (
+                        "<!-- image_render: ascii|kitty|iterm|sixel -->",
+                        "Per-image render mode",
+                    ),
                     ("<!-- notes: ... -->", "Speaker notes"),
                 ];
                 let dir_max = tw.saturating_sub(8);
                 for (j, (dir, desc)) in directives.iter().enumerate() {
                     let dy = dir_y + 1 + j as u16;
-                    if dy >= info_y - 1 { break; }
-                    queue!(w, cursor::MoveTo(6, dy), SetBackgroundColor(self.help_badge_bg), SetForegroundColor(self.accent_color))?;
+                    if dy >= info_y - 1 {
+                        break;
+                    }
+                    queue!(
+                        w,
+                        cursor::MoveTo(6, dy),
+                        SetBackgroundColor(self.help_badge_bg),
+                        SetForegroundColor(self.accent_color)
+                    )?;
                     let badge = format!(" {} ", dir);
                     let badge_t = truncate_to_width(&badge, dir_max);
                     let badge_w = unicode_width::UnicodeWidthStr::width(badge_t.as_str());
                     write!(w, "{}", badge_t)?;
-                    queue!(w, SetBackgroundColor(self.bg_color), SetForegroundColor(self.text_color))?;
+                    queue!(
+                        w,
+                        SetBackgroundColor(self.bg_color),
+                        SetForegroundColor(self.text_color)
+                    )?;
                     if badge_w < dir_max {
                         let desc_t = truncate_to_width(&format!(" {}", desc), dir_max - badge_w);
                         write!(w, "{}", desc_t)?;
@@ -351,7 +510,11 @@ impl Presenter {
 
         // Clear entire screen (this also clears any lingering protocol images)
         for row in 0..th {
-            queue!(w, cursor::MoveTo(0, row as u16), SetBackgroundColor(self.bg_color))?;
+            queue!(
+                w,
+                cursor::MoveTo(0, row as u16),
+                SetBackgroundColor(self.bg_color)
+            )?;
             write!(w, "{}", " ".repeat(tw))?;
         }
 
@@ -363,7 +526,12 @@ impl Presenter {
             self.image_cache.clear();
         }
 
-        queue!(w, cursor::MoveTo(2, 1), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Bold))?;
+        queue!(
+            w,
+            cursor::MoveTo(2, 1),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Bold)
+        )?;
         write!(w, "Slide Overview")?;
         queue!(w, SetAttribute(Attribute::Reset))?;
 
@@ -375,22 +543,36 @@ impl Presenter {
         let total_slots = rows_per_col * num_cols;
 
         for (i, slide) in self.slides.iter().enumerate() {
-            if i >= total_slots { break; }
+            if i >= total_slots {
+                break;
+            }
 
             // Top-down then left-to-right: column fills vertically first
             let col = i / rows_per_col;
             let row_in_col = i % rows_per_col;
-            if col >= num_cols { break; }
+            if col >= num_cols {
+                break;
+            }
 
             let x = 2 + col * (col_width + 2);
             let y = start_y + row_in_col as u16 * 2;
-            if y >= self.height - 2 { break; }
+            if y >= self.height - 2 {
+                break;
+            }
 
             queue!(w, cursor::MoveTo(x as u16, y))?;
             if i == self.current {
-                queue!(w, SetBackgroundColor(self.accent_color), SetForegroundColor(self.bg_color))?;
+                queue!(
+                    w,
+                    SetBackgroundColor(self.accent_color),
+                    SetForegroundColor(self.bg_color)
+                )?;
             } else {
-                queue!(w, SetBackgroundColor(self.bg_color), SetForegroundColor(self.text_color))?;
+                queue!(
+                    w,
+                    SetBackgroundColor(self.bg_color),
+                    SetForegroundColor(self.text_color)
+                )?;
             }
 
             let section = slide.section.as_str();
@@ -400,14 +582,29 @@ impl Presenter {
                 format!(" [{}]", truncate_str(section, 10))
             };
             let max_title = col_width.saturating_sub(8 + section_tag.len());
-            let label = format!(" {:>2}. {}{} ", i + 1, truncate_str(&slide.title, max_title), section_tag);
+            let label = format!(
+                " {:>2}. {}{} ",
+                i + 1,
+                truncate_str(&slide.title, max_title),
+                section_tag
+            );
             write!(w, "{:<width$}", label, width = col_width)?;
             queue!(w, SetAttribute(Attribute::Reset))?;
         }
 
-        queue!(w, cursor::MoveTo(2, self.height - 1), SetForegroundColor(self.accent_color), SetAttribute(Attribute::Dim))?;
+        queue!(
+            w,
+            cursor::MoveTo(2, self.height - 1),
+            SetForegroundColor(self.accent_color),
+            SetAttribute(Attribute::Dim)
+        )?;
         write!(w, "j/k: navigate  Enter: select  Esc: close")?;
-        queue!(w, SetAttribute(Attribute::Reset), EndSynchronizedUpdate, ResetColor)?;
+        queue!(
+            w,
+            SetAttribute(Attribute::Reset),
+            EndSynchronizedUpdate,
+            ResetColor
+        )?;
         w.flush()?;
         Ok(())
     }

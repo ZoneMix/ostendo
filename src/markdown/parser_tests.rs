@@ -157,7 +157,11 @@ fn test_presentation_file() {
     if path.exists() {
         let source = std::fs::read_to_string(&path).unwrap();
         let (_meta, slides) = parse_presentation(&source, path.parent()).unwrap();
-        assert!(slides.len() >= 20, "Expected at least 20 slides, got {}", slides.len());
+        assert!(
+            slides.len() >= 20,
+            "Expected at least 20 slides, got {}",
+            slides.len()
+        );
     }
 }
 
@@ -171,20 +175,37 @@ fn test_slide_numbering() {
 
 #[test]
 fn test_test_presentation() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("presentations/examples/test_presentation.md");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("presentations/examples/test_presentation.md");
     if path.exists() {
         let source = std::fs::read_to_string(&path).unwrap();
         let (_meta, slides) = parse_presentation(&source, path.parent()).unwrap();
-        assert!(slides.len() >= 15, "Expected at least 15 slides, got {}", slides.len());
+        assert!(
+            slides.len() >= 15,
+            "Expected at least 15 slides, got {}",
+            slides.len()
+        );
         // Verify tables parsed
         let table_slides: Vec<_> = slides.iter().filter(|s| !s.tables.is_empty()).collect();
-        assert!(table_slides.len() >= 2, "Expected at least 2 slides with tables");
+        assert!(
+            table_slides.len() >= 2,
+            "Expected at least 2 slides with tables"
+        );
         // Verify block quotes parsed
-        let quote_slides: Vec<_> = slides.iter().filter(|s| !s.block_quotes.is_empty()).collect();
-        assert!(!quote_slides.is_empty(), "Expected at least 1 slide with block quotes");
+        let quote_slides: Vec<_> = slides
+            .iter()
+            .filter(|s| !s.block_quotes.is_empty())
+            .collect();
+        assert!(
+            !quote_slides.is_empty(),
+            "Expected at least 1 slide with block quotes"
+        );
         // Verify columns parsed
         let col_slides: Vec<_> = slides.iter().filter(|s| s.columns.is_some()).collect();
-        assert!(col_slides.len() >= 2, "Expected at least 2 slides with columns");
+        assert!(
+            col_slides.len() >= 2,
+            "Expected at least 2 slides with columns"
+        );
     }
 }
 
@@ -211,9 +232,15 @@ fn test_inline_italic() {
 #[test]
 fn test_inline_bold_italic_nested() {
     use crossterm::style::Color;
-    let spans = parse_inline_formatting("**Bold *and italic* mixed**", Color::White, Color::DarkGrey);
+    let spans =
+        parse_inline_formatting("**Bold *and italic* mixed**", Color::White, Color::DarkGrey);
     // Should produce: "Bold " (bold), "and italic" (bold+italic), " mixed" (bold)
-    assert!(spans.len() >= 3, "Expected at least 3 spans, got {}: {:?}", spans.len(), spans.iter().map(|s| &s.text).collect::<Vec<_>>());
+    assert!(
+        spans.len() >= 3,
+        "Expected at least 3 spans, got {}: {:?}",
+        spans.len(),
+        spans.iter().map(|s| &s.text).collect::<Vec<_>>()
+    );
     assert!(spans[0].bold);
     assert!(!spans[0].italic);
     assert!(spans[1].bold);
@@ -267,7 +294,10 @@ fn test_blockquote_parsing() {
     let src = "# Slide\n> This is a quote\n> Second line";
     let slides = parse(src);
     assert_eq!(slides[0].block_quotes.len(), 1);
-    assert_eq!(slides[0].block_quotes[0].lines, vec!["This is a quote", "Second line"]);
+    assert_eq!(
+        slides[0].block_quotes[0].lines,
+        vec!["This is a quote", "Second line"]
+    );
 }
 
 #[test]
@@ -288,7 +318,10 @@ fn test_front_matter_meta() {
     assert_eq!(meta.author, "Alice");
     assert_eq!(meta.date, "2026-03-09");
     assert_eq!(meta.accent, "#FF5500");
-    assert_eq!(meta.default_alignment, Some(crate::presentation::SlideAlignment::Center));
+    assert_eq!(
+        meta.default_alignment,
+        Some(crate::presentation::SlideAlignment::Center)
+    );
     assert_eq!(meta.transition, "fade");
     assert_eq!(slides.len(), 1);
     assert_eq!(slides[0].title, "First Slide");
@@ -305,7 +338,10 @@ fn test_footer_directive() {
 fn test_align_directive() {
     let src = "<!-- align: center -->\n# Centered Slide";
     let slides = parse(src);
-    assert_eq!(slides[0].alignment, Some(crate::presentation::SlideAlignment::Center));
+    assert_eq!(
+        slides[0].alignment,
+        Some(crate::presentation::SlideAlignment::Center)
+    );
 }
 
 #[test]
@@ -319,22 +355,34 @@ fn test_title_decoration_directive() {
 fn test_transition_directive() {
     let src = "<!-- transition: dissolve -->\n# Trans";
     let slides = parse(src);
-    assert_eq!(slides[0].transition, Some(crate::render::animation::TransitionType::Dissolve));
+    assert_eq!(
+        slides[0].transition,
+        Some(crate::render::animation::TransitionType::Dissolve)
+    );
 }
 
 #[test]
 fn test_animation_directives() {
     let src = "<!-- animation: typewriter -->\n<!-- loop_animation: matrix -->\n# Animated";
     let slides = parse(src);
-    assert_eq!(slides[0].entrance_animation, Some(crate::render::animation::EntranceAnimation::Typewriter));
-    assert_eq!(slides[0].loop_animations, vec![(crate::render::animation::LoopAnimation::Matrix, None)]);
+    assert_eq!(
+        slides[0].entrance_animation,
+        Some(crate::render::animation::EntranceAnimation::Typewriter)
+    );
+    assert_eq!(
+        slides[0].loop_animations,
+        vec![(crate::render::animation::LoopAnimation::Matrix, None)]
+    );
 }
 
 #[test]
 fn test_preamble_directives() {
     let src = "# Code\n<!-- preamble_start: python -->\nimport math\n<!-- preamble_end -->\n```python +exec\nprint(math.pi)\n```";
     let slides = parse(src);
-    assert_eq!(slides[0].code_preambles.get("python").unwrap(), "import math");
+    assert_eq!(
+        slides[0].code_preambles.get("python").unwrap(),
+        "import math"
+    );
 }
 
 #[test]

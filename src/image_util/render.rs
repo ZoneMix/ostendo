@@ -155,19 +155,35 @@ pub fn render_slide_image(
     match protocol {
         ImageProtocol::Kitty => {
             let composited = composite_on_bg(&img, bg_color);
-            render_kitty(&composited, display_width, max_height, pad.len(), window_size)
+            render_kitty(
+                &composited,
+                display_width,
+                max_height,
+                pad.len(),
+                window_size,
+            )
         }
         ImageProtocol::Iterm2 => {
             let composited = composite_on_bg(&img, bg_color);
-            render_iterm2(&composited, display_width, max_height, pad.len(), window_size)
+            render_iterm2(
+                &composited,
+                display_width,
+                max_height,
+                pad.len(),
+                window_size,
+            )
         }
         ImageProtocol::Sixel => {
             let composited = composite_on_bg(&img, bg_color);
-            render_sixel(&composited, display_width, max_height, pad.len(), window_size)
+            render_sixel(
+                &composited,
+                display_width,
+                max_height,
+                pad.len(),
+                window_size,
+            )
         }
-        ImageProtocol::Ascii => {
-            render_ascii(&img, display_width, pad, text_color, image, bg_color)
-        }
+        ImageProtocol::Ascii => render_ascii(&img, display_width, pad, text_color, image, bg_color),
     }
 }
 
@@ -191,14 +207,14 @@ fn render_ascii(
     } else {
         crate::theme::colors::hex_to_color(&image.color_override)
     };
-    let ascii_rows = ascii_art::render_ascii_art(img, display_width, color_override, Some(bg_color));
+    let ascii_rows =
+        ascii_art::render_ascii_art(img, display_width, color_override, Some(bg_color));
     let mut lines = Vec::with_capacity(ascii_rows.len() + 1);
     for row in &ascii_rows {
         let mut line = StyledLine::empty();
         line.push(StyledSpan::new(pad));
         for cell in row {
-            let mut span = StyledSpan::new(&cell.ch.to_string())
-                .with_fg(cell.fg);
+            let mut span = StyledSpan::new(&cell.ch.to_string()).with_fg(cell.fg);
             if let Some(bg) = cell.bg {
                 span = span.with_bg(bg);
             }
@@ -211,7 +227,11 @@ fn render_ascii(
     if !image.alt_text.is_empty() {
         let mut cap = StyledLine::empty();
         cap.push(StyledSpan::new(pad));
-        cap.push(StyledSpan::new(&format!("  {}", image.alt_text)).with_fg(text_color).dim());
+        cap.push(
+            StyledSpan::new(&format!("  {}", image.alt_text))
+                .with_fg(text_color)
+                .dim(),
+        );
         lines.push(cap);
     }
 
@@ -232,9 +252,8 @@ fn render_kitty(
 ) -> RenderedImage {
     use crate::image_util::kitty;
 
-    let (scaled, cols, rows) = crate::image_util::scale_image_pixels(
-        img, window_size, display_width, max_height,
-    );
+    let (scaled, cols, rows) =
+        crate::image_util::scale_image_pixels(img, window_size, display_width, max_height);
 
     // Kitty v2: transmit once (a=t), display by ID (a=p).
     // Centering is handled by cursor positioning at emit time, not by pad_cols.
@@ -262,9 +281,8 @@ fn render_iterm2(
     pad_cols: usize,
     window_size: &WindowSize,
 ) -> RenderedImage {
-    let (scaled, cols, rows) = crate::image_util::scale_image_pixels(
-        img, window_size, display_width, max_height,
-    );
+    let (scaled, cols, rows) =
+        crate::image_util::scale_image_pixels(img, window_size, display_width, max_height);
     let (sw, sh) = scaled.dimensions();
 
     // Encode as PNG
@@ -276,7 +294,9 @@ fn render_iterm2(
         sw,
         sh,
         image::ExtendedColorType::Rgba8,
-    ).is_err() {
+    )
+    .is_err()
+    {
         return RenderedImage::Lines(vec![]);
     }
 
@@ -284,7 +304,10 @@ fn render_iterm2(
 
     let osc = format!(
         "\x1b]1337;File=size={};inline=1;width={};height={};preserveAspectRatio=1:{}\x1b\\",
-        png_bytes.len(), cols, rows, encoded
+        png_bytes.len(),
+        cols,
+        rows,
+        encoded
     );
     let wrapped = tmux_wrap(&osc);
 
@@ -312,9 +335,8 @@ fn render_sixel(
     pad_cols: usize,
     window_size: &WindowSize,
 ) -> RenderedImage {
-    let (scaled, _cols, rows) = crate::image_util::scale_image_pixels(
-        img, window_size, display_width, max_height,
-    );
+    let (scaled, _cols, rows) =
+        crate::image_util::scale_image_pixels(img, window_size, display_width, max_height);
     let (sw, sh) = scaled.dimensions();
 
     let rgb: Vec<u8> = scaled.pixels().flat_map(|p| [p[0], p[1], p[2]]).collect();
@@ -361,9 +383,23 @@ mod tests {
             scale: 100,
             color_override: String::new(),
         };
-        let ws = WindowSize { columns: 80, rows: 24, pixel_width: 640, pixel_height: 384 };
+        let ws = WindowSize {
+            columns: 80,
+            rows: 24,
+            pixel_width: 640,
+            pixel_height: 384,
+        };
         let result = render_slide_image(
-            &img, 80, 20, "", Color::Green, Color::White, ImageProtocol::Ascii, Color::Black, &ws, None,
+            &img,
+            80,
+            20,
+            "",
+            Color::Green,
+            Color::White,
+            ImageProtocol::Ascii,
+            Color::Black,
+            &ws,
+            None,
         );
         match result {
             RenderedImage::Lines(lines) => {

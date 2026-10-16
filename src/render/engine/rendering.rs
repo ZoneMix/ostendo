@@ -70,7 +70,11 @@ impl Presenter {
             queue!(pre_w, BeginSynchronizedUpdate)?;
             queue!(pre_w, cursor::MoveTo(0, 0))?;
             self.queue_styled_line(&mut pre_w, &bar, tw)?;
-            queue!(pre_w, cursor::MoveTo(0, 1), SetBackgroundColor(self.bg_color))?;
+            queue!(
+                pre_w,
+                cursor::MoveTo(0, 1),
+                SetBackgroundColor(self.bg_color)
+            )?;
             write!(pre_w, "{:width$}", "", width = tw)?;
             queue!(pre_w, EndSynchronizedUpdate, ResetColor)?;
             pre_w.flush()?;
@@ -137,7 +141,9 @@ impl Presenter {
                                     if let Event::Resize(w2, h2) = event::read()? {
                                         self.width = w2;
                                         self.height = h2;
-                                    } else { break; }
+                                    } else {
+                                        break;
+                                    }
                                 }
                                 self.window_size = WindowSize::query();
                                 self.width = self.window_size.columns;
@@ -197,7 +203,9 @@ impl Presenter {
         if show_section && !slide.section.is_empty() {
             let mut line = StyledLine::empty();
             line.push(StyledSpan::new(&pad));
-            line.push(StyledSpan::new(&format!("Section: {}", slide.section)).with_fg(self.text_color));
+            line.push(
+                StyledSpan::new(&format!("Section: {}", slide.section)).with_fg(self.text_color),
+            );
             lines.push(line);
             lines.push(StyledLine::empty());
         }
@@ -207,7 +215,9 @@ impl Presenter {
         // rendering into column 0 instead of placing it full-width above.
         let ascii_title_in_columns = slide.ascii_title && slide.columns.is_some();
         if !slide.title.is_empty() && !ascii_title_in_columns {
-            let decoration = slide.title_decoration.as_deref()
+            let decoration = slide
+                .title_decoration
+                .as_deref()
                 .or(self.theme.title_decoration.as_deref());
             if slide.ascii_title {
                 self.render_ascii_title(&slide.title, &pad, &mut lines);
@@ -216,7 +226,9 @@ impl Presenter {
             } else {
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(&pad));
-                let mut title_span = StyledSpan::new(&slide.title).with_fg(self.accent_color).bold();
+                let mut title_span = StyledSpan::new(&slide.title)
+                    .with_fg(self.accent_color)
+                    .bold();
                 // Apply per-slide text_scale (OSC 66) if set
                 if let Some(scale) = slide.text_scale {
                     if scale >= 2 {
@@ -240,7 +252,9 @@ impl Presenter {
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(&pad));
                 let subtitle_spans = crate::markdown::parser::parse_inline_formatting(
-                    wline, self.text_color, self.code_bg_color,
+                    wline,
+                    self.text_color,
+                    self.code_bg_color,
                 );
                 for span in subtitle_spans {
                     line.push(span);
@@ -253,10 +267,15 @@ impl Presenter {
         // Bullets
         // When ascii_title + column_layout are both active, skip top-level
         // bullet rendering — bullets are inside columns instead.
-        let bullet_list = if ascii_title_in_columns { &[][..] } else { &slide.bullets[..] };
+        let bullet_list = if ascii_title_in_columns {
+            &[][..]
+        } else {
+            &slide.bullets[..]
+        };
         for (bi, bullet) in bullet_list.iter().enumerate() {
             let indent = bullet_indent(bullet.depth);
-            let wrapped = textwrap_simple(&bullet.text, content_width.saturating_sub(indent.len() + 2));
+            let wrapped =
+                textwrap_simple(&bullet.text, content_width.saturating_sub(indent.len() + 2));
             for (i, wline) in wrapped.iter().enumerate() {
                 let mut line = StyledLine::empty();
                 line.push(StyledSpan::new(&pad));
@@ -266,7 +285,9 @@ impl Presenter {
                     line.push(StyledSpan::new(&" ".repeat(indent.len())));
                 }
                 let inline_spans = crate::markdown::parser::parse_inline_formatting(
-                    wline, self.text_color, self.code_bg_color,
+                    wline,
+                    self.text_color,
+                    self.code_bg_color,
                 );
                 for span in inline_spans {
                     line.push(span);
@@ -291,7 +312,9 @@ impl Presenter {
                     let mut line = StyledLine::empty();
                     line.push(StyledSpan::new(&pad));
                     let inline_spans = crate::markdown::parser::parse_inline_formatting(
-                        wline, self.text_color, self.code_bg_color,
+                        wline,
+                        self.text_color,
+                        self.code_bg_color,
                     );
                     for span in inline_spans {
                         line.push(span);
@@ -312,16 +335,23 @@ impl Presenter {
             self.render_columns(cols, content_width, &pad, &mut lines, col_figlet_title);
             // Show exec output if columns have executable code blocks
             // Column exec blocks come after slide-level exec blocks in index order
-            let slide_exec_count = slide.code_blocks.iter()
-                .filter(|cb| cb.exec_mode.is_some()).count();
-            let col_exec_blocks: Vec<&crate::presentation::CodeBlock> = cols.contents.iter()
+            let slide_exec_count = slide
+                .code_blocks
+                .iter()
+                .filter(|cb| cb.exec_mode.is_some())
+                .count();
+            let col_exec_blocks: Vec<&crate::presentation::CodeBlock> = cols
+                .contents
+                .iter()
                 .flat_map(|c| c.code_blocks.iter())
                 .filter(|cb| cb.exec_mode.is_some())
                 .collect();
             if !col_exec_blocks.is_empty() {
                 // Column exec block index starts after slide-level exec blocks
                 let col_local_idx = self.exec_block_index.saturating_sub(slide_exec_count);
-                if self.exec_block_index >= slide_exec_count && col_local_idx < col_exec_blocks.len() {
+                if self.exec_block_index >= slide_exec_count
+                    && col_local_idx < col_exec_blocks.len()
+                {
                     self.render_exec_output(&pad, &mut lines);
                 }
             }
@@ -331,7 +361,11 @@ impl Presenter {
         // Code blocks (presenterm-style: background rect with padding, no borders)
         let mut exec_render_idx: usize = 0;
         for cb in slide.code_blocks.iter() {
-            let label = if cb.label.is_empty() { cb.language.clone() } else { cb.label.clone() };
+            let label = if cb.label.is_empty() {
+                cb.language.clone()
+            } else {
+                cb.label.clone()
+            };
             let inner_pad = 4; // 2 left + 2 right padding inside block
             let block_width = content_width;
 
@@ -349,7 +383,12 @@ impl Presenter {
                 let label_pad = block_width.saturating_sub(label_width);
                 let mut ll = StyledLine::empty();
                 ll.push(StyledSpan::new(&pad));
-                ll.push(StyledSpan::new(&label_text).with_fg(self.accent_color).with_bg(self.code_bg_color).dim());
+                ll.push(
+                    StyledSpan::new(&label_text)
+                        .with_fg(self.accent_color)
+                        .with_bg(self.code_bg_color)
+                        .dim(),
+                );
                 if label_pad > 0 {
                     ll.push(StyledSpan::new(&" ".repeat(label_pad)).with_bg(self.code_bg_color));
                 }
@@ -386,11 +425,16 @@ impl Presenter {
                     while pos < flat.len() {
                         let (ch, fg) = flat[pos];
                         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-                        if w + cw > avail { break; }
+                        if w + cw > avail {
+                            break;
+                        }
                         // Flush on color change
                         if !cur_text.is_empty() && fg != cur_fg {
-                            line.push(StyledSpan::new(&cur_text)
-                                .with_fg(cur_fg).with_bg(self.code_bg_color));
+                            line.push(
+                                StyledSpan::new(&cur_text)
+                                    .with_fg(cur_fg)
+                                    .with_bg(self.code_bg_color),
+                            );
                             cur_text.clear();
                         }
                         cur_fg = fg;
@@ -399,8 +443,11 @@ impl Presenter {
                         pos += 1;
                     }
                     if !cur_text.is_empty() {
-                        line.push(StyledSpan::new(&cur_text)
-                            .with_fg(cur_fg).with_bg(self.code_bg_color));
+                        line.push(
+                            StyledSpan::new(&cur_text)
+                                .with_fg(cur_fg)
+                                .with_bg(self.code_bg_color),
+                        );
                     }
                     let total_cols = left_pad_width + w;
                     let fill = block_width.saturating_sub(total_cols);
@@ -409,13 +456,17 @@ impl Presenter {
                     }
                     lines.push(line);
                     first = false;
-                    if pos >= flat.len() { break; }
+                    if pos >= flat.len() {
+                        break;
+                    }
                 }
                 // Empty source line: emit one blank code line
                 if flat.is_empty() {
                     let mut line = StyledLine::empty();
                     line.push(StyledSpan::new(&pad));
-                    line.push(StyledSpan::new(&" ".repeat(block_width)).with_bg(self.code_bg_color));
+                    line.push(
+                        StyledSpan::new(&" ".repeat(block_width)).with_bg(self.code_bg_color),
+                    );
                     lines.push(line);
                 }
             }
@@ -466,7 +517,9 @@ impl Presenter {
                     line.push(StyledSpan::new(&pad));
                     line.push(StyledSpan::new("  │ ").with_fg(self.accent_color).dim());
                     let inline_spans = crate::markdown::parser::parse_inline_formatting(
-                        wline, self.text_color, self.code_bg_color,
+                        wline,
+                        self.text_color,
+                        self.code_bg_color,
                     );
                     for span in inline_spans {
                         line.push(span.italic());
@@ -510,24 +563,46 @@ impl Presenter {
                         let img_max_height = th / 2;
                         let preloaded = self.preloaded_images.get(&mermaid_img.path);
                         let rendered = render_slide_image(
-                            &mermaid_img, content_width, img_max_height, &pad,
-                            self.accent_color, self.text_color,
-                            effective_protocol, self.bg_color,
-                            &self.window_size, preloaded,
+                            &mermaid_img,
+                            content_width,
+                            img_max_height,
+                            &pad,
+                            self.accent_color,
+                            self.text_color,
+                            effective_protocol,
+                            self.bg_color,
+                            &self.window_size,
+                            preloaded,
                         );
                         match rendered {
                             RenderedImage::Lines(l) => lines.extend(l),
-                            RenderedImage::Protocol { escape_data, placeholder_height } => {
+                            RenderedImage::Protocol {
+                                escape_data,
+                                placeholder_height,
+                            } => {
                                 let image_line_offset = lines.len();
                                 for _ in 0..placeholder_height {
                                     lines.push(StyledLine::empty());
                                 }
-                                pending_protocol_images.push((escape_data, image_line_offset, 0, ImagePosition::Below));
+                                pending_protocol_images.push((
+                                    escape_data,
+                                    image_line_offset,
+                                    0,
+                                    ImagePosition::Below,
+                                ));
                             }
-                            RenderedImage::KittyPlacement { cols, rows, transmit_escape, image_id } => {
+                            RenderedImage::KittyPlacement {
+                                cols,
+                                rows,
+                                transmit_escape,
+                                image_id,
+                            } => {
                                 // Transmit mermaid image to Kitty if not already sent
                                 if !self.kitty_transmitted.contains(&image_id) {
-                                    let _ = std::io::Write::write_all(&mut std::io::stdout(), transmit_escape.as_bytes());
+                                    let _ = std::io::Write::write_all(
+                                        &mut std::io::stdout(),
+                                        transmit_escape.as_bytes(),
+                                    );
                                     let _ = std::io::Write::flush(&mut std::io::stdout());
                                     self.kitty_transmitted.insert(image_id);
                                 }
@@ -535,8 +610,15 @@ impl Presenter {
                                 for _ in 0..rows {
                                     lines.push(StyledLine::empty());
                                 }
-                                let placement = crate::image_util::kitty::placement_escape(image_id, cols, rows);
-                                pending_protocol_images.push((placement, image_line_offset, cols, ImagePosition::Below));
+                                let placement = crate::image_util::kitty::placement_escape(
+                                    image_id, cols, rows,
+                                );
+                                pending_protocol_images.push((
+                                    placement,
+                                    image_line_offset,
+                                    cols,
+                                    ImagePosition::Below,
+                                ));
                             }
                         }
                     }
@@ -545,10 +627,17 @@ impl Presenter {
                         lines.push(StyledLine::empty());
                         let mut warn = StyledLine::empty();
                         warn.push(StyledSpan::new(&pad));
-                        warn.push(StyledSpan::new("  ┌─ Mermaid Diagram (render failed) ─┐").with_fg(self.accent_color));
+                        warn.push(
+                            StyledSpan::new("  ┌─ Mermaid Diagram (render failed) ─┐")
+                                .with_fg(self.accent_color),
+                        );
                         lines.push(warn);
                         lines.push(StyledLine::empty());
-                        let code_fg = Color::Rgb { r: 130, g: 200, b: 130 };
+                        let code_fg = Color::Rgb {
+                            r: 130,
+                            g: 200,
+                            b: 130,
+                        };
                         for src_line in mermaid_block.source.lines() {
                             let mut line = StyledLine::empty();
                             line.push(StyledSpan::new(&pad));
@@ -563,10 +652,17 @@ impl Presenter {
                 lines.push(StyledLine::empty());
                 let mut header = StyledLine::empty();
                 header.push(StyledSpan::new(&pad));
-                header.push(StyledSpan::new("  ┌─ Mermaid Diagram (install mmdc to render) ─┐").with_fg(self.accent_color));
+                header.push(
+                    StyledSpan::new("  ┌─ Mermaid Diagram (install mmdc to render) ─┐")
+                        .with_fg(self.accent_color),
+                );
                 lines.push(header);
                 lines.push(StyledLine::empty());
-                let code_fg = Color::Rgb { r: 130, g: 200, b: 130 }; // green-ish for diagram source
+                let code_fg = Color::Rgb {
+                    r: 130,
+                    g: 200,
+                    b: 130,
+                }; // green-ish for diagram source
                 for src_line in mermaid_block.source.lines() {
                     let mut line = StyledLine::empty();
                     line.push(StyledSpan::new(&pad));
@@ -577,7 +673,11 @@ impl Presenter {
                 lines.push(StyledLine::empty());
                 let mut footer = StyledLine::empty();
                 footer.push(StyledSpan::new(&pad));
-                footer.push(StyledSpan::new("  └─ npm install -g @mermaid-js/mermaid-cli ──┘").with_fg(self.accent_color).dim());
+                footer.push(
+                    StyledSpan::new("  └─ npm install -g @mermaid-js/mermaid-cli ──┘")
+                        .with_fg(self.accent_color)
+                        .dim(),
+                );
                 lines.push(footer);
             }
             lines.push(StyledLine::empty());
@@ -592,7 +692,11 @@ impl Presenter {
                     g: g / 2,
                     b: b / 2,
                 },
-                _ => Color::Rgb { r: 128, g: 128, b: 128 },
+                _ => Color::Rgb {
+                    r: 128,
+                    g: 128,
+                    b: 128,
+                },
             };
             let diagram_lines = crate::diagram::render_adaptive(
                 &graph,
@@ -613,17 +717,32 @@ impl Presenter {
             let effective_protocol = resolve_image_protocol(img.render_mode, self.image_protocol);
             let proto_key = protocol_cache_key(effective_protocol);
             // Apply image_scale directive + runtime offset
-            let effective_scale = (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
+            let effective_scale =
+                (img.scale as i16 + self.image_scale_offset as i16).clamp(5, 100) as u8;
             // Right-positioned images overlay content, so scale from terminal width
             // (not content_width which is narrow at large font sizes).
-            let img_base_width = if img.position == ImagePosition::Right { tw } else { content_width };
-            let img_width = (img_base_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
+            let img_base_width = if img.position == ImagePosition::Right {
+                tw
+            } else {
+                content_width
+            };
+            let img_width =
+                (img_base_width as f64 * effective_scale as f64 / 100.0).max(1.0) as usize;
             // Right-positioned images can use the full content height (they overlay text)
-            let height_divisor = if img.position == ImagePosition::Right { 1.0 } else { 2.0 };
-            let img_max_height = (th as f64 * effective_scale as f64 / 100.0 / height_divisor).max(1.0) as usize;
+            let height_divisor = if img.position == ImagePosition::Right {
+                1.0
+            } else {
+                2.0
+            };
+            let img_max_height =
+                (th as f64 * effective_scale as f64 / 100.0 / height_divisor).max(1.0) as usize;
             // For animated GIFs, include the current frame index in the cache key
             let is_animated_gif = self.gif_frames.contains_key(&img.path);
-            let frame_idx = if is_animated_gif { self.gif_current_frame } else { 0 };
+            let frame_idx = if is_animated_gif {
+                self.gif_current_frame
+            } else {
+                0
+            };
             let cache_key = ImageCacheKey {
                 path: img.path.clone(),
                 render_width: img_width,
@@ -635,7 +754,8 @@ impl Presenter {
             let cached = self.image_cache.entry(cache_key).or_insert_with(|| {
                 // For animated GIFs, use the current frame's image data
                 let gif_frame_img = if is_animated_gif {
-                    self.gif_frames.get(&img.path)
+                    self.gif_frames
+                        .get(&img.path)
                         .and_then(|frames| frames.get(frame_idx))
                         .map(|f| &f.image)
                 } else {
@@ -649,24 +769,47 @@ impl Presenter {
                 // Pass img_width + pad so render_slide_image computes
                 // display_width = (img_width + pad) - pad = img_width correctly.
                 let rendered = render_slide_image(
-                    img, img_width + img_pad.len(), img_max_height, &img_pad,
-                    self.accent_color, self.text_color,
-                    effective_protocol, self.bg_color,
-                    &self.window_size, preloaded,
+                    img,
+                    img_width + img_pad.len(),
+                    img_max_height,
+                    &img_pad,
+                    self.accent_color,
+                    self.text_color,
+                    effective_protocol,
+                    self.bg_color,
+                    &self.window_size,
+                    preloaded,
                 );
                 match rendered {
                     RenderedImage::Lines(l) => CachedImage::Lines(l),
-                    RenderedImage::Protocol { escape_data, placeholder_height } => {
-                        CachedImage::Protocol { escape_data, placeholder_height }
-                    }
-                    RenderedImage::KittyPlacement { image_id, cols, rows, transmit_escape } => {
+                    RenderedImage::Protocol {
+                        escape_data,
+                        placeholder_height,
+                    } => CachedImage::Protocol {
+                        escape_data,
+                        placeholder_height,
+                    },
+                    RenderedImage::KittyPlacement {
+                        image_id,
+                        cols,
+                        rows,
+                        transmit_escape,
+                    } => {
                         // Transmit image data to Kitty NOW if not already sent
                         if !self.kitty_transmitted.contains(&image_id) {
-                            let _ = std::io::Write::write_all(&mut std::io::stdout(), transmit_escape.as_bytes());
+                            let _ = std::io::Write::write_all(
+                                &mut std::io::stdout(),
+                                transmit_escape.as_bytes(),
+                            );
                             let _ = std::io::Write::flush(&mut std::io::stdout());
                             self.kitty_transmitted.insert(image_id);
                         }
-                        CachedImage::KittyRef { image_id, cols, rows, transmit_escape: None }
+                        CachedImage::KittyRef {
+                            image_id,
+                            cols,
+                            rows,
+                            transmit_escape: None,
+                        }
                     }
                 }
             });
@@ -675,15 +818,22 @@ impl Presenter {
                 CachedImage::Lines(cached_lines) => {
                     lines.extend(cached_lines.clone());
                 }
-                CachedImage::KittyRef { image_id, cols, rows, ref mut transmit_escape } => {
+                CachedImage::KittyRef {
+                    image_id,
+                    cols,
+                    rows,
+                    ref mut transmit_escape,
+                } => {
                     if let Some(esc) = transmit_escape.take() {
                         if !self.kitty_transmitted.contains(image_id) {
-                            let _ = std::io::Write::write_all(&mut std::io::stdout(), esc.as_bytes());
+                            let _ =
+                                std::io::Write::write_all(&mut std::io::stdout(), esc.as_bytes());
                             let _ = std::io::Write::flush(&mut std::io::stdout());
                             self.kitty_transmitted.insert(*image_id);
                         }
                     }
-                    let placement = crate::image_util::kitty::placement_escape(*image_id, *cols, *rows);
+                    let placement =
+                        crate::image_util::kitty::placement_escape(*image_id, *cols, *rows);
                     if img_pos == ImagePosition::Right {
                         // Right: overlay on existing content from the top
                         pending_protocol_images.push((placement, 0, *cols, ImagePosition::Right));
@@ -693,18 +843,36 @@ impl Presenter {
                         for _ in 0..*rows {
                             lines.push(StyledLine::empty());
                         }
-                        pending_protocol_images.push((placement, image_line_offset, *cols, ImagePosition::Below));
+                        pending_protocol_images.push((
+                            placement,
+                            image_line_offset,
+                            *cols,
+                            ImagePosition::Below,
+                        ));
                     }
                 }
-                CachedImage::Protocol { escape_data, placeholder_height } => {
+                CachedImage::Protocol {
+                    escape_data,
+                    placeholder_height,
+                } => {
                     if img_pos == ImagePosition::Right {
-                        pending_protocol_images.push((escape_data.clone(), 0, 0, ImagePosition::Right));
+                        pending_protocol_images.push((
+                            escape_data.clone(),
+                            0,
+                            0,
+                            ImagePosition::Right,
+                        ));
                     } else {
                         let image_line_offset = lines.len();
                         for _ in 0..*placeholder_height {
                             lines.push(StyledLine::empty());
                         }
-                        pending_protocol_images.push((escape_data.clone(), image_line_offset, 0, ImagePosition::Below));
+                        pending_protocol_images.push((
+                            escape_data.clone(),
+                            image_line_offset,
+                            0,
+                            ImagePosition::Below,
+                        ));
                     }
                 }
             }
@@ -716,18 +884,30 @@ impl Presenter {
         // --- Viewport Calculation and Alignment ---
         // Calculate available display area (excluding status bar rows)
         let has_slide_footer = slide.footer.is_some();
-        let reserved_bottom =
-            if self.show_notes && !slide.notes.is_empty() { 7 } else { 0 }
-            + if self.mode == Mode::Command || self.mode == Mode::Goto { 1 } else { 0 }
-            + if has_slide_footer { 1 } else { 0 };
+        let reserved_bottom = if self.show_notes && !slide.notes.is_empty() {
+            7
+        } else {
+            0
+        } + if self.mode == Mode::Command || self.mode == Mode::Goto {
+            1
+        } else {
+            0
+        } + if has_slide_footer { 1 } else { 0 };
         let content_area = th.saturating_sub(status_bar_rows + reserved_bottom);
 
         // Vertical centering: per-slide alignment overrides global default_alignment
-        let effective_alignment = slide.alignment
+        let effective_alignment = slide
+            .alignment
             .or(self.meta.default_alignment)
             .unwrap_or(SlideAlignment::Top);
-        let do_vcenter = matches!(effective_alignment, SlideAlignment::Center | SlideAlignment::VCenter);
-        let do_hcenter = matches!(effective_alignment, SlideAlignment::Center | SlideAlignment::HCenter);
+        let do_vcenter = matches!(
+            effective_alignment,
+            SlideAlignment::Center | SlideAlignment::VCenter
+        );
+        let do_hcenter = matches!(
+            effective_alignment,
+            SlideAlignment::Center | SlideAlignment::HCenter
+        );
 
         if do_vcenter && lines.len() < content_area {
             let padding_rows = (content_area - lines.len()) / 2;
@@ -750,7 +930,9 @@ impl Presenter {
         // to get the actual content width, then compute the correct left offset.
         if do_hcenter {
             for line in &mut lines {
-                let line_width: usize = line.spans.iter()
+                let line_width: usize = line
+                    .spans
+                    .iter()
                     .map(|s| unicode_width::UnicodeWidthStr::width(s.text.as_str()))
                     .sum();
                 // Content width is the line minus the existing left margin
@@ -781,8 +963,12 @@ impl Presenter {
                     // Pass &lines directly — no need to clone into anim.new_buffer
                     let progress = anim.progress();
                     lines = render_transition_frame(
-                        &anim.old_buffer, &lines,
-                        progress, tt, self.bg_color, content_width,
+                        &anim.old_buffer,
+                        &lines,
+                        progress,
+                        tt,
+                        self.bg_color,
+                        content_width,
                         anim.exit_only,
                     );
                 }
@@ -804,9 +990,13 @@ impl Presenter {
             for (i, &(la, frame)) in self.active_loop.iter().enumerate() {
                 let target = slide_loops.get(i).and_then(|(_, t): &(_, _)| t.as_deref());
                 lines = render_loop_frame(
-                    &lines, la, frame,
-                    self.accent_color, self.bg_color,
-                    tw, content_area,
+                    &lines,
+                    la,
+                    frame,
+                    self.accent_color,
+                    self.bg_color,
+                    tw,
+                    content_area,
                     target,
                 );
             }
@@ -876,7 +1066,9 @@ impl Presenter {
             }
         } else {
             for (i, line) in lines[visible_start..visible_end].iter().enumerate() {
-                if line.is_scale_placeholder { continue; }
+                if line.is_scale_placeholder {
+                    continue;
+                }
                 let row = (status_bar_rows + i) as u16;
                 queue!(w, cursor::MoveTo(0, row))?;
                 if has_gradient {
@@ -900,9 +1092,15 @@ impl Presenter {
             let last_row = (status_bar_rows + (visible_end - visible_start) - 1) as u16;
             queue!(w, cursor::MoveTo(indicator_col, last_row))?;
             queue!(w, SetForegroundColor(self.accent_color))?;
-            queue!(w, crossterm::style::SetAttribute(crossterm::style::Attribute::Dim))?;
+            queue!(
+                w,
+                crossterm::style::SetAttribute(crossterm::style::Attribute::Dim)
+            )?;
             write!(w, "{indicator}")?;
-            queue!(w, crossterm::style::SetAttribute(crossterm::style::Attribute::NormalIntensity))?;
+            queue!(
+                w,
+                crossterm::style::SetAttribute(crossterm::style::Attribute::NormalIntensity)
+            )?;
         }
 
         // Cache current buffer for transition source on next slide change.
@@ -932,7 +1130,11 @@ impl Presenter {
                 } else {
                     self.bg_color
                 };
-                queue!(w, cursor::MoveTo(0, footer_row), SetBackgroundColor(footer_bg))?;
+                queue!(
+                    w,
+                    cursor::MoveTo(0, footer_row),
+                    SetBackgroundColor(footer_bg)
+                )?;
                 let text = footer_text.as_str();
                 let text_width = unicode_width::UnicodeWidthStr::width(text);
                 queue!(w, SetForegroundColor(self.accent_color))?;
@@ -944,7 +1146,15 @@ impl Presenter {
                     FooterAlign::Center => {
                         let pad_left = tw.saturating_sub(text_width) / 2;
                         let pad_right = tw.saturating_sub(pad_left + text_width);
-                        write!(w, "{:wl$}{}{:wr$}", "", text, "", wl = pad_left, wr = pad_right)?;
+                        write!(
+                            w,
+                            "{:wl$}{}{:wr$}",
+                            "",
+                            text,
+                            "",
+                            wl = pad_left,
+                            wr = pad_right
+                        )?;
                     }
                     FooterAlign::Right => {
                         let pad_left = tw.saturating_sub(text_width + 1);
@@ -962,7 +1172,12 @@ impl Presenter {
             let notes_y = (th as u16).saturating_sub(7);
 
             // Separator line
-            queue!(w, cursor::MoveTo(0, notes_y), SetBackgroundColor(self.code_bg_color), SetForegroundColor(self.accent_color))?;
+            queue!(
+                w,
+                cursor::MoveTo(0, notes_y),
+                SetBackgroundColor(self.code_bg_color),
+                SetForegroundColor(self.accent_color)
+            )?;
             let all_note_lines: Vec<&str> = slide.notes.lines().collect();
             let scroll_indicator = if all_note_lines.len() > notes_rows {
                 let max_scroll = all_note_lines.len().saturating_sub(notes_rows);
@@ -973,7 +1188,9 @@ impl Presenter {
                 String::new()
             };
             let sep: String = format!("─── Notes{} {}", scroll_indicator, "─".repeat(tw))
-                .chars().take(tw).collect();
+                .chars()
+                .take(tw)
+                .collect();
             let sep_pad = tw.saturating_sub(sep.chars().count());
             write!(w, "{}{:width$}", sep, "", width = sep_pad)?;
 
@@ -985,11 +1202,22 @@ impl Presenter {
                 .copied()
                 .collect();
             for i in 0..notes_rows {
-                queue!(w, cursor::MoveTo(0, notes_y + 1 + i as u16), SetBackgroundColor(self.code_bg_color), SetForegroundColor(self.text_color))?;
+                queue!(
+                    w,
+                    cursor::MoveTo(0, notes_y + 1 + i as u16),
+                    SetBackgroundColor(self.code_bg_color),
+                    SetForegroundColor(self.text_color)
+                )?;
                 if let Some(note_line) = visible_notes.get(i) {
                     let truncated: String = note_line.chars().take(tw.saturating_sub(2)).collect();
                     let trunc_cols = truncated.chars().count();
-                    write!(w, " {}{:width$}", truncated, "", width = tw.saturating_sub(trunc_cols + 2))?;
+                    write!(
+                        w,
+                        " {}{:width$}",
+                        truncated,
+                        "",
+                        width = tw.saturating_sub(trunc_cols + 2)
+                    )?;
                 } else {
                     write!(w, "{:width$}", "", width = tw)?;
                 }
@@ -999,15 +1227,37 @@ impl Presenter {
         // --- Command Bar / Goto Input ---
         if self.mode == Mode::Command {
             let y = th as u16 - 1;
-            queue!(w, cursor::MoveTo(0, y), SetBackgroundColor(self.code_bg_color), SetForegroundColor(self.accent_color))?;
-            write!(w, ":{}{:width$}", self.command_buf, "", width = tw.saturating_sub(self.command_buf.len() + 1))?;
+            queue!(
+                w,
+                cursor::MoveTo(0, y),
+                SetBackgroundColor(self.code_bg_color),
+                SetForegroundColor(self.accent_color)
+            )?;
+            write!(
+                w,
+                ":{}{:width$}",
+                self.command_buf,
+                "",
+                width = tw.saturating_sub(self.command_buf.len() + 1)
+            )?;
         }
 
         // Goto indicator
         if self.mode == Mode::Goto {
             let y = th as u16 - 1;
-            queue!(w, cursor::MoveTo(0, y), SetBackgroundColor(self.code_bg_color), SetForegroundColor(self.accent_color))?;
-            write!(w, "goto: {}{:width$}", self.goto_buf, "", width = tw.saturating_sub(self.goto_buf.len() + 7))?;
+            queue!(
+                w,
+                cursor::MoveTo(0, y),
+                SetBackgroundColor(self.code_bg_color),
+                SetForegroundColor(self.accent_color)
+            )?;
+            write!(
+                w,
+                "goto: {}{:width$}",
+                self.goto_buf,
+                "",
+                width = tw.saturating_sub(self.goto_buf.len() + 7)
+            )?;
         }
 
         // --- Protocol Image Emission ---
@@ -1075,7 +1325,11 @@ impl Presenter {
                 } else {
                     self.bg_color
                 };
-                queue!(w, cursor::MoveTo(0, row as u16), SetBackgroundColor(fill_bg))?;
+                queue!(
+                    w,
+                    cursor::MoveTo(0, row as u16),
+                    SetBackgroundColor(fill_bg)
+                )?;
                 write!(w, "{:width$}", "", width = tw)?;
             }
         }
@@ -1098,7 +1352,10 @@ impl Presenter {
         // --- Dissolve-In: Scatter-Reveal After Font Transition ---
         if self.pending_dissolve_in {
             self.render_dissolve_in(
-                &pending_protocol_images, visible_start, visible_end, status_bar_rows,
+                &pending_protocol_images,
+                visible_start,
+                visible_end,
+                status_bar_rows,
             )?;
         }
 
@@ -1123,5 +1380,4 @@ impl Presenter {
         w.flush()?;
         Ok(())
     }
-
 }

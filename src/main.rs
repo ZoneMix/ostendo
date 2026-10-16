@@ -41,9 +41,9 @@ pub struct Cli {
     /// Path to the markdown presentation file
     pub file: Option<PathBuf>,
 
-    /// Theme slug to use
-    #[arg(short, long, default_value = "terminal_green")]
-    pub theme: String,
+    /// Theme slug to use (overrides front matter theme)
+    #[arg(short, long)]
+    pub theme: Option<String>,
 
     /// Start at specific slide number
     #[arg(short, long, default_value_t = 1)]
@@ -144,12 +144,20 @@ fn main() -> Result<()> {
         std::process::exit(1);
     });
 
-    let theme = registry
-        .get(&cli.theme)
-        .unwrap_or_else(|| registry.get("terminal_green").expect("default theme missing"));
-
     let source = std::fs::read_to_string(&file)?;
     let (meta, slides) = markdown::parse_presentation(&source, file.parent())?;
+
+    // Theme priority: CLI --theme > front matter theme: > default
+    let theme_slug = cli.theme.unwrap_or_else(|| {
+        if meta.theme.is_empty() {
+            "terminal_green".to_string()
+        } else {
+            meta.theme.clone()
+        }
+    });
+    let theme = registry
+        .get(&theme_slug)
+        .unwrap_or_else(|| registry.get("terminal_green").expect("default theme missing"));
 
     if slides.is_empty() {
         anyhow::bail!("No slides found in {:?}", file);
@@ -170,10 +178,9 @@ fn main() -> Result<()> {
     if cli.validate {
         println!("Presentation: {:?}", file);
         println!("Slides: {}", slides.len());
-        println!("Theme: {}", cli.theme);
+        println!("Theme: {}", theme_slug);
         let mut issues = Vec::new();
         for slide in &slides {
-            // Check image paths
             if let Some(ref img) = slide.image {
                 if !img.path.exists() {
                     issues.push(format!(
@@ -181,11 +188,11 @@ fn main() -> Result<()> {
                     ));
                 }
             }
-            // Check for empty slides
             if slide.title.is_empty() && slide.bullets.is_empty()
                 && slide.code_blocks.is_empty() && slide.tables.is_empty()
+                && slide.image.is_none()
             {
-                issues.push(format!("Slide {}: appears empty (no title, bullets, code, or tables)", slide.number));
+                issues.push(format!("Slide {}: appears empty (no title, bullets, code, tables, or images)", slide.number));
             }
         }
         if issues.is_empty() {

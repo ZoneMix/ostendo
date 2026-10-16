@@ -1,12 +1,14 @@
-# Ostendo Development Guide
+# CLAUDE.md
 
-**Version**: v0.4.1 | **LOC**: ~16,298 | **Tests**: 158 | **Themes**: 29
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+**Version**: v0.4.2 | **Language**: Rust 2021 | **Tests**: 257 | **Themes**: 29
 
 ## Build & Test
 
 ```bash
 cargo build --release          # Release build (LTO enabled)
-cargo test                     # Run all 158 tests
+cargo test                     # Run all 257 tests
 cargo clippy --all-targets     # Lint (must be 0 warnings)
 cargo run --release -- --validate presentations/examples/test_presentation.md
 ```
@@ -14,21 +16,21 @@ cargo run --release -- --validate presentations/examples/test_presentation.md
 ## Architecture
 
 ```
-src/                              # 16,298 lines across 58 files
+src/                              # 16,623 lines across 59 files
   main.rs                         # CLI (clap), entry point (268 lines)
-  render/engine/                  # Core renderer (13 submodules, ~5,266 lines)
-    mod.rs                        # Presenter struct, lifecycle, tests (1,132 lines) ⚠️ over 800 cap
-    rendering.rs                  # render_frame(), smart redraw (1,004 lines) ⚠️ over 800 cap
-    input.rs                      # Event loop, key/mouse handling, remote polling (537 lines)
-    content.rs                    # FIGlet titles, decorated titles, exec output (409 lines)
-    ui.rs                         # Status bar, help overlay, overview grid (407 lines)
-    font.rs                       # Kitty RC / Ghostty AppleScript font control (619 lines)
+  render/engine/                  # Core renderer (13 submodules, ~5,547 lines)
+    mod.rs                        # Presenter struct, lifecycle, tests (1,148 lines) ⚠️ over 800 cap
+    rendering.rs                  # render_frame(), smart redraw (1,127 lines) ⚠️ over 800 cap
+    input.rs                      # Event loop, key/mouse handling, remote polling (542 lines)
+    content.rs                    # FIGlet titles, decorated titles, exec output (484 lines)
+    ui.rs                         # Status bar, help overlay, overview grid (414 lines)
+    font.rs                       # Kitty RC / Ghostty AppleScript font control (649 lines)
     state.rs                      # Toggles, scale, theme, persistence (176 lines)
     navigation.rs                 # Slide movement, scrolling, animations (156 lines)
-    types.rs                      # Mode, ImageCacheKey, FontTransitionMode, PresenterConfig (111 lines)
+    types.rs                      # Mode, ImageCacheKey, FontTransitionMode, PresenterConfig (115 lines)
     output.rs                     # parse_ansi_styled_spans, write_span_text, textwrap (172 lines)
     line_writer.rs                # queue_styled_line, queue_styled_line_with_bg (83 lines)
-    columns.rs                    # Multi-column layout rendering (322 lines)
+    columns.rs                    # Multi-column layout rendering (343 lines)
     table_render.rs               # Markdown table rendering, box-drawing borders (138 lines)
   render/animation/               # Animation system (4 files, ~1,390 lines)
     mod.rs                        # Animation dispatch, types, tests (344 lines)
@@ -38,14 +40,14 @@ src/                              # 16,298 lines across 58 files
   render/layout.rs                # WindowSize, terminal dimensions (103 lines)
   render/text.rs                  # StyledLine/StyledSpan (virtual buffer) (433 lines)
   render/progress.rs              # Progress bar rendering (60 lines)
-  markdown/                       # Presentation parser (~1,872 lines)
-    parser.rs                     # Markdown -> Vec<Slide> (830 lines) ⚠️ over 800 cap
+  markdown/                       # Presentation parser (~1,888 lines)
+    parser.rs                     # Markdown -> Vec<Slide> (844 lines) ⚠️ over 800 cap
     parser_tests.rs               # Parser unit tests (419 lines)
     regex_patterns.rs             # Centralized directive regexes (242 lines)
     inline.rs                     # Bold/italic/code/strikethrough parser (311 lines)
     tables.rs                     # Table cell parsing, alignment (72 lines)
-  presentation/                   # Data structures (~926 lines)
-    slide.rs                      # Slide struct, content types (676 lines)
+  presentation/                   # Data structures (~936 lines)
+    slide.rs                      # Slide struct, content types (686 lines)
     state.rs                      # StateManager (JSON persistence) (250 lines)
   terminal/                       # Terminal protocols (~732 lines)
     protocols.rs                  # Image protocol & font capability detection (409 lines)
@@ -59,13 +61,13 @@ src/                              # 16,298 lines across 58 files
     executor.rs                   # Language execution, timeout, sandbox (636 lines)
     highlight.rs                  # Syntax highlighting (syntect) (102 lines)
     pty.rs                        # PTY execution for interactive blocks (60 lines)
-  image_util/                     # Image handling (~1,011 lines)
+  image_util/                     # Image handling (~1,013 lines)
     render.rs                     # Protocol-specific rendering (Kitty/iTerm2/Sixel/ASCII) (390 lines)
-    kitty.rs                      # Kitty graphics protocol transmit/display split (262 lines)
+    kitty.rs                      # Kitty graphics protocol transmit/display split (264 lines)
     mermaid.rs                    # Mermaid diagram rendering via mmdc CLI (122 lines)
     mod.rs                        # Image loading and protocol detection (237 lines)
-  diagram/                        # ASCII diagram rendering (~1,076 lines)
-    mod.rs                        # Adaptive renderer, style selection (224 lines)
+  diagram/                        # ASCII diagram rendering (~1,094 lines)
+    mod.rs                        # Adaptive renderer, style selection (242 lines)
     parser.rs                     # Graph DSL parser (198 lines)
     render_box.rs                 # Box-drawing style (Unicode borders) (305 lines)
     render_bracket.rs             # Bracket style (compact) (189 lines)
@@ -76,7 +78,9 @@ src/                              # 16,298 lines across 58 files
   remote/                         # WebSocket remote control (~1,270 lines)
     mod.rs                        # Commands, state types (230 lines)
     server.rs                     # WS server, auth, rate limiting (317 lines)
-    html.rs                       # Embedded HTML remote control UI (723 lines)
+    html.rs                       # Embedded HTML remote control UI (723 lines) ⚠️ approaching 800 cap
+  third_party/                    # Third-party integrations (placeholder)
+    mod.rs                        # Module stub (1 line)
   watch.rs                        # File watcher for hot reload (65 lines)
 ```
 
@@ -93,7 +97,7 @@ src/                              # 16,298 lines across 58 files
 
 ## Developer Pitfalls
 
-- **`mod.rs` is 1,132 lines** — exceeds the 800-line soft cap. Be aware when navigating
+- **`mod.rs` is 1,148 lines** — exceeds the 800-line soft cap. Be aware when navigating
 - **Horizontal centering must preserve `line.content_type`** — breaking this silently breaks sparkle/spin targeting
 - **Protocol images must check `line_offset >= visible_start`** — forgetting causes images outside scroll viewport
 - **Kitty images need clear on scroll offset change** — not just on slide change

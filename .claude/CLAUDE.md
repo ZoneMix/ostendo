@@ -1,6 +1,6 @@
 # Ostendo
 
-**Version**: v0.4.1 | **Language**: Rust | **License**: GPL-3.0-only
+**Version**: v0.4.2 | **Language**: Rust | **License**: GPL-3.0-only | **Tests**: 257
 
 AI-native terminal presentation tool -- markdown to slides in your terminal.
 
@@ -63,6 +63,7 @@ Markdown source
 | `export/` | HTML and PDF export |
 | `remote/` | WebSocket server, auth, rate limiting |
 | `watch.rs` | File watcher for hot reload |
+| `third_party/mod.rs` | Third-party integrations (placeholder) |
 
 ## Key Constraints
 

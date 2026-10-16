@@ -10,13 +10,17 @@
 //! hanging the presentation or consuming excessive resources:
 //!
 //! - **Code size**: 64 KB maximum (`MAX_CODE_LENGTH`)
+//! - **Output size**: 1 MB maximum (`MAX_OUTPUT_BYTES`)
+//! - **Timeout**: 30 seconds (`EXEC_TIMEOUT`) — process group killed via SIGKILL
 //!
 //! # Auto-wrapping
 //!
 //! Compiled languages (Rust, C, C++, Go) support *auto-wrapping*: if the code
 //! snippet does not contain a `main` function, the executor wraps it in one
-//! automatically, adding common imports/includes.  This lets presenters show
-//! concise snippets like `println!("hello")` without boilerplate.
+//! automatically, adding common imports/includes.  Wrapped source is written to
+//! a temp directory, compiled with the system compiler (rustc, cc, c++, go),
+//! and the resulting binary is executed.  This lets presenters show concise
+//! snippets like `println!("hello")` without boilerplate.
 //!
 //! # Streaming output
 //!
@@ -27,21 +31,31 @@
 use anyhow::{bail, Result};
 use regex::Regex;
 use std::process::Command;
-use std::sync::{mpsc, LazyLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, LazyLock};
+use std::time::Duration;
 
 /// Regex for detecting C function definitions (used by auto-wrap heuristic).
-static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
+static C_FN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool)\s+\w+\s*\(").unwrap()
-);
+});
 
 /// Regex for detecting C++ function definitions (extended type set).
-static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(||
-    Regex::new(r"^(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector)\s+\w+\s*\(").unwrap()
-);
+static CPP_FN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(int|void|char|float|double|long|unsigned|size_t|bool|auto|string|vector)\s+\w+\s*\(",
+    )
+    .unwrap()
+});
 
 /// Maximum code length allowed for execution (64 KB).
-/// Prevents accidentally pasting enormous files into a code block.
 const MAX_CODE_LENGTH: usize = 64 * 1024;
+
+/// Maximum output size before execution is killed (1 MB).
+const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// Execution timeout — process group is killed after this duration.
+const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Spawn code execution in a background thread, returning a receiver for streaming output lines.
 /// Sends each line as it becomes available in real-time. Sends `None` when complete.
@@ -50,7 +64,11 @@ const MAX_CODE_LENGTH: usize = 64 * 1024;
 /// through the channel as soon as it's written.  This enables live streaming
 /// of output in the presentation (e.g., demo scripts that use `sleep` delays
 /// between commands will show output incrementally).
-pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&std::path::Path>) -> Result<mpsc::Receiver<Option<String>>> {
+pub fn execute_code_streaming(
+    language: &str,
+    code: &str,
+    working_dir: Option<&std::path::Path>,
+) -> Result<mpsc::Receiver<Option<String>>> {
     if code.len() > MAX_CODE_LENGTH {
         bail!("Code exceeds maximum length of {} bytes", MAX_CODE_LENGTH);
     }
@@ -65,25 +83,78 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
         use std::io::BufRead;
         use std::os::unix::process::CommandExt;
 
-        // Determine the interpreter and arguments based on language
-        let (cmd, args): (&str, Vec<String>) = match lang.as_str() {
-            "python" => ("python3", vec!["-u".into(), "-c".into(), code.clone()]),
-            "bash" | "sh" => ("bash", vec!["-c".into(), code.clone()]),
-            "javascript" => ("node", vec!["-e".into(), code.clone()]),
-            "ruby" => ("ruby", vec!["-e".into(), code.clone()]),
-            _ => ("sh", vec!["-c".into(), code.clone()]),
+        // For compiled languages, write source to a temp file and compile first
+        let _temp_dir; // hold the tempdir alive until execution finishes
+        let (cmd, args): (String, Vec<String>) = match lang.as_str() {
+            "python" => (
+                "python3".into(),
+                vec!["-u".into(), "-c".into(), code.clone()],
+            ),
+            "bash" | "sh" => ("bash".into(), vec!["-c".into(), code.clone()]),
+            "javascript" => ("node".into(), vec!["-e".into(), code.clone()]),
+            "ruby" => ("ruby".into(), vec!["-e".into(), code.clone()]),
+            "rust" | "c" | "cpp" | "go" => {
+                let dir = match tempfile::tempdir() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = tx.send(Some(format!("[error] Failed to create temp dir: {}", e)));
+                        let _ = tx.send(None);
+                        return;
+                    }
+                };
+                let (src_ext, compiler, compile_args) = match lang.as_str() {
+                    "rust" => ("rs", "rustc", vec!["-o"]),
+                    "c" => ("c", "cc", vec!["-o"]),
+                    "cpp" => ("cpp", "c++", vec!["-std=c++17", "-o"]),
+                    "go" => ("go", "go", vec!["build", "-o"]),
+                    _ => unreachable!(),
+                };
+                let src_path = dir.path().join(format!("code.{}", src_ext));
+                let bin_path = dir.path().join("code_bin");
+                if let Err(e) = std::fs::write(&src_path, &code) {
+                    let _ = tx.send(Some(format!("[error] Failed to write source: {}", e)));
+                    let _ = tx.send(None);
+                    return;
+                }
+                let mut comp_args: Vec<String> =
+                    compile_args.iter().map(|s| s.to_string()).collect();
+                comp_args.push(bin_path.to_string_lossy().to_string());
+                comp_args.push(src_path.to_string_lossy().to_string());
+                let compile_result = Command::new(compiler).args(&comp_args).output();
+                match compile_result {
+                    Ok(output) if output.status.success() => {
+                        _temp_dir = dir;
+                        (bin_path.to_string_lossy().to_string(), vec![])
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        for line in stderr.lines() {
+                            let _ = tx.send(Some(format!("[compile] {}", line)));
+                        }
+                        let _ = tx.send(None);
+                        return;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Some(format!("[error] Compiler not found: {}", e)));
+                        let _ = tx.send(None);
+                        return;
+                    }
+                }
+            }
+            _ => ("sh".into(), vec!["-c".into(), code.clone()]),
         };
 
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let mut command = Command::new(cmd);
-        command.args(&arg_refs)
+        let mut command = Command::new(&cmd);
+        if !args.is_empty() {
+            command.args(&args);
+        }
+        command
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .env("PYTHONUNBUFFERED", "1");
         if let Some(ref wd) = wd {
             command.current_dir(wd);
         }
-        // New process group for timeout safety (same as run_with_timeout)
         unsafe {
             command.pre_exec(|| {
                 let _ = libc::setsid();
@@ -100,15 +171,39 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
             }
         };
 
-        // Read stdout line-by-line in real-time (not buffered until exit)
+        let child_pid = child.id();
+
+        // Watchdog thread: kills the process group after EXEC_TIMEOUT
+        let done = Arc::new(AtomicBool::new(false));
+        let done_watchdog = done.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(EXEC_TIMEOUT);
+            if !done_watchdog.load(Ordering::Acquire) {
+                unsafe {
+                    libc::kill(-(child_pid as i32), libc::SIGKILL);
+                }
+            }
+        });
+
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
+        let mut total_bytes: usize = 0;
+        let mut exceeded_limit = false;
 
         if let Some(stdout) = stdout {
             let reader = std::io::BufReader::new(stdout);
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
+                        total_bytes = total_bytes.saturating_add(l.len() + 1);
+                        if total_bytes > MAX_OUTPUT_BYTES {
+                            let _ = tx.send(Some("[error] Output exceeded 1MB limit".to_string()));
+                            exceeded_limit = true;
+                            unsafe {
+                                libc::kill(-(child_pid as i32), libc::SIGKILL);
+                            }
+                            break;
+                        }
                         if tx.send(Some(l)).is_err() {
                             break;
                         }
@@ -118,17 +213,34 @@ pub fn execute_code_streaming(language: &str, code: &str, working_dir: Option<&s
             }
         }
 
-        // Collect any remaining stderr after stdout closes
-        if let Some(stderr) = stderr {
-            let reader = std::io::BufReader::new(stderr);
-            for l in reader.lines().map_while(Result::ok) {
-                if !l.is_empty() {
-                    let _ = tx.send(Some(format!("[stderr] {}", l)));
+        if !exceeded_limit {
+            if let Some(stderr) = stderr {
+                let reader = std::io::BufReader::new(stderr);
+                for l in reader.lines().map_while(Result::ok) {
+                    if !l.is_empty() {
+                        let _ = tx.send(Some(format!("[stderr] {}", l)));
+                    }
                 }
             }
         }
 
-        let _ = child.wait();
+        let status = child.wait();
+        done.store(true, Ordering::Release);
+
+        // Detect timeout (killed by our watchdog via SIGKILL)
+        if !exceeded_limit {
+            if let Ok(status) = status {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if status.signal() == Some(libc::SIGKILL) {
+                        let _ =
+                            tx.send(Some("[error] Execution timed out (30s limit)".to_string()));
+                    }
+                }
+            }
+        }
+
         let _ = tx.send(None);
     });
 
@@ -171,10 +283,10 @@ fn normalize_language(lang: &str) -> String {
 /// This lets presenters write concise snippets without boilerplate.
 fn wrap_for_execution(lang: &str, code: &str) -> String {
     match lang {
-        "rust"       => wrap_rust(code),
-        "c"          => wrap_c(code),
-        "cpp"        => wrap_cpp(code),
-        "go"         => wrap_go(code),
+        "rust" => wrap_rust(code),
+        "c" => wrap_c(code),
+        "cpp" => wrap_cpp(code),
+        "go" => wrap_go(code),
         // Interpreted languages: pass through unchanged
         "python" | "bash" | "sh" | "ruby" | "javascript" => code.to_string(),
         _ => code.to_string(),
@@ -271,7 +383,10 @@ fn wrap_c(code: &str) -> String {
             if brace_depth == 0 {
                 in_fn = false;
             }
-        } else if C_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
+        } else if C_FN_PATTERN.is_match(trimmed)
+            && !trimmed.starts_with("int main")
+            && !trimmed.starts_with("void main")
+        {
             in_fn = true;
             brace_depth = trimmed.chars().filter(|&c| c == '{').count();
             brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
@@ -332,7 +447,10 @@ fn wrap_cpp(code: &str) -> String {
             if brace_depth == 0 {
                 in_fn = false;
             }
-        } else if CPP_FN_PATTERN.is_match(trimmed) && !trimmed.starts_with("int main") && !trimmed.starts_with("void main") {
+        } else if CPP_FN_PATTERN.is_match(trimmed)
+            && !trimmed.starts_with("int main")
+            && !trimmed.starts_with("void main")
+        {
             in_fn = true;
             brace_depth = trimmed.chars().filter(|&c| c == '{').count();
             brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
@@ -382,12 +500,12 @@ fn wrap_go(code: &str) -> String {
 
     // Detect which standard-library packages the snippet uses
     let known_packages: &[(&str, &str)] = &[
-        ("fmt.",     "fmt"),
-        ("os.",      "os"),
+        ("fmt.", "fmt"),
+        ("os.", "os"),
         ("strings.", "strings"),
         ("strconv.", "strconv"),
-        ("math.",    "math"),
-        ("time.",    "time"),
+        ("math.", "math"),
+        ("time.", "time"),
     ];
 
     let mut imports: Vec<&str> = Vec::new();
@@ -469,8 +587,14 @@ mod tests {
 println!("{}", x);"#;
         let wrapped = wrap_for_execution("rust", code);
         assert!(wrapped.contains("fn main()"), "should contain fn main()");
-        assert!(wrapped.contains("use std::io::Write;"), "should contain prelude");
-        assert!(wrapped.contains("    let x = 42;"), "body should be indented");
+        assert!(
+            wrapped.contains("use std::io::Write;"),
+            "should contain prelude"
+        );
+        assert!(
+            wrapped.contains("    let x = 42;"),
+            "body should be indented"
+        );
         assert!(wrapped.contains("    println!"), "body should be indented");
     }
 
@@ -480,7 +604,10 @@ println!("{}", x);"#;
     println!("hello");
 }"#;
         let wrapped = wrap_for_execution("rust", code);
-        assert_eq!(wrapped, code, "code with fn main should be returned unchanged");
+        assert_eq!(
+            wrapped, code,
+            "code with fn main should be returned unchanged"
+        );
     }
 
     #[test]
@@ -490,7 +617,10 @@ println!("{}", x);"#;
         // `use` lines should appear before fn main
         let main_pos = wrapped.find("fn main()").unwrap();
         let use_pos = wrapped.find("use std::collections::HashMap;").unwrap();
-        assert!(use_pos < main_pos, "use statements should come before fn main");
+        assert!(
+            use_pos < main_pos,
+            "use statements should come before fn main"
+        );
         // The body line should be inside main
         assert!(wrapped.contains("    let m = HashMap::new();"));
     }
@@ -518,7 +648,10 @@ int main() {
     return 0;
 }"#;
         let wrapped = wrap_for_execution("c", code);
-        assert_eq!(wrapped, code, "code with int main should be returned unchanged");
+        assert_eq!(
+            wrapped, code,
+            "code with int main should be returned unchanged"
+        );
     }
 
     // ---- C++ wrapping ----
@@ -560,7 +693,10 @@ func main() {
     fmt.Println("hi")
 }"#;
         let wrapped = wrap_for_execution("go", code);
-        assert_eq!(wrapped, code, "code with func main() should be returned unchanged");
+        assert_eq!(
+            wrapped, code,
+            "code with func main() should be returned unchanged"
+        );
     }
 
     #[test]
@@ -580,8 +716,14 @@ func main() {
         let wrapped = wrap_for_execution("rust", code);
         let main_pos = wrapped.find("fn main()").unwrap();
         let fn_pos = wrapped.find("fn add(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    println!"), "println should be inside main");
+        assert!(
+            fn_pos < main_pos,
+            "helper fn should be extracted before main"
+        );
+        assert!(
+            wrapped.contains("    println!"),
+            "println should be inside main"
+        );
     }
 
     #[test]
@@ -590,8 +732,14 @@ func main() {
         let wrapped = wrap_for_execution("c", code);
         let main_pos = wrapped.find("int main()").unwrap();
         let fn_pos = wrapped.find("int factorial(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    printf("), "printf should be inside main");
+        assert!(
+            fn_pos < main_pos,
+            "helper fn should be extracted before main"
+        );
+        assert!(
+            wrapped.contains("    printf("),
+            "printf should be inside main"
+        );
     }
 
     #[test]
@@ -600,8 +748,14 @@ func main() {
         let wrapped = wrap_for_execution("go", code);
         let main_pos = wrapped.find("func main()").unwrap();
         let fn_pos = wrapped.find("func add(").unwrap();
-        assert!(fn_pos < main_pos, "helper fn should be extracted before main");
-        assert!(wrapped.contains("    fmt.Println(add(3, 4))"), "Println should be inside main");
+        assert!(
+            fn_pos < main_pos,
+            "helper fn should be extracted before main"
+        );
+        assert!(
+            wrapped.contains("    fmt.Println(add(3, 4))"),
+            "Println should be inside main"
+        );
     }
 
     // ---- Interpreted languages: pass-through ----
@@ -624,7 +778,10 @@ func main() {
     fn test_wrap_javascript_unchanged() {
         let code = "console.log('hello')";
         let wrapped = wrap_for_execution("javascript", code);
-        assert_eq!(wrapped, code, "javascript code should pass through unchanged");
+        assert_eq!(
+            wrapped, code,
+            "javascript code should pass through unchanged"
+        );
     }
 
     #[test]
@@ -632,5 +789,155 @@ func main() {
         let code = "puts 'hello'";
         let wrapped = wrap_for_execution("ruby", code);
         assert_eq!(wrapped, code, "ruby code should pass through unchanged");
+    }
+
+    // ---- execute_code_streaming ----
+
+    #[test]
+    fn test_normal_execution_completes() {
+        let rx = execute_code_streaming("bash", "echo hello", None).unwrap();
+        let mut lines = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            match msg {
+                Some(line) => lines.push(line),
+                None => break,
+            }
+        }
+        assert!(lines.iter().any(|l| l.contains("hello")));
+    }
+
+    #[test]
+    fn test_code_length_limit() {
+        let long_code = "x".repeat(MAX_CODE_LENGTH + 1);
+        let result = execute_code_streaming("bash", &long_code, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_output_limit_kills_process() {
+        // Python prints > 1MB of output
+        let code = "import sys\nfor i in range(2000):\n    sys.stdout.write('x' * 1000 + '\\n')";
+        let rx = execute_code_streaming("python", code, None).unwrap();
+        let mut found_limit_msg = false;
+        let mut found_none = false;
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            match msg {
+                Some(line) if line.contains("1MB limit") => found_limit_msg = true,
+                None => {
+                    found_none = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(found_limit_msg, "should report output limit exceeded");
+        assert!(found_none, "should send None to signal completion");
+    }
+
+    #[test]
+    fn test_python_execution() {
+        let rx = execute_code_streaming("python", "print(2 + 2)", None).unwrap();
+        let mut lines = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            match msg {
+                Some(line) => lines.push(line),
+                None => break,
+            }
+        }
+        assert!(lines.iter().any(|l| l == "4"));
+    }
+
+    #[test]
+    fn test_rust_auto_wrap_execution() {
+        let code = r#"let x = 42; println!("{}", x);"#;
+        let rx = execute_code_streaming("rust", code, None).unwrap();
+        let mut lines = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(30)) {
+            match msg {
+                Some(line) => lines.push(line),
+                None => break,
+            }
+        }
+        assert!(
+            lines.iter().any(|l| l == "42"),
+            "expected '42' in output, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn test_c_auto_wrap_execution() {
+        let code = r#"printf("C says %d\n", 7 * 6);"#;
+        let rx = execute_code_streaming("c", code, None).unwrap();
+        let mut lines = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(15)) {
+            match msg {
+                Some(line) => lines.push(line),
+                None => break,
+            }
+        }
+        assert!(
+            lines.iter().any(|l| l.contains("C says 42")),
+            "expected 'C says 42' in output, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn test_go_auto_wrap_execution() {
+        let code = r#"fmt.Println("Go says hello")"#;
+        let rx = execute_code_streaming("go", code, None).unwrap();
+        let mut lines = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(30)) {
+            match msg {
+                Some(line) => lines.push(line),
+                None => break,
+            }
+        }
+        assert!(
+            lines.iter().any(|l| l.contains("Go says hello")),
+            "expected 'Go says hello' in output, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn test_missing_interpreter_returns_error() {
+        let rx = execute_code_streaming("bash", "nonexistent_command_xyz 2>&1", None).unwrap();
+        let mut lines = Vec::new();
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            match msg {
+                Some(line) => lines.push(line),
+                None => break,
+            }
+        }
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("not found") || l.contains("stderr")),
+            "expected error for nonexistent command, got: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn test_execution_timeout() {
+        let rx = execute_code_streaming("bash", "sleep 60", None).unwrap();
+        let start = std::time::Instant::now();
+        let mut found_timeout_msg = false;
+        while let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(35)) {
+            match msg {
+                Some(line) if line.contains("timed out") => found_timeout_msg = true,
+                None => break,
+                _ => {}
+            }
+        }
+        let elapsed = start.elapsed();
+        assert!(found_timeout_msg, "should report timeout");
+        assert!(elapsed.as_secs() >= 29, "should wait ~30s before killing");
+        assert!(
+            elapsed.as_secs() <= 35,
+            "should not take much longer than 30s"
+        );
     }
 }

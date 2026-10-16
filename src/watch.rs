@@ -39,7 +39,7 @@ impl FileWatcher {
                 let current = Self::file_mtime(&path);
                 if current != last_mtime {
                     last_mtime = current;
-                    flag.store(true, Ordering::Relaxed);
+                    flag.store(true, Ordering::Release);
                 }
             }
         });
@@ -52,7 +52,7 @@ impl FileWatcher {
 
     /// Check if the file has been modified since last check. Resets the flag.
     pub fn check_modified(&self) -> bool {
-        self.modified.swap(false, Ordering::Relaxed)
+        self.modified.swap(false, Ordering::AcqRel)
     }
 
     /// Read the file's last-modified timestamp from the filesystem.
@@ -61,5 +61,25 @@ impl FileWatcher {
     /// This is used by the polling loop to detect changes.
     fn file_mtime(path: &PathBuf) -> Option<SystemTime> {
         std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn file_watcher_detects_modification() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.md");
+        std::fs::write(&path, "initial").unwrap();
+        let watcher = FileWatcher::new(path.clone());
+        assert!(!watcher.check_modified());
+        std::thread::sleep(Duration::from_millis(600));
+        std::fs::write(&path, "changed").unwrap();
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(watcher.check_modified());
+        assert!(!watcher.check_modified());
     }
 }
