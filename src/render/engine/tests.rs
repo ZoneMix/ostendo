@@ -305,3 +305,57 @@ fn time_per_slide_is_recorded_for_the_pacing_report() {
     p.record_rehearsal();
     assert_eq!(crate::presentation::rehearsal::load(&path).len(), 1);
 }
+
+#[test]
+fn images_encode_in_the_background_without_moving_the_slide() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("pic.png");
+    image::RgbaImage::from_pixel(64, 32, image::Rgba([200, 40, 40, 255]))
+        .save(&png)
+        .unwrap();
+    let md = format!("# Pic\n![]({})\nAfter the image", png.display());
+    let (meta, slides) = crate::markdown::parse_presentation(&md, None).unwrap();
+    let mut p = presenter("# placeholder");
+    p = Presenter::new(PresenterConfig {
+        slides,
+        meta,
+        theme: p.base_theme.clone(),
+        theme_explicit: true,
+        start: Some(0),
+        presentation_path: p.presentation_path.clone(),
+        image_protocol: Some(ImageProtocol::Sixel),
+        remote: None,
+        allow_exec: false,
+        allow_remote_exec: false,
+        fullscreen: false,
+        timer: false,
+        scale: 100,
+        record: None,
+    });
+    p.watcher = None;
+    p.width = 60;
+    p.height = 20;
+    let sixel = |p: &mut Presenter| match &p.compose().images[..] {
+        [img] => match &img.kind {
+            display::ImageKind::Inline(data) => data.to_string(),
+            display::ImageKind::Kitty { .. } => unreachable!(),
+        },
+        other => panic!("{} images", other.len()),
+    };
+
+    assert!(sixel(&mut p).is_empty(), "nothing waits for the encoder");
+    let first = screen(&mut p);
+    // Decoding, then encoding, each come back on a later frame.
+    let mut drawn = String::new();
+    for _ in 0..2 {
+        p.images.wait();
+        p.invalidate();
+        drawn = sixel(&mut p);
+    }
+    assert!(drawn.starts_with("\x1bP"), "then the Sixel data is drawn");
+    assert_eq!(
+        row_of(&first, "After"),
+        row_of(&screen(&mut p), "After"),
+        "the image's cells were held while it encoded"
+    );
+}

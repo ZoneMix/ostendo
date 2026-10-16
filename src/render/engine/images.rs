@@ -3,13 +3,18 @@
 //! Rendered results are cached by everything that changes their pixels, so a
 //! frame rebuild never re-decodes or re-encodes an image it already has. Kitty
 //! image data is transmitted once per cache entry and freed on eviction.
+//!
+//! Decoding, protocol encoding (a Sixel image takes over a second) and Mermaid
+//! run off the UI thread. Until a result arrives the image keeps its cells
+//! blank, so the slide does not move when it lands; [`ImageStore::poll`]
+//! reports arrivals so the frame is rebuilt.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::thread::JoinHandle;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crossterm::style::Color;
@@ -50,37 +55,114 @@ struct Key {
     bg: (u8, u8, u8),
 }
 
-type GifLoad = JoinHandle<HashMap<PathBuf, Vec<GifFrame>>>;
+/// Background work coming back to the UI thread.
+enum Done {
+    Decoded {
+        path: PathBuf,
+        still: Option<RgbaImage>,
+        frames: Option<Vec<GifFrame>>,
+    },
+    /// `None` when the encoder skipped a job queued before [`ImageStore::clear`].
+    Encoded {
+        key: Key,
+        epoch: u64,
+        image: Option<RenderedImage>,
+    },
+    Mermaid {
+        hash: u64,
+        result: Result<(PathBuf, RgbaImage), String>,
+    },
+}
+
+struct EncodeJob {
+    key: Key,
+    epoch: u64,
+    pixels: Arc<RgbaImage>,
+    img: SlideImage,
+    colors: (Color, Color),
+    window: WindowSize,
+}
 
 pub(crate) struct ImageStore {
     protocol: ImageProtocol,
     loaded: HashMap<PathBuf, Arc<RgbaImage>>,
+    /// Sizes read from file headers, so an image still decoding keeps its cells.
+    dims: HashMap<PathBuf, (u32, u32)>,
+    decoding: HashSet<PathBuf>,
     gifs: HashMap<PathBuf, Arc<Vec<GifFrame>>>,
-    gif_loading: Option<GifLoad>,
     gif_frame: usize,
     gif_advanced: Instant,
     cache: HashMap<Key, Rendered>,
+    encoding: HashSet<Key>,
+    /// Bumped by `clear`, so encodes queued for the old size are skipped.
+    epoch: Arc<AtomicU64>,
+    encoder: mpsc::Sender<EncodeJob>,
+    done_tx: mpsc::Sender<Done>,
+    done: mpsc::Receiver<Done>,
     /// Kitty transmissions waiting to be written before the next frame.
     outbox: Vec<u8>,
     kitty_ids: HashSet<u32>,
     mermaid: Option<MermaidRenderer>,
-    mermaid_errors: HashMap<u64, String>,
+    /// Rendered diagram (PNG path) or the reason there is none, by source hash.
+    diagrams: HashMap<u64, Result<PathBuf, String>>,
+    diagrams_rendering: HashSet<u64>,
 }
 
 impl ImageStore {
     pub fn new(protocol: ImageProtocol, slides: &[Slide]) -> Self {
+        let (done_tx, done) = mpsc::channel();
+        let (encoder, jobs) = mpsc::channel::<EncodeJob>();
+        let epoch = Arc::new(AtomicU64::new(0));
+        {
+            let (done_tx, epoch) = (done_tx.clone(), Arc::clone(&epoch));
+            // One encoder, so a resize cannot start a pile of parallel encodes.
+            std::thread::spawn(move || {
+                for job in jobs {
+                    let current = job.epoch == epoch.load(Ordering::Relaxed);
+                    let image = current.then(|| {
+                        let (text, bg) = job.colors;
+                        let (k, w) = (&job.key, &job.window);
+                        render_slide_image(
+                            &job.pixels,
+                            &job.img,
+                            k.cols,
+                            k.rows,
+                            k.protocol,
+                            text,
+                            bg,
+                            w,
+                        )
+                    });
+                    let done = Done::Encoded {
+                        key: job.key,
+                        epoch: job.epoch,
+                        image,
+                    };
+                    if done_tx.send(done).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
         let mut store = Self {
             protocol,
             loaded: HashMap::new(),
+            dims: HashMap::new(),
+            decoding: HashSet::new(),
             gifs: HashMap::new(),
-            gif_loading: None,
             gif_frame: 0,
             gif_advanced: Instant::now(),
             cache: HashMap::new(),
+            encoding: HashSet::new(),
+            epoch,
+            encoder,
+            done_tx,
+            done,
             outbox: Vec::new(),
             kitty_ids: HashSet::new(),
             mermaid: None,
-            mermaid_errors: HashMap::new(),
+            diagrams: HashMap::new(),
+            diagrams_rendering: HashSet::new(),
         };
         store.preload(slides);
         store
@@ -90,7 +172,7 @@ impl ImageStore {
         self.protocol
     }
 
-    /// Loads every image the deck references; GIF frames decode in the background.
+    /// Decodes every image the deck references, in the background.
     pub fn preload(&mut self, slides: &[Slide]) {
         let column_images = slides
             .iter()
@@ -101,52 +183,101 @@ impl ImageStore {
             .filter_map(|s| s.image.as_ref().map(|i| i.path.clone()))
             .chain(column_images)
             .collect();
-        let mut gifs = Vec::new();
+        let mut todo = Vec::new();
         for path in paths {
-            if self.loaded.contains_key(&path) {
+            if self.loaded.contains_key(&path) || !self.decoding.insert(path.clone()) {
                 continue;
             }
-            if let Ok(img) = crate::image_util::load_image(&path) {
-                self.loaded.insert(path.clone(), Arc::new(img));
-                let is_gif = path
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
-                if is_gif {
-                    gifs.push(path);
+            if let Ok(dims) = image::image_dimensions(&path) {
+                self.dims.insert(path.clone(), dims);
+            }
+            todo.push(path);
+        }
+        if todo.is_empty() {
+            return;
+        }
+        let done = self.done_tx.clone();
+        std::thread::spawn(move || {
+            for path in todo {
+                let still = crate::image_util::load_image(&path).ok();
+                let frames = still
+                    .as_ref()
+                    .and_then(|_| crate::image_util::load_gif_frames(&path));
+                if done
+                    .send(Done::Decoded {
+                        path,
+                        still,
+                        frames,
+                    })
+                    .is_err()
+                {
+                    break;
                 }
             }
-        }
-        if !gifs.is_empty() && self.gif_loading.is_none() {
-            self.gif_loading = Some(std::thread::spawn(move || {
-                gifs.into_iter()
-                    .filter_map(|p| Some((p.clone(), crate::image_util::load_gif_frames(&p)?)))
-                    .collect()
-            }));
-        }
-        let wants_mermaid = slides.iter().any(|s| !s.mermaid_blocks.is_empty());
-        if wants_mermaid && self.mermaid.is_none() && MermaidRenderer::is_available() {
-            self.mermaid = MermaidRenderer::new().ok();
-        }
+        });
     }
 
-    /// Collects finished background GIF decoding; returns true if frames arrived.
-    pub fn poll_gif_loading(&mut self) -> bool {
-        if !self
-            .gif_loading
-            .as_ref()
-            .is_some_and(JoinHandle::is_finished)
-        {
-            return false;
+    /// Takes in finished background work; returns true if anything arrived,
+    /// so the slide must be laid out again.
+    pub fn poll(&mut self) -> bool {
+        let mut arrived = false;
+        while let Ok(done) = self.done.try_recv() {
+            arrived |= self.accept(done);
         }
-        let Some(Ok(loaded)) = self.gif_loading.take().map(JoinHandle::join) else {
-            return false;
-        };
-        self.gifs.extend(
-            loaded
-                .into_iter()
-                .filter(|(_, f)| f.len() > 1)
-                .map(|(p, f)| (p, Arc::new(f))),
-        );
+        arrived
+    }
+
+    /// Whether background work is still due, so the event loop should check
+    /// back soon rather than idle.
+    pub fn busy(&self) -> bool {
+        !(self.decoding.is_empty()
+            && self.encoding.is_empty()
+            && self.diagrams_rendering.is_empty())
+    }
+
+    /// Blocks until all background work has arrived; for headless layout,
+    /// which has no next frame to show it in. Returns true if anything did.
+    pub fn wait(&mut self) -> bool {
+        let mut arrived = false;
+        while self.busy() {
+            let Ok(done) = self.done.recv() else { break };
+            arrived |= self.accept(done);
+        }
+        arrived
+    }
+
+    fn accept(&mut self, done: Done) -> bool {
+        match done {
+            Done::Decoded {
+                path,
+                still,
+                frames,
+            } => {
+                self.decoding.remove(&path);
+                if let Some(frames) = frames.filter(|f| f.len() > 1) {
+                    self.gifs.insert(path.clone(), Arc::new(frames));
+                }
+                if let Some(still) = still {
+                    self.loaded.insert(path, Arc::new(still));
+                }
+            }
+            Done::Encoded { key, epoch, image } => {
+                if epoch != self.epoch.load(Ordering::Relaxed) {
+                    return false;
+                }
+                self.encoding.remove(&key);
+                let Some(image) = image else { return false };
+                self.store(key, image);
+            }
+            Done::Mermaid { hash, result } => {
+                self.diagrams_rendering.remove(&hash);
+                let result = result.map(|(path, img)| {
+                    self.loaded.insert(path.clone(), Arc::new(img));
+                    path
+                });
+                self.diagrams.insert(hash, result);
+            }
+        }
         true
     }
 
@@ -198,7 +329,7 @@ impl ImageStore {
         if let Some(frames) = self.gifs.get(&img.path).cloned() {
             let frame = self.gif_frame % frames.len();
             return Some(self.render(
-                &frames[frame].image,
+                &Arc::clone(&frames[frame].image),
                 img,
                 frame,
                 cols,
@@ -208,7 +339,18 @@ impl ImageStore {
                 window,
             ));
         }
-        let pixels = Arc::clone(self.loaded.get(&img.path)?);
+        let Some(pixels) = self.loaded.get(&img.path).cloned() else {
+            // Still decoding: hold the cells it will take; otherwise missing.
+            self.decoding.contains(&img.path).then_some(())?;
+            return Some(match self.dims.get(&img.path) {
+                Some(&dims)
+                    if !matches!(protocol, ImageProtocol::Ascii | ImageProtocol::Blocks) =>
+                {
+                    blank(dims, cols, rows, window)
+                }
+                _ => Rendered::Lines(Vec::new()),
+            });
+        };
         Some(self.render(&pixels, img, 0, cols, rows, protocol, colors, window))
     }
 
@@ -248,7 +390,8 @@ impl ImageStore {
         }
     }
 
-    /// A Mermaid diagram as an image, or the reason it could not be rendered.
+    /// A Mermaid diagram as an image, or the text to show instead: why it
+    /// could not be rendered, or that it is still rendering.
     pub fn mermaid(
         &mut self,
         source: &str,
@@ -262,42 +405,56 @@ impl ImageStore {
             source.hash(&mut h);
             h.finish()
         };
-        if let Some(err) = self.mermaid_errors.get(&hash) {
-            return Err(err.clone());
-        }
-        let renderer = self
-            .mermaid
-            .as_mut()
-            .ok_or_else(|| "install mermaid-cli (mmdc) to render".to_string())?;
-        let pixel_width = (window.pixels_per_column() * cols as f64) as usize;
-        let path = match renderer.render(source, pixel_width.max(400)) {
-            Ok(path) => path,
-            Err(e) => {
-                let msg = format!("render failed: {e}");
-                self.mermaid_errors.insert(hash, msg.clone());
-                return Err(msg);
+        let path = match self.diagrams.get(&hash) {
+            Some(Ok(path)) => path.clone(),
+            Some(Err(reason)) => return Err(reason.clone()),
+            None => {
+                if self.diagrams_rendering.insert(hash) {
+                    self.start_mermaid(source, hash);
+                }
+                return Err("rendering…".to_string());
             }
         };
-        if !self.loaded.contains_key(&path) {
-            let img = crate::image_util::load_image(&path).map_err(|e| e.to_string())?;
-            self.loaded.insert(path.clone(), Arc::new(img));
-        }
+        let Some(pixels) = self.loaded.get(&path).cloned() else {
+            return Err("rendering…".to_string());
+        };
         let img = SlideImage {
-            path: path.clone(),
+            path,
             alt_text: String::new(),
             position: ImagePosition::Below,
             render_mode: ImageRenderMode::Auto,
             scale: 100,
             color_override: String::new(),
         };
-        let pixels = Arc::clone(&self.loaded[&path]);
         Ok(self.render(&pixels, &img, 0, cols, rows, self.protocol, colors, window))
+    }
+
+    fn start_mermaid(&mut self, source: &str, hash: u64) {
+        let renderer = match &self.mermaid {
+            Some(renderer) => renderer,
+            None => match MermaidRenderer::new() {
+                Ok(renderer) => self.mermaid.insert(renderer),
+                Err(e) => {
+                    self.diagrams_rendering.remove(&hash);
+                    self.diagrams.insert(hash, Err(format!("{e:#}")));
+                    return;
+                }
+            },
+        };
+        let job = renderer.job(source, hash);
+        let done = self.done_tx.clone();
+        std::thread::spawn(move || {
+            let result = job()
+                .and_then(|path| Ok((path.clone(), crate::image_util::load_image(&path)?)))
+                .map_err(|e| format!("{e:#}"));
+            let _ = done.send(Done::Mermaid { hash, result });
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
     fn render(
         &mut self,
-        pixels: &RgbaImage,
+        pixels: &Arc<RgbaImage>,
         img: &SlideImage,
         frame: usize,
         cols: usize,
@@ -319,8 +476,35 @@ impl ImageStore {
         if let Some(hit) = self.cache.get(&key) {
             return hit.clone();
         }
-        let rendered = match render_slide_image(pixels, img, cols, rows, protocol, text, bg, window)
-        {
+        if matches!(protocol, ImageProtocol::Ascii | ImageProtocol::Blocks) {
+            let image = render_slide_image(pixels, img, cols, rows, protocol, text, bg, window);
+            return self.store(key, image);
+        }
+        let animated = self.is_animated(&img.path);
+        // An animation encodes one frame at a time and shows the newest it has.
+        let busy = animated && self.encoding.iter().any(|k| k.path == key.path);
+        if !busy && self.encoding.insert(key.clone()) {
+            let job = EncodeJob {
+                key: key.clone(),
+                epoch: self.epoch.load(Ordering::Relaxed),
+                pixels: Arc::clone(pixels),
+                img: img.clone(),
+                colors: (text, bg),
+                window: *window,
+            };
+            let _ = self.encoder.send(job);
+        }
+        let shown =
+            |k: &Key| k.path == key.path && (k.cols, k.rows, k.protocol) == (cols, rows, protocol);
+        if let Some((_, frame)) = self.cache.iter().find(|(k, _)| animated && shown(k)) {
+            return frame.clone();
+        }
+        blank(pixels.dimensions(), cols, rows, window)
+    }
+
+    /// Caches a finished image, sending Kitty its data, and returns it.
+    fn store(&mut self, key: Key, image: RenderedImage) -> Rendered {
+        let rendered = match image {
             RenderedImage::Lines(lines) => Rendered::Lines(lines),
             RenderedImage::Protocol {
                 escape_data,
@@ -351,11 +535,11 @@ impl ImageStore {
         };
         // GIF frames on Kitty would otherwise pile up in terminal memory: keep
         // only the current frame of each animation.
-        if protocol == ImageProtocol::Kitty && (frame > 0 || self.is_animated(&img.path)) {
+        if key.protocol == ImageProtocol::Kitty && (key.frame > 0 || self.is_animated(&key.path)) {
             let stale: Vec<Key> = self
                 .cache
                 .keys()
-                .filter(|k| k.path == key.path && k.frame != frame)
+                .filter(|k| k.path == key.path && k.frame != key.frame)
                 .cloned()
                 .collect();
             for k in stale {
@@ -386,10 +570,22 @@ impl ImageStore {
                 .extend_from_slice(kitty::delete_image(id).as_bytes());
         }
         self.cache.clear();
+        self.encoding.clear();
+        self.epoch.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Escape data that must reach the terminal before the next frame.
     pub fn take_outbox(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.outbox)
+    }
+}
+
+/// Blank cells the size an image will be once encoded.
+fn blank(dims: (u32, u32), cols: usize, rows: usize, window: &WindowSize) -> Rendered {
+    let (_, _, cols, rows) = crate::image_util::fit_cells(dims, window, cols, rows);
+    Rendered::Cells {
+        kind: ImageKind::Inline(Rc::from("")),
+        cols,
+        rows,
     }
 }

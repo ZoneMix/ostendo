@@ -44,7 +44,7 @@ fn fast_resize(
 /// One frame of an animated GIF, already downscaled.
 #[derive(Clone)]
 pub struct GifFrame {
-    pub image: RgbaImage,
+    pub image: std::sync::Arc<RgbaImage>,
     /// Never zero: zero-delay frames are stored as 100 ms.
     pub delay_ms: u32,
 }
@@ -104,7 +104,10 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
             } else {
                 raw
             };
-            GifFrame { image, delay_ms }
+            GifFrame {
+                image: std::sync::Arc::new(image),
+                delay_ms,
+            }
         })
         // A small file can expand to thousands of full-size frames; past the
         // budget the animation loops over what was decoded.
@@ -172,10 +175,9 @@ fn load_svg(path: &Path) -> Result<RgbaImage> {
     Ok(img)
 }
 
-/// Resize `img` to the largest pixel size that fits `max_cols` x `max_rows`
-/// cells (less a 5% horizontal margin) at the terminal's cell size, keeping
-/// its aspect ratio. Returns the image and the `(cols, rows)` it occupies.
-/// Without `upscale`, a smaller image is returned at its own size.
+/// Resize `img` to the size [`fit_cells`] gives it. Returns the image and the
+/// `(cols, rows)` it occupies. Without `upscale`, a smaller image is returned
+/// at its own size.
 pub fn scale_image_pixels(
     img: &RgbaImage,
     window: &WindowSize,
@@ -187,7 +189,24 @@ pub fn scale_image_pixels(
     if iw == 0 || ih == 0 {
         return (RgbaImage::new(1, 1), 1, 1);
     }
-    let aspect_ratio = ih as f64 / iw as f64;
+    let (width_px, height_px, cols, rows) = fit_cells((iw, ih), window, max_cols, max_rows);
+    if !upscale && width_px >= iw {
+        return (img.clone(), cols, rows);
+    }
+    let scaled = fast_resize(img, width_px, height_px, fir::FilterType::Lanczos3);
+    (scaled, cols, rows)
+}
+
+/// The largest pixel size for an `iw` x `ih` image that fits `max_cols` x
+/// `max_rows` cells (less a 5% horizontal margin) at the terminal's cell
+/// size, keeping its aspect ratio: `(width_px, height_px, cols, rows)`.
+pub fn fit_cells(
+    (iw, ih): (u32, u32),
+    window: &WindowSize,
+    max_cols: usize,
+    max_rows: usize,
+) -> (u32, u32, usize, usize) {
+    let aspect_ratio = f64::from(ih.max(1)) / f64::from(iw.max(1));
 
     let ppc = window.pixels_per_column();
     let ppr = window.pixels_per_row();
@@ -211,12 +230,7 @@ pub fn scale_image_pixels(
 
     let cols = (width_px as f64 / ppc).ceil() as usize;
     let rows = (height_px as f64 / ppr).ceil() as usize;
-
-    if !upscale && width_px >= iw {
-        return (img.clone(), cols, rows);
-    }
-    let scaled = fast_resize(img, width_px, height_px, fir::FilterType::Lanczos3);
-    (scaled, cols, rows)
+    (width_px, height_px, cols, rows)
 }
 
 #[cfg(test)]

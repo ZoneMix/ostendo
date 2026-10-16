@@ -275,7 +275,12 @@ pub fn overflowing_slides(cfg: PresenterConfig, width: u16, height: u16) -> Vec<
             p.fullscreen = p.slides[i].fullscreen.unwrap_or(false);
             p.apply_slide_theme();
             let layout = p.layout();
-            let rows = p.slide_frame(&layout).lines.len();
+            let mut rows = p.slide_frame(&layout).lines.len();
+            // Images and diagrams arrive from the background; measure with them.
+            if p.images.wait() {
+                p.invalidate();
+                rows = p.slide_frame(&layout).lines.len();
+            }
             let extra = rows.saturating_sub(layout.content_rows);
             (extra > 0).then_some((i + 1, extra))
         })

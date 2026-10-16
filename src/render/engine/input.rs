@@ -46,7 +46,8 @@ impl Presenter {
         let moving = self.animation.is_some()
             || !slide.loop_animations.is_empty()
             || gif
-            || self.exec.is_some();
+            || self.exec.is_some()
+            || self.images.busy();
         if moving && self.mode == Mode::Normal {
             return ANIMATION_TICK;
         }
@@ -74,7 +75,7 @@ impl Presenter {
                 }
             }
         }
-        if self.images.poll_gif_loading() {
+        if self.images.poll() {
             self.invalidate();
         }
         if let Some(img) = &self.slides[self.current].image {
