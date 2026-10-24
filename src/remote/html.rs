@@ -136,6 +136,13 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
     line-height: 1.4;
     color: var(--text);
   }
+  #up-next {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+  #timer.behind { color: #d29922; }
+  #timer.over { color: #f85149; }
   #slide-content {
     flex: 1; overflow-y: auto;
     padding: 12px 16px;
@@ -416,6 +423,7 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
           <span id="section-badge"></span>
         </div>
         <div id="slide-title">Connecting...</div>
+        <div id="up-next"></div>
       </div>
       <div class="font-sizer">
         <button class="font-sizer-btn" onclick="adjustLocalFont('slide',-1)">A&#8722;</button>
@@ -465,6 +473,7 @@ pub const REMOTE_HTML: &str = r##"<!DOCTYPE html>
       <div class="ctrl-group-label">Display</div>
       <div class="ctrl-grid">
         <button class="ctrl-btn" id="btn-fullscreen" onclick="send('toggle_fullscreen')"><span class="icon">&#9634;</span>Fullscreen</button>
+        <button class="ctrl-btn" id="btn-blank" onclick="send('toggle_blank')"><span class="icon">&#9632;</span>Blank</button>
         <button class="ctrl-btn" id="btn-notes" onclick="send('toggle_notes')"><span class="icon">&#9776;</span>Notes</button>
         <button class="ctrl-btn" id="btn-theme-name" onclick="send('toggle_theme_name')"><span class="icon">T</span>Theme</button>
         <button class="ctrl-btn" id="btn-sections" onclick="send('toggle_sections')"><span class="icon">&#167;</span>Sections</button>
@@ -598,8 +607,11 @@ function updateUI(d) {
   if (d.section) { badge.textContent = d.section; badge.classList.add("visible"); }
   else { badge.classList.remove("visible"); }
 
-  // Timer
-  document.getElementById("timer").textContent = d.timer || "";
+  // Timer, with pace when the deck sets a duration
+  var timer = document.getElementById("timer");
+  timer.textContent = (d.timer || "") + (d.pace ? " · " + d.pace : "");
+  timer.className = d.pace === "over time" ? "over" : (d.pace ? "behind" : "");
+  document.getElementById("up-next").textContent = d.up_next ? "Up next: " + d.up_next : "";
 
   // Content preview (safe textContent, no HTML injection)
   var cp = document.getElementById("slide-content");
@@ -627,6 +639,7 @@ function updateUI(d) {
   // Toggle states
   setToggle("btn-fullscreen", d.is_fullscreen);
   setToggle("btn-notes", d.is_notes_visible);
+  setToggle("btn-blank", d.is_blank);
   setToggle("btn-theme-name", d.show_theme_name);
   setToggle("btn-sections", d.show_sections);
   setToggle("btn-dark-mode", !d.is_dark_mode);

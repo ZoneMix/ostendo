@@ -5,6 +5,7 @@ date: 2026-03-13
 accent: "#00E5FF"
 theme: terminal_green
 transition: fade
+duration: 30m
 ---
 
 # Ostendo
@@ -40,8 +41,9 @@ A **Rust-powered** presentation engine that renders *beautiful slide decks* dire
 - Executable code blocks in `Python`, `Rust`, `Go`, `C`, `C++`, `Ruby`, `Bash`, and `JavaScript`
 - ~~PowerPoint~~ -- no GUI dependencies, no browser, no Electron
 - Images: Kitty, iTerm2, Sixel, or true-color half blocks anywhere
-- Column layouts, tables, diagrams, and block quotes
-- Speaker notes, a timer, and WebSocket remote control
+- Column layouts, tables, callouts, charts, diagrams, and QR codes
+- Step-by-step builds, code walkthroughs, and a pace-aware timer
+- Speaker notes, search, and a phone remote with a presenter view
 
 > Everything you see is rendered in the terminal. It works over SSH, in tmux, and in containers.
 
@@ -103,6 +105,51 @@ Callouts, quotations, and emphasis blocks:
 Block quotes are rendered with the theme's accent color as a left border bar.
 They're useful for callouts, warnings, and attributions. Each contiguous block
 of '>' lines becomes a separate BlockQuote element.
+-->
+
+---
+
+# Callouts
+<!-- section: Formatting -->
+<!-- font_size: 4 -->
+
+GitHub alert syntax becomes themed panels:
+
+> [!NOTE]
+> Quotes starting with `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]`.
+
+> [!TIP] Custom heading
+> Text after the marker replaces the heading.
+
+> [!WARNING]
+> Colors adapt so every theme keeps them readable.
+
+<!-- notes:
+Callouts use GitHub's alert syntax, so the same markdown renders as alerts on
+GitHub. The colors start from GitHub's palette and are adjusted per theme to
+keep 3:1 contrast.
+-->
+
+---
+
+# Links and Task Lists
+<!-- section: Formatting -->
+<!-- font_size: 4 -->
+
+Links are clickable in Kitty, Ghostty, iTerm2, WezTerm, and more:
+
+- Read the [presentation format](https://github.com/ZoneMix/ostendo/blob/main/docs/PRESENTATION_FORMAT.md)
+- Or paste a bare URL: https://github.com/ZoneMix/ostendo
+
+Task lists render as checklists:
+
+- [x] Write the talk in markdown
+- [x] Rehearse with the timer
+- [ ] Give the talk
+
+<!-- notes:
+Links are sent as OSC 8 hyperlinks: Cmd/Ctrl+click opens them in terminals
+that support it; elsewhere they are just underlined text.
 -->
 
 ---
@@ -195,6 +242,38 @@ println!("Word count: {}", words.len());
 Ostendo detects when Rust code lacks a fn main() and automatically wraps it.
 Any standalone function definitions are extracted and placed before main().
 This lets you write concise code examples without boilerplate.
+-->
+
+---
+
+# Code: Walkthrough
+<!-- section: Code Execution -->
+<!-- font_size: 4 -->
+
+Each press of → moves the highlight: `{1|3-12|14-15|all}`
+
+```rust +exec {label: "Title Case"} {1|3-12|14-15|all}
+let words = vec!["hello", "world", "from", "ostendo"];
+
+let result: String = words.iter()
+    .map(|w| {
+        let mut chars = w.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+        }
+    })
+    .collect::<Vec<_>>()
+    .join(" ");
+
+println!("{result}");
+println!("Word count: {}", words.len());
+```
+
+<!-- notes:
+Line groups after the language step through with the arrow keys, like a
+pause. The dots in the status bar show how many steps are left. Ctrl+E still
+runs the block at any step.
 -->
 
 ---
@@ -435,6 +514,50 @@ Animated GIFs are decoded in a background thread. Each frame is rendered
 using the terminal's best available image protocol. The downscaling to 800px
 max dimension keeps memory usage reasonable for large GIFs. Frame advancement
 happens within synchronized update blocks to prevent flicker.
+-->
+
+---
+
+# Charts
+<!-- section: Charts -->
+<!-- font_size: 4 -->
+
+```chart
+# Cold start in milliseconds (lower is better)
+ostendo: 38 ms
+Alternative A: 61 ms
+Alternative B: 95 ms
+Alternative C: 140 ms
+```
+
+- One bar per `label: value` line, scaled to the largest value
+- Units after the number are kept: `38 ms`, `1,250`
+
+<!-- notes:
+Charts are drawn with eighth-block characters, so bar lengths are precise to
+an eighth of a cell. The numbers here are illustrative.
+-->
+
+---
+
+# Charts: Columns
+<!-- section: Charts -->
+<!-- font_size: 4 -->
+
+```chart style=columns
+Mon: 120
+Tue: 340
+Wed: 290
+Thu: 510
+Fri: 470
+Sat: 180
+Sun: 90
+```
+
+- `style=columns` draws a series as vertical columns
+
+<!-- notes:
+Column charts suit sequences: days, releases, benchmark runs.
 -->
 
 ---
@@ -894,6 +1017,24 @@ set to center or right via the footer_align directive.
 
 ---
 
+# Build It Up
+<!-- section: Navigation -->
+<!-- font_size: 4 -->
+<!-- align: center -->
+
+- `<!-- pause -->` hides what follows
+<!-- pause -->
+- Each press of → reveals the next part
+<!-- pause -->
+- ← steps back; the dots below count the steps
+
+<!-- notes:
+Hidden content keeps its space, so centered slides never jump. Coming back to
+a slide with the left arrow shows it fully built.
+-->
+
+---
+
 # Sections and Navigation
 <!-- section: Navigation -->
 <!-- title_decoration: banner -->
@@ -995,12 +1136,14 @@ code execution entirely.
 - `g` + number + Enter: go to slide N
 - `Ctrl+D`/`Ctrl+U`: half-page scroll
 - `o`: slide overview grid
+- `/`: search slides and notes
 
 <!-- column: 1 -->
 
 **Actions**
 - `?`: help overlay
 - `n`: toggle speaker notes
+- `b`: blank the screen
 - `f`: toggle fullscreen
 - `Ctrl+E`: execute code block
 - `+`/`-`: scale content width
@@ -1017,7 +1160,7 @@ code execution entirely.
 This is a quick reference for the most common key bindings. The full
 help screen (press ?) shows all available shortcuts organized by category.
 Command mode (:) supports theme, goto, reload, notes, timer, overview, and help.
-Mouse clicks advance slides, scroll wheel scrolls content, right-click goes back.
+The mouse wheel scrolls long slides.
 -->
 
 ---
@@ -1067,6 +1210,24 @@ Alignment variants:
 - align: vcenter — vertical centering only
 - align: hcenter — horizontal centering only
 These can be set per-slide or globally in front matter.
+-->
+
+---
+
+# Grab the Slides
+<!-- section: Closing -->
+<!-- font_size: 3 -->
+<!-- align: center -->
+
+```qr
+https://github.com/ZoneMix/ostendo
+```
+
+github.com/ZoneMix/ostendo
+
+<!-- notes:
+QR codes are drawn black on white with a quiet zone so phones scan them from
+any theme.
 -->
 
 ---

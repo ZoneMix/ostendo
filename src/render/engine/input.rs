@@ -22,6 +22,7 @@ impl Presenter {
         loop {
             self.render(&mut out)?;
             self.broadcast_state();
+            self.publish_poll();
             if event::poll(self.poll_timeout())? {
                 loop {
                     if self.handle_event(event::read()?) {
@@ -99,8 +100,18 @@ impl Presenter {
         if !transmit.is_empty() {
             out.write_all(&transmit)?;
         }
+        let mut frame = Vec::new();
+        if self.terminal_bg != Some(self.palette.bg) {
+            self.terminal_bg = Some(self.palette.bg);
+            frame.extend_from_slice(super::terminal::background_escape(self.palette.bg).as_bytes());
+        }
         self.display
-            .present(&screen, self.width, self.palette.text, out)?;
+            .present(&screen, self.width, self.palette.text, &mut frame)?;
+        out.write_all(&frame)?;
+        out.flush()?;
+        if let Some(recorder) = &mut self.recorder {
+            recorder.output(&frame);
+        }
         Ok(())
     }
 
@@ -122,13 +133,39 @@ impl Presenter {
         Ok(())
     }
 
+    /// Opens the current slide in `$VISUAL` / `$EDITOR`, then reloads, which
+    /// shows the slide that changed.
+    fn edit_slide(&mut self) {
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
+        let line = self.slides[self.current].line;
+        let Some((program, args)) = editor_command(&editor, &self.presentation_path, line) else {
+            return;
+        };
+        let status = super::terminal::hand_over(|| {
+            std::process::Command::new(&program).args(&args).status()
+        });
+        if let Err(e) = status {
+            self.notify(format!("cannot start {program}: {e}"));
+        }
+        // The hand-over reset the font and freed Kitty's images.
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((self.width, self.height));
+        self.resize(cols, rows);
+        self.font.request(Some(self.current));
+        self.reload();
+    }
+
     fn resize(&mut self, width: u16, height: u16) {
         self.window = crate::render::layout::WindowSize::query();
         self.width = width.max(1);
         self.height = height.max(1);
+        if let Some(recorder) = &mut self.recorder {
+            recorder.resize(self.width, self.height);
+        }
         self.images.clear();
         self.display.invalidate();
-        super::terminal::set_background(self.palette.bg);
+        self.terminal_bg = None;
     }
 
     /// Handles one terminal event; returns true to quit.
@@ -151,13 +188,18 @@ impl Presenter {
         if ctrl && key.code == KeyCode::Char('c') {
             return true;
         }
+        if self.blank {
+            // The key that brings the slide back does nothing else.
+            self.blank = false;
+            return false;
+        }
         match self.mode {
             Mode::Help => {
                 self.mode = Mode::Normal;
                 self.font.request(Some(self.current));
             }
-            Mode::Overview => self.overview_key(key.code),
-            Mode::Command | Mode::Goto => {
+            Mode::Overview => self.overview_key(key),
+            Mode::Command | Mode::Goto | Mode::Search => {
                 let typed = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
                 return self.prompt_key(key.code, typed);
             }
@@ -205,7 +247,14 @@ impl Presenter {
             KeyCode::Char(']') => self.adjust_font(1),
             KeyCode::Char('[') => self.adjust_font(-1),
             KeyCode::Char('0') => self.reset_font(),
+            KeyCode::Char(c @ '1'..='9') => self.vote(None, c as usize - '1' as usize),
             KeyCode::Char('o') => self.open_overview(),
+            KeyCode::Char('b') => self.blank = true,
+            KeyCode::Char('m') => self.move_notes(),
+            KeyCode::Char('{') => self.resize_notes(-5),
+            KeyCode::Char('}') => self.resize_notes(5),
+            KeyCode::Char('e') => self.edit_slide(),
+            KeyCode::Char('/') => self.open_prompt(Mode::Search),
             KeyCode::Char('?') => {
                 self.mode = Mode::Help;
                 self.font.request(None);
@@ -243,10 +292,14 @@ impl Presenter {
                         self.goto_number(&input);
                         false
                     }
+                    Mode::Search => {
+                        self.search(&input);
+                        false
+                    }
                     _ => self.execute_command(&input),
                 };
             }
-            KeyCode::Char(c) if typed && (self.mode == Mode::Command || c.is_ascii_digit()) => {
+            KeyCode::Char(c) if typed && (self.mode != Mode::Goto || c.is_ascii_digit()) => {
                 self.input.push(c)
             }
             _ => {}
@@ -276,9 +329,9 @@ impl Presenter {
             "notes" => self.toggle_notes(),
             "timer" => {
                 if arg.trim() == "reset" {
-                    self.timer_start = None;
+                    self.reset_timer();
                 } else {
-                    self.timer_start.get_or_insert_with(Instant::now);
+                    self.start_timer();
                 }
             }
             "overview" => self.open_overview(),
@@ -294,11 +347,22 @@ impl Presenter {
         (usize::from(self.height).saturating_sub(4) / 3).max(1)
     }
 
-    fn overview_key(&mut self, code: KeyCode) {
+    fn overview_key(&mut self, key: KeyEvent) {
         let last = self.slides.len() - 1;
         let rows = self.overview_rows();
         let sel = self.overview_sel;
-        self.overview_sel = match code {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let move_later = match key.code {
+            KeyCode::Char('J') => Some(true),
+            KeyCode::Char('K') => Some(false),
+            KeyCode::Down if shift => Some(true),
+            KeyCode::Up if shift => Some(false),
+            _ => None,
+        };
+        if let Some(later) = move_later {
+            return self.move_slide(later);
+        }
+        self.overview_sel = match key.code {
             KeyCode::Down | KeyCode::Char('j') => (sel + 1).min(last),
             KeyCode::Up | KeyCode::Char('k') => sel.saturating_sub(1),
             KeyCode::Right | KeyCode::Char('l') => (sel + rows).min(last),
@@ -332,5 +396,178 @@ impl Presenter {
             self.font.reset(self.current);
             self.save_state();
         }
+    }
+}
+
+/// The program and arguments that open `path` at `line` in `editor`, which
+/// may carry its own arguments (`code --wait`). Editors without a known way
+/// to take a line just open the file.
+fn editor_command(
+    editor: &str,
+    path: &std::path::Path,
+    line: usize,
+) -> Option<(String, Vec<String>)> {
+    let mut words = editor.split_whitespace();
+    let program = words.next()?.to_string();
+    let mut args: Vec<String> = words.map(str::to_string).collect();
+    let name = std::path::Path::new(&program)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let file = path.display().to_string();
+    match name.as_str() {
+        "vi" | "vim" | "nvim" | "nano" | "emacs" | "emacsclient" | "micro" | "kak" | "joe"
+        | "mg" | "ne" => args.extend([format!("+{line}"), file]),
+        "code" | "code-insiders" | "codium" | "cursor" => {
+            args.extend(["--goto".to_string(), format!("{file}:{line}")]);
+        }
+        "subl" | "zed" | "hx" | "helix" => args.push(format!("{file}:{line}")),
+        _ => args.push(file),
+    }
+    Some((program, args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{presenter, presenter_at, screen};
+    use super::*;
+
+    fn press(p: &mut Presenter, keys: &str) {
+        for c in keys.chars() {
+            let code = if c == '\n' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(c)
+            };
+            p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+    }
+
+    #[test]
+    fn the_overview_reorders_slides_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deck.md");
+        let deck = "# A\n---\n# B\n---\n# C\n";
+        std::fs::write(&path, deck).unwrap();
+        let mut p = presenter_at(deck, path.clone());
+        press(&mut p, "oJ");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# B\n---\n# A\n---\n# C\n"
+        );
+        assert_eq!(
+            (p.mode, p.overview_sel),
+            (Mode::Overview, 1),
+            "the selection follows"
+        );
+        assert_eq!(
+            p.slides[p.current].title, "A",
+            "the current slide stays current"
+        );
+        press(&mut p, "K");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), deck);
+        press(&mut p, "K");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            deck,
+            "nothing before the first"
+        );
+    }
+
+    #[test]
+    fn editors_open_the_file_at_the_slide_line() {
+        let path = std::path::Path::new("/talks/deck.md");
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("nvim", "nvim", &["+12", "/talks/deck.md"]),
+            (
+                "/usr/bin/vim -u NONE",
+                "/usr/bin/vim",
+                &["-u", "NONE", "+12", "/talks/deck.md"],
+            ),
+            (
+                "code --wait",
+                "code",
+                &["--wait", "--goto", "/talks/deck.md:12"],
+            ),
+            ("hx", "hx", &["/talks/deck.md:12"]),
+            ("gedit", "gedit", &["/talks/deck.md"]),
+        ];
+        for (editor, program, args) in cases {
+            let (p, a) = editor_command(editor, path, 12).unwrap();
+            assert_eq!(
+                (p.as_str(), a),
+                (*program, args.iter().map(|s| s.to_string()).collect())
+            );
+        }
+        assert!(editor_command("  ", path, 1).is_none());
+    }
+
+    #[test]
+    fn blanking_hides_everything_and_the_next_key_only_restores() {
+        let mut p = presenter("# One\n---\n# Two");
+        press(&mut p, "b");
+        assert!(screen(&mut p).iter().all(String::is_empty));
+        press(&mut p, "l");
+        assert_eq!(p.current, 0, "the restoring key must not advance");
+        assert!(screen(&mut p).iter().any(|r| r.contains("One")));
+    }
+
+    #[test]
+    fn search_finds_text_and_notes_wrapping_around() {
+        let mut p = presenter(
+            "# One\n---\n# Two\n<!-- notes: mention the Needle -->\n---\n# Three\n- a needle here",
+        );
+        press(&mut p, "/needle\n");
+        assert_eq!(p.current, 1);
+        press(&mut p, "/\n");
+        assert_eq!(p.current, 2, "empty query repeats the last search");
+        press(&mut p, "/\n");
+        assert_eq!(p.current, 1, "search wraps past the end");
+        press(&mut p, "/haystack\n");
+        assert_eq!(p.current, 1);
+        let bar = screen(&mut p).pop().unwrap();
+        assert!(bar.contains("no slide mentions “haystack”"), "{bar}");
+    }
+
+    #[test]
+    fn votes_count_toward_the_poll_on_screen() {
+        let mut p = presenter(concat!(
+            "# Poll\nFirst a question.\n<!-- pause -->\n",
+            "```poll\n# Best language?\n- Rust\n- Go\n```\n---\n# Next",
+        ));
+        let (polls, shown) = tokio::sync::watch::channel(String::new());
+        p.audience = Some(polls);
+        let (tx, rx) = std::sync::mpsc::channel();
+        p.remote_rx = Some(rx);
+        let audience = |p: &mut Presenter| {
+            p.publish_poll();
+            serde_json::from_str::<serde_json::Value>(&shown.borrow()).unwrap()
+        };
+
+        press(&mut p, "2");
+        assert!(
+            audience(&mut p).get("id").is_none(),
+            "the poll is not built yet"
+        );
+        p.next_slide();
+        let id = audience(&mut p)["id"].as_str().unwrap().to_string();
+        press(&mut p, "229");
+        let vote = |poll: &str, option| crate::remote::RemoteCommand::Vote {
+            poll: poll.to_string(),
+            option,
+        };
+        for v in [vote(&id, 0), vote("an-old-poll", 0), vote(&id, 7)] {
+            tx.send(v).unwrap();
+        }
+        p.poll_remote();
+
+        assert_eq!(audience(&mut p)["counts"], serde_json::json!([1, 2]));
+        let rows = screen(&mut p);
+        let go = rows.iter().find(|r| r.contains("2 Go")).unwrap();
+        assert!(go.ends_with("2 · 66%"), "{go}");
+        p.next_slide();
+        assert!(audience(&mut p).get("id").is_none());
+        press(&mut p, "/best language\n");
+        assert_eq!(p.current, 0, "search finds poll questions");
     }
 }

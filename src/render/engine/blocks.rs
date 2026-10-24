@@ -7,8 +7,10 @@ use regex::Regex;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::code::highlight::Highlighter;
-use crate::presentation::{BlockQuote, Bullet, CodeBlock, ExecMode, Table, TableAlign};
+use crate::presentation::{BlockQuote, Bullet, Callout, CodeBlock, ExecMode, Table, TableAlign};
 use crate::render::text::{ellipsize, wrap_text, LineContentType, StyledLine, StyledSpan};
+
+use crate::theme::colors::interpolate_color;
 
 use super::ansi::parse_ansi_line;
 use super::palette::Palette;
@@ -37,7 +39,12 @@ impl Ctx<'_> {
     }
 
     fn inline(&self, text: &str) -> Vec<StyledSpan> {
-        crate::markdown::parser::parse_inline_formatting(text, self.pal.text, self.pal.code_bg)
+        let mut spans =
+            crate::markdown::parser::parse_inline_formatting(text, self.pal.text, self.pal.code_bg);
+        for span in spans.iter_mut().filter(|s| s.link.is_some()) {
+            span.fg = Some(self.pal.accent);
+        }
+        spans
     }
 }
 
@@ -190,16 +197,26 @@ pub(crate) fn bullets(ctx: &Ctx, items: &[Bullet], spaced: bool) -> Vec<StyledLi
             out.push(StyledLine::empty());
         }
         let indent = "  ".repeat(b.depth.min(3));
-        let (marker, text) = match ORDERED_MARKER.find(&b.text) {
-            Some(m) => (m.as_str().trim_end().to_string(), &b.text[m.end()..]),
-            None => (["•", "◦", "▪"][b.depth.min(2)].to_string(), b.text.as_str()),
+        let (marker, text, color) = match (b.task(), ORDERED_MARKER.find(&b.text)) {
+            (Some((true, text)), _) => ("✓".to_string(), text, ctx.pal.accent),
+            (Some((false, text)), _) => ("☐".to_string(), text, ctx.pal.muted),
+            (None, Some(m)) => (
+                m.as_str().trim_end().to_string(),
+                &b.text[m.end()..],
+                ctx.pal.accent,
+            ),
+            (None, None) => (
+                ["•", "◦", "▪"][b.depth.min(2)].to_string(),
+                b.text.as_str(),
+                ctx.pal.accent,
+            ),
         };
         let hang = [StyledSpan::new(
             &" ".repeat(indent.len() + marker.width() + 1),
         )];
         let first = [
             StyledSpan::new(&indent),
-            StyledSpan::new(&marker).with_fg(ctx.pal.accent).bold(),
+            StyledSpan::new(&marker).with_fg(color).bold(),
             StyledSpan::new(" "),
         ];
         out.extend(rich_text(ctx, text, &first, &hang));
@@ -322,10 +339,16 @@ pub(crate) fn figlet(ctx: &Ctx, text: &str) -> Option<Vec<StyledLine>> {
 }
 
 /// A code block on a tinted panel with a header showing the label and language.
-pub(crate) fn code_block(ctx: &Ctx, cb: &CodeBlock) -> Vec<StyledLine> {
+/// `emphasis` lists 1-based line ranges to stand out; the other lines dim.
+pub(crate) fn code_block(
+    ctx: &Ctx,
+    cb: &CodeBlock,
+    emphasis: Option<&Vec<(usize, usize)>>,
+) -> Vec<StyledLine> {
     let (pal, width) = (ctx.pal, ctx.width);
-    let bg = pal.code_bg;
-    let panel = |mut spans: Vec<StyledSpan>| {
+    let emphasis = emphasis.filter(|ranges| !ranges.is_empty());
+    let lifted = interpolate_color(pal.code_bg, pal.accent, 0.12);
+    let row_panel = |mut spans: Vec<StyledSpan>, bg| {
         let used: usize = spans.iter().map(StyledSpan::width).sum();
         spans.push(StyledSpan::new(&" ".repeat(width.saturating_sub(used))));
         for s in &mut spans {
@@ -333,6 +356,7 @@ pub(crate) fn code_block(ctx: &Ctx, cb: &CodeBlock) -> Vec<StyledLine> {
         }
         line(spans)
     };
+    let panel = |spans| row_panel(spans, pal.code_bg);
     let lang = cb.language.to_lowercase();
     let label = if cb.label.is_empty() {
         ""
@@ -352,19 +376,31 @@ pub(crate) fn code_block(ctx: &Ctx, cb: &CodeBlock) -> Vec<StyledLine> {
     ])];
 
     let body_width = width.saturating_sub(4).max(1);
-    for hl in ctx
+    for (n, hl) in ctx
         .highlighter
         .highlight(&cb.code, &cb.language, pal.is_dark())
+        .into_iter()
+        .enumerate()
     {
+        let focus = emphasis.map(|r| r.iter().any(|&(a, b)| (a..=b).contains(&(n + 1))));
         let spans: Vec<StyledSpan> = hl
             .iter()
-            .map(|s| StyledSpan::new(&s.text).with_fg(s.fg))
+            .map(|s| match focus {
+                Some(false) => {
+                    StyledSpan::new(&s.text).with_fg(interpolate_color(s.fg, pal.code_bg, 0.6))
+                }
+                _ => StyledSpan::new(&s.text).with_fg(s.fg),
+            })
             .collect();
         for (i, chunk) in wrap_code(&spans, body_width).into_iter().enumerate() {
-            let lead = if i == 0 { "  " } else { "  ↪ " };
-            let mut row = vec![StyledSpan::new(lead).with_fg(pal.muted)];
+            let (bar, bg) = match focus {
+                Some(true) => (StyledSpan::new("▌").with_fg(pal.accent), lifted),
+                _ => (StyledSpan::new(" "), pal.code_bg),
+            };
+            let lead = if i == 0 { " " } else { " ↪ " };
+            let mut row = vec![bar, StyledSpan::new(lead).with_fg(pal.muted)];
             row.extend(chunk);
-            out.push(panel(row));
+            out.push(row_panel(row, bg));
         }
     }
     out.push(panel(Vec::new()));
@@ -447,6 +483,9 @@ pub(crate) fn exec_output(ctx: &Ctx, output: &str, running: bool) -> Vec<StyledL
 }
 
 pub(crate) fn quote(ctx: &Ctx, q: &BlockQuote) -> Vec<StyledLine> {
+    if let Some((kind, heading)) = &q.callout {
+        return callout(ctx, &q.lines, *kind, heading);
+    }
     let bar = [StyledSpan::new("┃ ").with_fg(ctx.pal.accent)];
     q.lines
         .iter()
@@ -462,6 +501,38 @@ pub(crate) fn quote(ctx: &Ctx, q: &BlockQuote) -> Vec<StyledLine> {
             lines
         })
         .collect()
+}
+
+/// A GitHub-style alert: a tinted panel with a colored bar and heading.
+fn callout(ctx: &Ctx, body: &[String], kind: Callout, heading: &str) -> Vec<StyledLine> {
+    let color = ctx.pal.callout(kind);
+    let tint = interpolate_color(ctx.pal.bg, color, 0.1);
+    // Text-presentation symbols only: emoji-capable ones (ℹ ⚠) are drawn two
+    // cells wide by some terminals, which would break the panel's edge.
+    let icon = match kind {
+        Callout::Note => "◉",
+        Callout::Tip => "✦",
+        Callout::Important => "◆",
+        Callout::Warning => "▲",
+        Callout::Caution => "⬣",
+    };
+    let bar = [StyledSpan::new("▌ ").with_fg(color)];
+    let heading = ellipsize(&format!("{icon} {heading}"), ctx.width.saturating_sub(2));
+    let mut out = vec![line(vec![
+        bar[0].clone(),
+        StyledSpan::new(&heading).with_fg(color).bold(),
+    ])];
+    for text in body {
+        out.extend(rich_text(ctx, text, &bar, &bar));
+    }
+    for l in &mut out {
+        let free = ctx.width.saturating_sub(l.width());
+        l.push(StyledSpan::new(&" ".repeat(free)));
+        for s in &mut l.spans {
+            s.bg.get_or_insert(tint);
+        }
+    }
+    out
 }
 
 /// A table with rounded borders; columns shrink and cells wrap to fit.
@@ -558,6 +629,25 @@ pub(crate) fn table(ctx: &Ctx, t: &Table) -> Vec<StyledLine> {
 }
 
 /// Source listing shown when a Mermaid diagram cannot be rendered.
+/// Display math, centered; its one-line form, wrapped, when the layout is
+/// too wide.
+pub(crate) fn math(ctx: &Ctx, tex: &str) -> Vec<StyledLine> {
+    let mut rows = crate::math::display(tex);
+    let mut widest = rows.iter().map(|r| r.width()).max().unwrap_or(0);
+    if widest > ctx.width {
+        rows = wrap_text(&crate::math::inline(tex), ctx.width);
+        widest = rows.iter().map(|r| r.width()).max().unwrap_or(0);
+    }
+    let pad = " ".repeat(ctx.width.saturating_sub(widest) / 2);
+    rows.iter()
+        .map(|r| {
+            line(vec![
+                StyledSpan::new(&format!("{pad}{r}")).with_fg(ctx.pal.text)
+            ])
+        })
+        .collect()
+}
+
 pub(crate) fn mermaid_fallback(ctx: &Ctx, source: &str, reason: &str) -> Vec<StyledLine> {
     let mut out = vec![line(vec![
         StyledSpan::new("◇ mermaid ").with_fg(ctx.pal.accent).bold(),
@@ -639,13 +729,14 @@ mod tests {
                     code: format!("\tfmt.Println(\"{long}\")\n\n界界界"),
                     label: "demo".into(),
                     exec_mode: Some(ExecMode::Exec),
+                    highlights: vec![vec![(1, 2)]],
                 };
                 let t = Table {
                     headers: vec!["Feature".into(), "".into(), "Notes".into()],
                     alignments: vec![TableAlign::Center],
                     rows: vec![vec![long.clone(), "".into(), "café".into()]],
                 };
-                let blocks: [Vec<StyledLine>; 6] = [
+                let blocks: [Vec<StyledLine>; 8] = [
                     paragraph(ctx, &long),
                     bullets(
                         ctx,
@@ -655,14 +746,26 @@ mod tests {
                         }],
                         false,
                     ),
-                    code_block(ctx, &cb),
+                    code_block(ctx, &cb, cb.highlights.first()),
                     exec_output(ctx, &format!("\x1b[31m{long}"), true),
                     table(ctx, &t),
                     quote(
                         ctx,
                         &BlockQuote {
                             lines: vec![long.clone()],
+                            callout: None,
                         },
+                    ),
+                    quote(
+                        ctx,
+                        &BlockQuote {
+                            lines: vec![long.clone()],
+                            callout: Some((Callout::Warning, long.clone())),
+                        },
+                    ),
+                    math(
+                        ctx,
+                        r"\frac{a + b + c + d}{2} = \sum_{i=1}^{n} \sqrt{x_i^2 + y_i^2}",
                     ),
                 ];
                 for lines in blocks {

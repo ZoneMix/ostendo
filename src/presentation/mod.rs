@@ -1,5 +1,6 @@
 //! Presentation data structures and session state persistence.
 
+pub mod rehearsal;
 mod slide;
 mod state;
 

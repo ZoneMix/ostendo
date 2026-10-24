@@ -1,10 +1,8 @@
 //! Types shared across the engine submodules.
 
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
 
 use crate::presentation::{PresentationMeta, Slide};
-use crate::remote::RemoteCommand;
 use crate::render::text::StyledLine;
 use crate::terminal::protocols::ImageProtocol;
 use crate::theme::Theme;
@@ -18,6 +16,8 @@ pub(crate) enum Mode {
     Command,
     /// `g` + slide number.
     Goto,
+    /// `/` + text to find.
+    Search,
     Help,
     Overview,
 }
@@ -35,21 +35,21 @@ pub struct PresenterConfig {
     pub presentation_path: PathBuf,
     /// Forced image protocol; `None` auto-detects.
     pub image_protocol: Option<ImageProtocol>,
-    pub remote: Option<(
-        Receiver<RemoteCommand>,
-        tokio::sync::broadcast::Sender<String>,
-    )>,
+    pub remote: Option<crate::remote::Links>,
     pub allow_exec: bool,
     pub allow_remote_exec: bool,
     pub fullscreen: bool,
     pub timer: bool,
     /// Content width as a percentage of the terminal width.
     pub scale: u8,
+    /// `--record`: write an asciicast of the talk here.
+    pub record: Option<PathBuf>,
 }
 
 /// Where things go on screen for the current terminal size and toggles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Layout {
+    /// Columns the slide area spans: the terminal, less notes beside it.
     pub width: usize,
     pub height: usize,
     pub content_top: usize,
@@ -76,4 +76,18 @@ pub(crate) struct FrameImage {
 pub(crate) struct SlideFrame {
     pub lines: Vec<StyledLine>,
     pub images: Vec<FrameImage>,
+    /// Line ranges of whole elements (title, a list, a table), which
+    /// horizontal centering moves as one so their left edges stay aligned.
+    pub units: Vec<std::ops::Range<usize>>,
+}
+
+impl SlideFrame {
+    /// Appends an element's lines as one centering unit.
+    pub fn push_unit(&mut self, lines: impl IntoIterator<Item = StyledLine>) {
+        let start = self.lines.len();
+        self.lines.extend(lines);
+        if self.lines.len() > start {
+            self.units.push(start..self.lines.len());
+        }
+    }
 }

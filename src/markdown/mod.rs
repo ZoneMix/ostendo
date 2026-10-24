@@ -7,3 +7,4 @@ mod split;
 mod tables;
 
 pub use parser::parse_presentation;
+pub use split::swap_adjacent_slides;

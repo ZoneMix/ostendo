@@ -2,6 +2,7 @@
 
 use crossterm::style::Color;
 
+use crate::presentation::Callout;
 use crate::theme::colors::{
     color_to_rgb, contrast_ratio, hex_to_color, interpolate_color, relative_luminance,
 };
@@ -66,6 +67,30 @@ impl Palette {
     pub fn is_dark(&self) -> bool {
         color_to_rgb(self.code_bg).is_none_or(|(r, g, b)| relative_luminance(r, g, b) < 0.18)
     }
+
+    /// GitHub's alert color for `kind` on a dark or light page, blended
+    /// toward the text color until it reads at 3:1 on this background.
+    pub fn callout(&self, kind: Callout) -> Color {
+        let light_page =
+            color_to_rgb(self.bg).is_some_and(|(r, g, b)| relative_luminance(r, g, b) > 0.4);
+        let hex = match (kind, light_page) {
+            (Callout::Note, false) => "#4493f8",
+            (Callout::Note, true) => "#0969da",
+            (Callout::Tip, false) => "#3fb950",
+            (Callout::Tip, true) => "#1a7f37",
+            (Callout::Important, false) => "#ab7df8",
+            (Callout::Important, true) => "#8250df",
+            (Callout::Warning, false) => "#d29922",
+            (Callout::Warning, true) => "#9a6700",
+            (Callout::Caution, false) => "#f85149",
+            (Callout::Caution, true) => "#cf222e",
+        };
+        let base = hex_to_color(hex).unwrap_or(self.accent);
+        (0..=10)
+            .map(|i| interpolate_color(base, self.text, f64::from(i) / 10.0))
+            .find(|&c| contrast_ratio(c, self.bg) >= 3.0)
+            .unwrap_or(self.text)
+    }
 }
 
 #[cfg(test)]
@@ -80,6 +105,24 @@ mod tests {
         let light = Palette::new(&registry.get("paper").unwrap(), None);
         assert!(dark.is_dark());
         assert!(!light.is_dark());
+    }
+
+    #[test]
+    fn callout_colors_are_readable_on_every_theme() {
+        let registry = ThemeRegistry::load();
+        for slug in registry.list() {
+            let pal = Palette::new(&registry.get(&slug).unwrap(), None);
+            for kind in [
+                Callout::Note,
+                Callout::Tip,
+                Callout::Important,
+                Callout::Warning,
+                Callout::Caution,
+            ] {
+                let ratio = contrast_ratio(pal.callout(kind), pal.bg);
+                assert!(ratio >= 3.0, "{slug} {kind:?}: {ratio:.2}");
+            }
+        }
     }
 
     #[test]

@@ -25,8 +25,9 @@ Before adding code, answer; a missing answer means do not write it yet:
    use", `#[allow(dead_code)]`, and "for completeness" enum variants are not
    callers.
 2. Does something already do it? Search `src/` for an existing helper
-   (`render/text.rs`, `theme/colors.rs`, `render/engine/output.rs`,
-   `markdown/regex_patterns.rs`) before writing a new one.
+   (`render/text.rs`, `render/engine/blocks.rs`, `theme/colors.rs`,
+   `markdown/inline.rs`, `markdown/regex_patterns.rs`) before writing a new
+   one.
 3. Is this the smallest change at the owning module? No speculative config,
    traits with one impl, builder types for three fields, or wrappers that only
    forward.
@@ -56,9 +57,9 @@ add it yet:
 2. What credible regression makes it fail?
 3. Why does existing coverage not already catch that failure? Each contract
    has one primary test owner at the strongest boundary (usually
-   `parse_presentation()` for syntax, the public render/export function for
-   output). Prefer adding a case to an existing table-driven test over a
-   near-duplicate test.
+   `parse_presentation()` for syntax, `render/engine/tests.rs` for what a
+   presenter sees and does, the export function for output). Prefer adding a
+   case to an existing table-driven test over a near-duplicate test.
 4. Does it need a production seam (`pub(crate)` export, flag, wrapper,
    injection hook) that no production caller needs? If yes, move the test to
    the real boundary instead.

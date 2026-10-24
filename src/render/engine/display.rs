@@ -204,10 +204,16 @@ fn encode_row(buf: &mut Vec<u8>, row: &Row, width: usize, default_fg: Color) -> 
         SetForegroundColor(default_fg)
     )?;
     let (mut fg, mut bg, mut attrs) = (default_fg, row.bg, Attrs::default());
+    let mut link: Option<&str> = None;
     let mut used = 0;
     for span in &row.line.spans {
         if used >= width {
             break;
+        }
+        if span.link.as_deref() != link {
+            link = span.link.as_deref();
+            // OSC 8: an empty target ends the hyperlink.
+            write!(buf, "\x1b]8;;{}\x1b\\", link.unwrap_or(""))?;
         }
         let want = Attrs::of(span);
         write_attrs(buf, attrs, want);
@@ -234,6 +240,9 @@ fn encode_row(buf: &mut Vec<u8>, row: &Row, width: usize, default_fg: Color) -> 
         } else {
             buf.extend_from_slice(text.as_bytes());
         }
+    }
+    if link.is_some() {
+        buf.extend_from_slice(b"\x1b]8;;\x1b\\");
     }
     if used < width {
         write_attrs(buf, attrs, Attrs::default());
@@ -333,6 +342,23 @@ mod tests {
         encode_row(&mut buf, &r, 5, Color::White).unwrap();
         let text = String::from_utf8(buf).unwrap();
         assert!(text.ends_with("日本 "), "{text:?}");
+    }
+
+    #[test]
+    fn links_are_wrapped_in_osc_8_and_closed_before_padding() {
+        let mut buf = Vec::new();
+        let link = StyledSpan {
+            link: Some("https://x.dev".into()),
+            ..StyledSpan::new("docs")
+        };
+        let r = row(vec![StyledSpan::new("see "), link]);
+        encode_row(&mut buf, &r, 12, Color::White).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let open = out
+            .find("\x1b]8;;https://x.dev\x1b\\docs")
+            .expect("link opened");
+        let close = out.rfind("\x1b]8;;\x1b\\").expect("link closed");
+        assert!(open < close && out.ends_with("  "), "{out:?}");
     }
 
     #[test]

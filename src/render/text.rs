@@ -20,6 +20,8 @@ pub struct StyledSpan {
     pub text_scale: u8,
     /// Whether per-span loop animations (spin) may alter this span.
     pub animatable: bool,
+    /// Hyperlink target, sent to the terminal as OSC 8 so the text is clickable.
+    pub link: Option<std::sync::Arc<str>>,
 }
 
 impl StyledSpan {

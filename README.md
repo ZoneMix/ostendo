@@ -11,29 +11,40 @@ notes without leaving the shell.
 ## Features
 
 - **Plain markdown.** Slides are separated by `---`; directives are HTML
-  comments, so decks still read well on GitHub.
+  comments, and GitHub callouts, task lists, links, and tables all work, so
+  decks read just as well on GitHub.
 - **Live code.** Run Python, Bash, JavaScript, Ruby, Rust, C, C++, or Go
-  blocks with Ctrl+E and watch the output stream in, with colors.
+  blocks with Ctrl+E and watch the output stream in, with colors. Walk
+  through code one highlighted group of lines at a time.
+- **Build slides step by step.** `<!-- pause -->` reveals a slide in parts;
+  hidden parts keep their space, so nothing jumps.
 - **Images everywhere.** Kitty, Ghostty, iTerm2, WezTerm, and Sixel graphics,
   true-color half blocks in every other terminal, and animated GIFs.
-- **Diagrams.** A small arrow syntax renders box, bracket, or vertical flow
-  diagrams; Mermaid renders when `mmdc` is installed.
-- **Layout.** Columns, tables, quotes, FIGlet titles, footers, and per-slide
-  themes, centered and wrapped to any terminal size.
+- **Math, charts, diagrams, and QR codes.** TeX math in Unicode, with stacked
+  fractions, roots, and matrices; bar and column charts; arrow-syntax
+  diagrams; Mermaid (with `mmdc`); and scannable QR codes.
+- **Layout.** Columns, tables, callouts, FIGlet titles, footers, and per-slide
+  themes, centered and wrapped to any terminal; images shrink so a slide fits.
 - **Animations.** Fade, slide, and dissolve transitions; typewriter and fade-in
   entrances; matrix, sparkle, pulse, bounce, and spin loops.
-- **Presenter tools.** Speaker notes, a timer, a slide overview, sections,
-  hot reload on save, and a phone remote over WebSocket.
+- **Presenter tools.** Speaker notes, search, a blank screen, an overview, a
+  timer that tracks your pace against the planned length, a phone remote
+  that shows what comes next, and live audience polls voted from phones.
+- **Authoring.** Hot reload jumps to the slide you just edited, and
+  `--validate --size 100x30` names slides that would not fit.
 - **Themes.** Every built-in theme passes WCAG contrast checks, with
   dark/light pairs you can switch on stage.
 - **Fast.** Only the rows that change are redrawn, inside synchronized
   updates: no flicker, even over SSH and tmux.
-- **Export.** Self-contained HTML, or PDF through headless Chrome.
+- **Export and record.** Self-contained HTML, PDF through headless Chrome,
+  editable PowerPoint with speaker notes, and asciinema recordings.
 
 | | |
 |:-:|:-:|
-| ![Two code blocks side by side in columns, one with its output](docs/screenshots/columns.png) | ![The slide overview grid](docs/screenshots/overview.png) |
-| Columns with live code | Overview (`o`) |
+| ![A code block with a group of lines highlighted](docs/screenshots/walkthrough.png) | ![Note, tip, and warning callouts](docs/screenshots/callouts.png) |
+| Code walkthroughs | Callouts |
+| ![A bar chart drawn with block characters](docs/screenshots/charts.png) | ![The slide overview grid](docs/screenshots/overview.png) |
+| Charts | Overview (`o`) |
 
 ## Install
 
@@ -88,16 +99,21 @@ demonstrated in `presentations/examples/test_presentation.md`.
 
 | Key | Action |
 |---|---|
-| `→` `l` `Space` `Enter` `PgDn` | Next slide |
-| `←` `h` `Backspace` `PgUp` | Previous slide |
+| `→` `l` `Space` `Enter` `PgDn` | Next build step or slide |
+| `←` `h` `Backspace` `PgUp` | Previous build step or slide |
 | `Home` / `End` | First / last slide |
 | `↓` `j` / `↑` `k` | Scroll the slide |
 | `Ctrl+D` / `Ctrl+U` | Scroll half a page |
 | `J` / `K` | Next / previous section |
 | `g` then a number, `Enter` | Go to slide |
-| `o` | Overview of all slides |
+| `o` | Overview of all slides; `J` / `K` there move the selected slide (the file is rewritten) |
 | `n` | Speaker notes (`N` / `P` scroll them) |
+| `m` / `{` / `}` | Notes beside or below the slide; make them smaller or larger (remembered) |
+| `/` | Search slide text and notes (`/` then Enter: next match) |
+| `b` | Blank the screen (any key brings it back) |
+| `e` | Edit this slide in `$VISUAL` / `$EDITOR`, then come back to it |
 | `Ctrl+E` | Run the code block (again: next block) |
+| `1`–`9` | Add a vote to that option of the poll on screen (a show of hands) |
 | `f` | Hide the status bar |
 | `t` | Start / reset the timer (it starts at the first slide change) |
 | `T` | Show the theme name |
@@ -111,7 +127,16 @@ demonstrated in `presentations/examples/test_presentation.md`.
 | `q` / `Ctrl+C` | Quit |
 
 Ostendo remembers the slide, theme, and font adjustments for each
-presentation.
+presentation. Every run of a minute or more with the timer going is kept, and
+`ostendo talk.md --report` shows where the time went:
+
+```text
+3 run(s); latest 2026-09-27, 21:40 of 20:00 planned
+
+    #  Slide                  Latest  Average     Plan
+    1  Why terminals             1:05     0:50     2:00
+    2  The render loop           6:20     4:10     2:00  +4:20
+```
 
 ## Command line
 
@@ -128,9 +153,14 @@ presentation.
 | `--remote-port <port>` | Remote port (default 8765) |
 | `--remote-token <token>` | Require a token for the remote |
 | `--remote-exec` | Let the remote run code blocks |
+| `--audience` | Serve a voting page for poll slides to your network |
+| `--audience-port <port>` | Voting page port (default 8766) |
 | `--validate` | Check the deck and exit |
-| `--export html\|pdf` | Export and exit (`-o` sets the path) |
+| `--size <cols>x<rows>` | With `--validate`: also report slides that would scroll at that size |
+| `--record <file>` | Record the talk as an asciicast ([asciinema](https://asciinema.org)) |
+| `--export html\|pdf\|pptx` | Export and exit (`-o` sets the path) |
 | `--list-themes` | List themes with swatches |
+| `--report` | Time per slide in past runs against the average and the plan |
 | `--count`, `--export-titles` | Print the slide count or titles |
 | `--detect-protocol` | Print the image protocol for this terminal |
 
@@ -161,21 +191,38 @@ the front matter, or `:theme <slug>` while presenting. To make your own, see
 ostendo talk.md --remote --remote-token "$(openssl rand -hex 16)"
 ```
 
-Open the printed URL to get a page with navigation buttons and the current
-slide's notes. It listens on `127.0.0.1` only; forward the port (for example
+Open the printed URL for a presenter view: the current slide, its notes,
+what comes next, the timer and pace, and buttons to navigate or blank the
+screen. It listens on `127.0.0.1` only; forward the port (for example
 with `ssh -L`) to use it from a phone. See [SECURITY.md](SECURITY.md) before
 presenting decks you did not write.
 
-## Export
+## Audience polls
+
+```bash
+ostendo talk.md --audience
+```
+
+A ```` ```poll ```` slide shows its options as live bars and, with
+`--audience`, a QR code for a voting page that everyone on the same network
+can open. Votes arrive as they are cast; `1`–`9` add votes by hand. The page
+shows only the poll on screen: it cannot move slides or see your notes.
+
+## Export and record
 
 ```bash
 ostendo talk.md --export html            # talk.html, images embedded
 ostendo talk.md --export pdf -o talk.pdf # needs Chrome/Chromium or wkhtmltopdf
+ostendo talk.md --export pptx            # PowerPoint, Keynote, Google Slides
+ostendo talk.md --record talk.cast       # then: asciinema play talk.cast
 ```
+
+Recordings draw images as half blocks unless `--image-mode` says otherwise,
+so they replay anywhere.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [WISHLIST.md](WISHLIST.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

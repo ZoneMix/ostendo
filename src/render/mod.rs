@@ -5,5 +5,4 @@ mod engine;
 pub mod layout;
 pub mod text;
 
-pub use engine::Presenter;
-pub use engine::PresenterConfig;
+pub use engine::{overflowing_slides, Presenter, PresenterConfig};

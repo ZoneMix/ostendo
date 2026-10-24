@@ -34,14 +34,14 @@ const MAX_CONNECTIONS: usize = 8;
 /// Every connection holds a slot from the moment it is accepted, so an idle
 /// socket that never finishes its request must be dropped or a handful of
 /// them would lock the remote out for good.
-const PRE_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const PRE_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 
 const MAX_COMMAND_BYTES: usize = 4096;
 
-/// Bind `127.0.0.1:port` and serve remote control on a background thread.
+/// Bind `127.0.0.1:port` and serve remote control on a background thread,
+/// sending what clients ask for to `commands`.
 ///
-/// Returns the command receiver for the presenter and the sender it uses to
-/// broadcast state JSON to all clients.
+/// Returns the sender the presenter broadcasts state JSON to all clients with.
 ///
 /// # Errors
 ///
@@ -52,7 +52,8 @@ const MAX_COMMAND_BYTES: usize = 4096;
 pub fn start(
     port: u16,
     token: Option<String>,
-) -> Result<(mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>)> {
+    commands: mpsc::Sender<RemoteCommand>,
+) -> Result<broadcast::Sender<String>> {
     if let Some(token) = &token {
         ensure!(
             !token.is_empty()
@@ -64,24 +65,39 @@ pub fn start(
     }
     let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
         .with_context(|| format!("cannot start remote control on 127.0.0.1:{port}"))?;
-    spawn(listener, token)
+    spawn(listener, token, commands)
 }
 
 fn spawn(
     listener: std::net::TcpListener,
     token: Option<String>,
-) -> Result<(mpsc::Receiver<RemoteCommand>, broadcast::Sender<String>)> {
+    commands: mpsc::Sender<RemoteCommand>,
+) -> Result<broadcast::Sender<String>> {
+    let (state_tx, _) = broadcast::channel(64);
+    let states = state_tx.clone();
+    run_in_background(listener, move |listener| {
+        accept_loop(listener, commands, states, token)
+    })?;
+    Ok(state_tx)
+}
+
+/// Serves `listener` with `serve` on a Tokio runtime of its own, on a thread
+/// of its own, so the render loop never waits on the network.
+pub(super) fn run_in_background<F>(
+    listener: std::net::TcpListener,
+    serve: impl FnOnce(TcpListener) -> F + Send + 'static,
+) -> Result<()>
+where
+    F: std::future::Future<Output = ()>,
+{
     listener.set_nonblocking(true)?;
     let runtime = tokio::runtime::Runtime::new()?;
     let listener = {
         let _guard = runtime.enter();
         TcpListener::from_std(listener)?
     };
-    let (cmd_tx, cmd_rx) = mpsc::channel();
-    let (state_tx, _) = broadcast::channel(64);
-    let states = state_tx.clone();
-    thread::spawn(move || runtime.block_on(accept_loop(listener, cmd_tx, states, token)));
-    Ok((cmd_rx, state_tx))
+    thread::spawn(move || runtime.block_on(serve(listener)));
+    Ok(())
 }
 
 async fn accept_loop(
@@ -114,8 +130,13 @@ async fn accept_loop(
 
 /// Serve the control page, or complete an authorized WebSocket handshake.
 async fn accept(stream: TcpStream, token: Option<String>) -> Option<WebSocketStream<TcpStream>> {
-    if !requests_websocket(&stream).await {
-        serve_control_page(stream).await;
+    let head = peek_head(&stream).await;
+    if !header(&head, "upgrade").is_some_and(|v| v.to_ascii_lowercase().contains("websocket")) {
+        let csp = "default-src 'none'; script-src 'unsafe-inline'; \
+                   connect-src ws://127.0.0.1:* ws://localhost:*; \
+                   style-src 'unsafe-inline' https://fonts.googleapis.com; \
+                   font-src https://fonts.gstatic.com; img-src data:";
+        serve_page(stream, REMOTE_HTML, csp).await;
         return None;
     }
     tokio_tungstenite::accept_hdr_async(stream, Authorize { token })
@@ -123,22 +144,22 @@ async fn accept(stream: TcpStream, token: Option<String>) -> Option<WebSocketStr
         .ok()
 }
 
-/// Routing only: the peeked bytes stay in the socket for tungstenite, which
-/// parses the full request and enforces auth in [`Authorize`].
-async fn requests_websocket(stream: &TcpStream) -> bool {
+/// The start of the request, for routing only: the peeked bytes stay in the
+/// socket for tungstenite, which parses the full request and enforces auth.
+pub(super) async fn peek_head(stream: &TcpStream) -> String {
     let mut buf = [0u8; 4096];
-    let Ok(n) = stream.peek(&mut buf).await else {
-        return false;
-    };
-    String::from_utf8_lossy(&buf[..n]).lines().any(|line| {
-        line.split_once(':').is_some_and(|(name, value)| {
-            name.trim().eq_ignore_ascii_case("upgrade")
-                && value.to_ascii_lowercase().contains("websocket")
-        })
+    let n = stream.peek(&mut buf).await.unwrap_or(0);
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+pub(super) fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
     })
 }
 
-async fn serve_control_page(mut stream: TcpStream) {
+pub(super) async fn serve_page(mut stream: TcpStream, html: &str, csp: &str) {
     // Drain the request first: closing a socket with unread input sends a
     // reset, which can discard the response before the browser reads it.
     let mut request = [0u8; 4096];
@@ -150,10 +171,9 @@ async fn serve_control_page(mut stream: TcpStream) {
          Connection: close\r\n\
          X-Content-Type-Options: nosniff\r\n\
          X-Frame-Options: DENY\r\n\
-         Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; connect-src ws://127.0.0.1:* ws://localhost:*; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:\r\n\
-         \r\n{}",
-        REMOTE_HTML.len(),
-        REMOTE_HTML
+         Content-Security-Policy: {csp}\r\n\
+         \r\n{html}",
+        html.len(),
     );
     let _ = stream.write_all(response.as_bytes()).await;
 }
@@ -195,7 +215,7 @@ impl Callback for Authorize {
     }
 }
 
-fn reject(status: StatusCode) -> ErrorResponse {
+pub(super) fn reject(status: StatusCode) -> ErrorResponse {
     let mut response = ErrorResponse::new(None);
     *response.status_mut() = status;
     response
@@ -285,7 +305,8 @@ mod tests {
     fn serve(token: Option<&str>) -> (u16, mpsc::Receiver<RemoteCommand>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let (commands, _states) = spawn(listener, token.map(String::from)).unwrap();
+        let (tx, commands) = mpsc::channel();
+        spawn(listener, token.map(String::from), tx).unwrap();
         (port, commands)
     }
 
@@ -313,7 +334,7 @@ mod tests {
     fn start_rejects_tokens_the_browser_page_cannot_send() {
         for token in ["", "a+b", "a/b=", "a b"] {
             assert!(
-                start(0, Some(token.to_string())).is_err(),
+                start(0, Some(token.to_string()), mpsc::channel().0).is_err(),
                 "{token:?} accepted"
             );
         }
@@ -323,7 +344,7 @@ mod tests {
     fn start_reports_a_port_that_is_in_use() {
         let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = taken.local_addr().unwrap().port();
-        assert!(start(port, None).is_err());
+        assert!(start(port, None, mpsc::channel().0).is_err());
     }
 
     #[tokio::test]

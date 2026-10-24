@@ -1,7 +1,8 @@
 //! Themes, view toggles, and persisted state.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use crate::presentation::rehearsal::{self, clock};
 use crate::theme::Theme;
 
 use super::palette::Palette;
@@ -31,7 +32,6 @@ impl Presenter {
         }
         self.palette = self.palette_for(&wanted);
         self.theme = wanted;
-        super::terminal::set_background(self.palette.bg);
         self.images.clear();
         self.display.invalidate();
         self.invalidate();
@@ -65,6 +65,19 @@ impl Presenter {
         self.notes_scroll = 0;
     }
 
+    /// Puts the notes beside the slide, or back below it, showing them.
+    pub(crate) fn move_notes(&mut self) {
+        self.show_notes = true;
+        self.notes_side = !self.notes_side;
+        self.save_state();
+    }
+
+    pub(crate) fn resize_notes(&mut self, delta: i16) {
+        self.show_notes = true;
+        self.notes_share = (i16::from(self.notes_share) + delta).clamp(15, 60) as u8;
+        self.save_state();
+    }
+
     pub(crate) fn toggle_fullscreen(&mut self) {
         self.fullscreen = !self.fullscreen;
     }
@@ -83,21 +96,70 @@ impl Presenter {
 
     /// Starts the timer, or resets it when already running.
     pub(crate) fn toggle_timer(&mut self) {
-        self.timer_start = match self.timer_start {
-            Some(_) => None,
-            None => Some(Instant::now()),
-        };
+        match self.timer_start {
+            Some(_) => self.reset_timer(),
+            None => self.start_timer(),
+        }
+    }
+
+    pub(crate) fn start_timer(&mut self) {
+        if self.timer_start.is_none() {
+            self.timer_start = Some(Instant::now());
+            self.entered = Instant::now();
+        }
+    }
+
+    /// Stops the timer; a reset starts the rehearsal over, so the time per
+    /// slide goes too.
+    pub(crate) fn reset_timer(&mut self) {
+        self.timer_start = None;
+        self.slide_time.fill(Duration::ZERO);
+    }
+
+    /// Credits the time since the last call to the current slide while the
+    /// timer runs; called before the current slide changes.
+    pub(crate) fn clock_slide(&mut self) {
+        let now = Instant::now();
+        if self.timer_start.is_some() {
+            if let Some(time) = self.slide_time.get_mut(self.current) {
+                *time += now - self.entered;
+            }
+        }
+        self.entered = now;
+    }
+
+    /// Saves this run's time per slide for `--report`; runs under a minute
+    /// are a quick look, not a rehearsal.
+    pub(crate) fn record_rehearsal(&mut self) {
+        self.clock_slide();
+        if self.slide_time.iter().sum::<Duration>() < Duration::from_secs(60) {
+            return;
+        }
+        let slides = self
+            .slides
+            .iter()
+            .zip(&self.slide_time)
+            .map(|(s, t)| (s.title.clone(), t.as_secs_f64()))
+            .collect();
+        let _ = rehearsal::record(&self.presentation_path, rehearsal::Run::new(slides));
     }
 
     /// Elapsed time as `m:ss` or `h:mm:ss`, when the timer is running.
     pub(crate) fn timer_text(&self) -> Option<String> {
-        let secs = self.timer_start?.elapsed().as_secs();
-        let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-        Some(if h > 0 {
-            format!("{h}:{m:02}:{s:02}")
-        } else {
-            format!("{m}:{s:02}")
-        })
+        Some(clock(self.timer_start?.elapsed()))
+    }
+
+    /// With a front-matter `duration`: how far the talk is behind the pace
+    /// that ends on time (`None` when on pace), and whether it ran over.
+    pub(crate) fn pace(&self) -> Option<(Option<Duration>, bool)> {
+        let (total, start) = (self.meta.duration?, self.timer_start?);
+        let elapsed = start.elapsed();
+        // The share of the talk the slides so far should have taken.
+        let planned = total.mul_f64((self.current + 1) as f64 / self.slides.len() as f64);
+        let behind = elapsed
+            .checked_sub(planned)
+            .filter(|late| *late > Duration::from_secs(30));
+        Some((behind, elapsed > total))
     }
 
     pub(crate) fn save_state(&mut self) {
@@ -105,6 +167,8 @@ impl Presenter {
         self.state.set_font_offsets(self.font.user_offsets());
         self.state.set_theme_slug(&self.base_theme.slug);
         self.state.set_image_scale_offset(self.image_scale_offset);
+        self.state
+            .set_notes_layout(self.notes_side, self.notes_share);
         let _ = self.state.save();
     }
 }

@@ -2,12 +2,14 @@
 //! directives, and the markdown subset the renderer draws.
 
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::presentation::{
-    Block, BlockQuote, Bullet, CodeBlock, ColumnContent, ColumnImage, ColumnItem, ColumnLayout,
-    DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition, ImageRenderMode,
-    MermaidBlock, PresentationMeta, Slide, SlideAlignment, SlideImage, Table,
+    Block, BlockQuote, Bullet, Callout, Chart, CodeBlock, ColumnContent, ColumnImage, ColumnItem,
+    ColumnLayout, DiagramBlock, DiagramStyle, ExecMode, FooterAlign, ImagePosition,
+    ImageRenderMode, MermaidBlock, Poll, PresentationMeta, Slide, SlideAlignment, SlideImage, Step,
+    Table,
 };
 use crate::render::animation::{
     parse_entrance, parse_loop_animation, parse_transition, LoopAnimation,
@@ -34,14 +36,18 @@ pub fn parse_presentation(
 
     let mut slides: Vec<Slide> = Vec::new();
     let mut section = String::new();
-    for block in split_slides(body) {
+    let body_start = lines.len() - body.len();
+    for range in split_slides(body) {
+        let block = &body[range.clone()];
         if block.iter().all(|l| l.trim().is_empty()) {
             continue;
         }
         if slides.len() == MAX_SLIDES {
             anyhow::bail!("Presentation exceeds maximum of {} slides", MAX_SLIDES);
         }
-        let slide = parse_slide(block, slides.len() + 1, &section, base_dir);
+        let builder = SlideBuilder::new(slides.len() + 1, base_dir, &meta.templates);
+        let mut slide = parse_slide(builder, block, &section);
+        slide.line = body_start + range.start + 1;
         section.clone_from(&slide.section);
         slides.push(slide);
     }
@@ -50,11 +56,28 @@ pub fn parse_presentation(
 
 fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
     let mut meta = PresentationMeta::default();
-    for caps in lines
-        .iter()
-        .filter_map(|l| FRONT_MATTER_KV_RE.captures(l.trim()))
-    {
+    // Inside `templates:`, an indented `name:` starts a template and deeper
+    // `directive: value` lines fill it.
+    let mut in_templates = false;
+    let mut template: Option<String> = None;
+    for line in lines {
+        let Some(caps) = FRONT_MATTER_KV_RE.captures(line.trim()) else {
+            continue;
+        };
         let val = caps[2].trim().trim_matches('"').to_string();
+        let indented = line.starts_with([' ', '\t']);
+        if indented && in_templates {
+            if val.is_empty() {
+                template = Some(caps[1].to_string());
+                meta.templates.entry(caps[1].to_string()).or_default();
+            } else if let Some(name) = &template {
+                let entry = meta.templates.entry(name.clone()).or_default();
+                entry.push((caps[1].to_string(), Some(val)));
+            }
+            continue;
+        }
+        in_templates = !indented && &caps[1] == "templates";
+        template = None;
         match &caps[1] {
             "title" => meta.title = val,
             "author" => meta.author = val,
@@ -63,10 +86,30 @@ fn parse_front_matter(lines: &[&str]) -> PresentationMeta {
             "transition" => meta.transition = val,
             "theme" if !val.is_empty() => meta.theme = Some(val),
             "align" | "alignment" => meta.default_alignment = parse_alignment(&val),
+            "duration" => meta.duration = parse_duration(&val),
             _ => {}
         }
     }
     meta
+}
+
+/// `20` (minutes), `45m`, `45min`, `1h`, `1h30m`.
+fn parse_duration(value: &str) -> Option<std::time::Duration> {
+    let v = value.to_lowercase().replace(' ', "");
+    let (hours, rest) = match v.split_once('h') {
+        Some((h, rest)) => (h.parse::<f64>().ok()?, rest),
+        None => (0.0, v.as_str()),
+    };
+    let rest = rest.trim_end_matches("min").trim_end_matches('m');
+    let minutes = if rest.is_empty() {
+        0.0
+    } else {
+        rest.parse::<f64>().ok()?
+    };
+    let secs = (hours * 60.0 + minutes) * 60.0;
+    std::time::Duration::try_from_secs_f64(secs)
+        .ok()
+        .filter(|d| !d.is_zero())
 }
 
 fn parse_alignment(value: &str) -> Option<SlideAlignment> {
@@ -137,13 +180,109 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
+/// `# Title` plus `label: value` lines; the value is the leading number of
+/// what follows the colon, so units and notes may follow it.
+fn parse_chart(source: &str, columns: bool) -> Chart {
+    let mut chart = Chart {
+        title: None,
+        bars: Vec::new(),
+        columns,
+    };
+    for line in source.lines().map(str::trim) {
+        if let Some(title) = line.strip_prefix("# ") {
+            chart.title = Some(title.trim().to_string());
+        } else if let Some((label, rest)) = line.rsplit_once(':') {
+            let shown = rest.trim();
+            let number: String = shown
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+                .filter(|&c| c != ',')
+                .collect();
+            if let Ok(value) = number.parse::<f64>() {
+                chart
+                    .bars
+                    .push((label.trim().to_string(), value, shown.to_string()));
+            }
+        }
+    }
+    chart
+}
+
+/// `# question`, then an option per line; list markers are optional.
+fn parse_poll(source: &str) -> Poll {
+    let mut poll = Poll {
+        question: String::new(),
+        options: Vec::new(),
+    };
+    for line in source.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        match line.strip_prefix("# ") {
+            Some(question) => poll.question = question.trim().to_string(),
+            None => {
+                let option = LIST_ITEM_RE
+                    .captures(line)
+                    .and_then(|c| c.get(3))
+                    .map_or(line, |m| m.as_str().trim());
+                poll.options.push(option.to_string());
+            }
+        }
+    }
+    poll
+}
+
+/// Directive sets available to every deck; a deck's own template of the same
+/// name wins.
+fn builtin_template(name: &str) -> Option<&'static [(&'static str, Option<&'static str>)]> {
+    Some(match name {
+        "title" => &[("align", Some("center")), ("ascii_title", None)],
+        "section" => &[
+            ("align", Some("center")),
+            ("title_decoration", Some("banner")),
+        ],
+        "closing" => &[
+            ("align", Some("center")),
+            ("ascii_title", None),
+            ("loop_animation", Some("sparkle(figlet)")),
+        ],
+        _ => return None,
+    })
+}
+
+/// `[!TIP]` or `[!tip] Custom heading` opening a quote.
+fn callout_marker(line: &str) -> Option<(Callout, String)> {
+    let rest = line.trim().strip_prefix("[!")?;
+    let (kind, heading) = rest.split_once(']')?;
+    let kind = match kind.to_ascii_lowercase().as_str() {
+        "note" => Callout::Note,
+        "tip" => Callout::Tip,
+        "important" => Callout::Important,
+        "warning" => Callout::Warning,
+        "caution" => Callout::Caution,
+        _ => return None,
+    };
+    let heading = heading.trim();
+    let heading = if heading.is_empty() {
+        kind.name()
+    } else {
+        heading
+    };
+    Some((kind, heading.to_string()))
+}
+
 /// `Path::join` keeps absolute paths as they are.
+/// The text after `$$` when `line` starts display math: `$$` alone, `$$ tex`,
+/// or `$$ tex $$`. A `$$` further in leaves the line to inline math.
+fn opens_math(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix("$$")?;
+    let inner = rest.strip_suffix("$$").unwrap_or(rest);
+    (!inner.contains("$$")).then_some(rest)
+}
+
 fn resolve_path(base_dir: Option<&Path>, path: &str) -> PathBuf {
     base_dir.map_or_else(|| PathBuf::from(path), |base| base.join(path))
 }
 
 /// Info string: first word is the language (`diagram` selects the diagram engine), plus
-/// optional `+exec`/`+pty`, `style=<name>` and `{label: "..."}`.
+/// optional `+exec`/`+pty`, `style=<name>`, `{label: "..."}` and `{1,3-5|all}` highlights.
 fn fence_kind(info: &str) -> FenceKind {
     let mut language = "";
     let mut exec_mode = None;
@@ -158,8 +297,16 @@ fn fence_kind(info: &str) -> FenceKind {
             _ => {}
         }
     }
-    if language == "diagram" {
-        return FenceKind::Diagram(style);
+    match language {
+        "diagram" => return FenceKind::Diagram(style),
+        "chart" => {
+            return FenceKind::Chart {
+                columns: info.contains("style=columns"),
+            }
+        }
+        "qr" => return FenceKind::Qr,
+        "poll" => return FenceKind::Poll,
+        _ => {}
     }
     FenceKind::Code {
         language: language.to_string(),
@@ -167,16 +314,37 @@ fn fence_kind(info: &str) -> FenceKind {
             .captures(info)
             .map_or(String::new(), |c| c[1].to_string()),
         exec_mode,
+        highlights: info
+            .split('{')
+            .skip(1)
+            .filter_map(|group| parse_highlights(group.split('}').next()?))
+            .next()
+            .unwrap_or_default(),
     }
 }
 
-fn parse_slide(
-    lines: &[&str],
-    number: usize,
-    inherited_section: &str,
-    base_dir: Option<&Path>,
-) -> Slide {
-    let mut builder = SlideBuilder::new(number, base_dir);
+/// `1,3-5|7|all`: groups separated by `|`, each `all` or comma-separated lines
+/// and ranges. Anything else (such as `label: ...`) is not a highlight spec.
+fn parse_highlights(spec: &str) -> Option<Vec<Vec<(usize, usize)>>> {
+    spec.split('|')
+        .map(|group| {
+            let group = group.trim();
+            if group == "all" {
+                return Some(Vec::new());
+            }
+            group
+                .split(',')
+                .map(|item| {
+                    let (a, b) = item.split_once('-').unwrap_or((item, item));
+                    let (a, b) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+                    (1 <= a && a <= b).then_some((a, b))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn parse_slide(mut builder: SlideBuilder, lines: &[&str], inherited_section: &str) -> Slide {
     for line in lines {
         builder.line(line);
     }
@@ -184,6 +352,9 @@ fn parse_slide(
     if slide.section.is_empty() {
         slide.section = inherited_section.to_string();
     }
+    let mut hasher = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(lines, &mut hasher);
+    slide.fingerprint = std::hash::Hasher::finish(&hasher);
     slide
 }
 
@@ -201,6 +372,8 @@ enum OpenBlock {
         lang: String,
         lines: Vec<String>,
     },
+    /// Display math from a line starting `$$` to one ending `$$`.
+    Math(Vec<String>),
 }
 
 enum FenceKind {
@@ -208,13 +381,20 @@ enum FenceKind {
         language: String,
         label: String,
         exec_mode: Option<ExecMode>,
+        highlights: Vec<Vec<(usize, usize)>>,
     },
     Diagram(DiagramStyle),
+    Chart {
+        columns: bool,
+    },
+    Qr,
+    Poll,
 }
 
 struct SlideBuilder<'a> {
     slide: Slide,
     base_dir: Option<&'a Path>,
+    templates: &'a HashMap<String, Vec<(String, Option<String>)>>,
     open: Option<OpenBlock>,
     title_found: bool,
     /// The previous line was paragraph text, so the next text line continues it.
@@ -230,13 +410,18 @@ struct SlideBuilder<'a> {
 }
 
 impl<'a> SlideBuilder<'a> {
-    fn new(number: usize, base_dir: Option<&'a Path>) -> Self {
+    fn new(
+        number: usize,
+        base_dir: Option<&'a Path>,
+        templates: &'a HashMap<String, Vec<(String, Option<String>)>>,
+    ) -> Self {
         Self {
             slide: Slide {
                 number,
                 ..Slide::default()
             },
             base_dir,
+            templates,
             open: None,
             title_found: false,
             paragraph_open: false,
@@ -271,6 +456,9 @@ impl<'a> SlideBuilder<'a> {
             let kind = fence_kind(info);
             let lines = Vec::new();
             self.open = Some(OpenBlock::Fence { fence, kind, lines });
+        } else if let Some(first) = opens_math(line) {
+            self.open = Some(OpenBlock::Math(Vec::new()));
+            self.continue_open_block(first);
         } else if opens_comment(line) {
             self.open_comment(line);
         } else if line.trim_start().starts_with("<!--") {
@@ -316,6 +504,11 @@ impl<'a> SlideBuilder<'a> {
                 }
                 closed
             }
+            Some(OpenBlock::Math(lines)) => {
+                let body = line.trim_end().strip_suffix("$$");
+                lines.push(body.unwrap_or(line).to_string());
+                body.is_some()
+            }
             Some(OpenBlock::Preamble { lines, .. }) => {
                 let closed = DIRECTIVE_RE
                     .captures(line)
@@ -343,6 +536,18 @@ impl<'a> SlideBuilder<'a> {
                             .diagram_blocks
                             .push(DiagramBlock { source, style });
                     }
+                    FenceKind::Chart { columns } => {
+                        self.push_block(Block::Chart(self.slide.charts.len()));
+                        self.slide.charts.push(parse_chart(&source, columns));
+                    }
+                    FenceKind::Poll => {
+                        self.push_block(Block::Poll(self.slide.polls.len()));
+                        self.slide.polls.push(parse_poll(&source));
+                    }
+                    FenceKind::Qr => {
+                        self.push_block(Block::Qr(self.slide.qr_codes.len()));
+                        self.slide.qr_codes.push(source.trim().to_string());
+                    }
                     FenceKind::Code { language, .. } if language == "mermaid" => {
                         self.push_block(Block::Mermaid(self.slide.mermaid_blocks.len()));
                         self.slide.mermaid_blocks.push(MermaidBlock { source });
@@ -351,12 +556,14 @@ impl<'a> SlideBuilder<'a> {
                         language,
                         label,
                         exec_mode,
+                        highlights,
                     } => {
                         let block = CodeBlock {
                             language,
                             code: source,
                             label,
                             exec_mode,
+                            highlights,
                         };
                         match self.column_mut() {
                             Some(col) => {
@@ -364,8 +571,13 @@ impl<'a> SlideBuilder<'a> {
                                 col.code_blocks.push(block);
                             }
                             None => {
-                                self.push_block(Block::Code(self.slide.code_blocks.len()));
+                                let code = self.slide.code_blocks.len();
+                                self.push_block(Block::Code(code));
+                                let groups = 1..block.highlights.len();
                                 self.slide.code_blocks.push(block);
+                                self.slide
+                                    .steps
+                                    .extend(groups.map(|group| Step::Highlight { code, group }));
                             }
                         }
                     }
@@ -373,6 +585,19 @@ impl<'a> SlideBuilder<'a> {
             }
             Some(OpenBlock::Preamble { lang, lines }) => {
                 self.slide.code_preambles.insert(lang, lines.join("\n"));
+            }
+            Some(OpenBlock::Math(lines)) => {
+                let tex = lines.join("\n").trim().to_string();
+                match self.column_mut() {
+                    Some(col) => {
+                        col.items.push(ColumnItem::Math(col.math.len()));
+                        col.math.push(tex);
+                    }
+                    None => {
+                        self.push_block(Block::Math(self.slide.math.len()));
+                        self.slide.math.push(tex);
+                    }
+                }
             }
             Some(OpenBlock::Notes | OpenBlock::Comment) | None => {}
         }
@@ -397,14 +622,25 @@ impl<'a> SlideBuilder<'a> {
             "image_render" | "image_scale" | "image_color" if !v.is_empty() => {
                 self.image_directive(name, v);
             }
-            "column_layout" => self.column_layout(v),
+            // A quote or table ends where the column it is in does.
+            "column_layout" | "column" | "reset_layout" => {
+                self.flush_quote();
+                self.flush_table();
+                self.column_directive(name, v);
+            }
             "column_separator" if v.eq_ignore_ascii_case("none") => self.columns.separator = false,
             "column_text_scale" => {
                 let scale = v.parse().ok().filter(|n| (2..=7).contains(n));
                 set(&mut self.columns.text_scale, scale);
             }
-            "column" => set(&mut self.column, v.parse().ok()),
-            "reset_layout" => self.column = None,
+            "template" => self.template(v),
+            "pause" => {
+                // A quote or table continues after the pause as a separate one.
+                self.flush_quote();
+                self.flush_table();
+                self.sync_column_pauses();
+                self.slide.steps.push(Step::Pause(self.slide.blocks.len()));
+            }
             _ => slide_directive(&mut self.slide, name, value),
         }
     }
@@ -433,6 +669,14 @@ impl<'a> SlideBuilder<'a> {
             }
             "image_scale" => self.image.scale = scale.unwrap_or(self.image.scale),
             _ => self.image.color_override = v.to_string(),
+        }
+    }
+
+    fn column_directive(&mut self, name: &str, v: &str) {
+        match name {
+            "column_layout" => self.column_layout(v),
+            "column" => set(&mut self.column, v.parse().ok()),
+            _ => self.column = None,
         }
     }
 
@@ -474,7 +718,7 @@ impl<'a> SlideBuilder<'a> {
 
         if let Some(caps) = HEADING_RE.captures(line) {
             if &caps[1] == "#" && !self.title_found {
-                self.slide.title = caps[2].to_string();
+                self.slide.title = super::inline::with_math(&caps[2]);
                 self.title_found = true;
             } else {
                 // Other headings stand alone: shown without markers, never merged with text.
@@ -536,8 +780,9 @@ impl<'a> SlideBuilder<'a> {
             return;
         }
         let s = &mut self.slide;
+        let paused_here = s.steps.contains(&Step::Pause(s.blocks.len()));
         match (s.blocks.last(), s.bullet_groups.last_mut()) {
-            (Some(Block::Bullets(_)), Some(group)) => group.end += 1,
+            (Some(Block::Bullets(_)), Some(group)) if !paused_here => group.end += 1,
             _ => {
                 let start = s.bullets.len();
                 s.blocks.push(Block::Bullets(s.bullet_groups.len()));
@@ -562,7 +807,11 @@ impl<'a> SlideBuilder<'a> {
                 paragraph.push(' ');
                 paragraph.push_str(text);
             }
-        } else if self.title_found && s.subtitle.is_empty() && s.blocks.is_empty() {
+        } else if self.title_found
+            && s.subtitle.is_empty()
+            && s.blocks.is_empty()
+            && s.steps.is_empty()
+        {
             s.subtitle = text.to_string();
             return;
         } else {
@@ -594,22 +843,38 @@ impl<'a> SlideBuilder<'a> {
 
     fn flush_quote(&mut self) {
         if !self.quote.is_empty() {
-            let lines = std::mem::take(&mut self.quote);
+            let mut lines = std::mem::take(&mut self.quote);
+            let callout = callout_marker(&lines[0]);
+            if callout.is_some() {
+                lines.remove(0);
+            }
+            let quote = BlockQuote { lines, callout };
+            if let Some(col) = self.column_mut() {
+                col.items.push(ColumnItem::Quote(col.quotes.len()));
+                col.quotes.push(quote);
+                return;
+            }
             let s = &mut self.slide;
             s.blocks.push(Block::Quote(s.block_quotes.len()));
-            s.block_quotes.push(BlockQuote { lines });
+            s.block_quotes.push(quote);
         }
     }
 
     fn flush_table(&mut self) {
         if let Some(t) = self.table.take().filter(|t| t.has_separator) {
-            let s = &mut self.slide;
-            s.blocks.push(Block::Table(s.tables.len()));
-            s.tables.push(Table {
+            let table = Table {
                 headers: t.headers,
                 alignments: t.alignments,
                 rows: t.rows,
-            });
+            };
+            if let Some(col) = self.column_mut() {
+                col.items.push(ColumnItem::Table(col.tables.len()));
+                col.tables.push(table);
+                return;
+            }
+            let s = &mut self.slide;
+            s.blocks.push(Block::Table(s.tables.len()));
+            s.tables.push(table);
         }
     }
 
@@ -620,10 +885,45 @@ impl<'a> SlideBuilder<'a> {
         self.slide.blocks.push(block);
     }
 
+    /// Applies a deck template, or else a built-in one, as if its directives
+    /// were written here.
+    fn template(&mut self, name: &str) {
+        let directives: Vec<(String, Option<String>)> = match self.templates.get(name) {
+            Some(own) => own.clone(),
+            None => match builtin_template(name) {
+                Some(builtin) => builtin
+                    .iter()
+                    .map(|&(k, v)| (k.to_string(), v.map(str::to_string)))
+                    .collect(),
+                None => {
+                    self.slide.missing_template = Some(name.to_string());
+                    return;
+                }
+            },
+        };
+        for (directive, value) in directives.iter().filter(|(d, _)| d != "template") {
+            self.directive(directive, value.as_deref());
+        }
+    }
+
+    /// Tags column items added since the last pause with the pause count.
+    fn sync_column_pauses(&mut self) {
+        let pauses = self
+            .slide
+            .steps
+            .iter()
+            .filter(|s| matches!(s, Step::Pause(_)))
+            .count();
+        for col in &mut self.columns.contents {
+            col.pauses_before.resize(col.items.len(), pauses);
+        }
+    }
+
     fn finish(mut self) -> Slide {
         self.close_open_block();
         self.flush_quote();
         self.flush_table();
+        self.sync_column_pauses();
         self.slide.notes = self.notes.join("\n").trim().to_string();
         if !self.image.path.as_os_str().is_empty() {
             self.slide.image = Some(self.image);

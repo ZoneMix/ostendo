@@ -1,5 +1,13 @@
-//! Inline markdown (`**bold**`, `*italic*` / `_italic_`, `~~strike~~`, `` `code` ``) to styled
-//! spans, applied by the renderer to each wrapped line.
+//! Inline markdown (`**bold**`, `*italic*` / `_italic_`, `~~strike~~`, `` `code` ``, links) to
+//! styled spans, applied by the renderer to each wrapped line.
+//!
+//! Links are `[text](url)`, `<https://…>`, and bare `http(s)://` URLs; a target containing
+//! whitespace or control characters stays literal text, so it can never reach the terminal
+//! inside an escape sequence.
+//!
+//! Math is `$…$` or `$$…$$` (pandoc's rules: `$` opens before non-whitespace and closes after it,
+//! and a closing `$` followed by a letter or digit is not one, so `$5 or $10` and `$HOME/$USER`
+//! stay text); `\$` is a literal dollar sign.
 //!
 //! Emphasis follows simplified CommonMark flanking rules: a delimiter run opens only before
 //! non-whitespace and closes only after non-whitespace, `_` never opens or closes inside a
@@ -14,6 +22,8 @@ struct Style {
     bold: bool,
     italic: bool,
     strike: bool,
+    /// Character range of the link target.
+    link: Option<(usize, usize)>,
 }
 
 impl Style {
@@ -39,6 +49,9 @@ impl Style {
     }
 }
 
+/// (text range, or `None` to show the target; target range; index after the link).
+type Link = (Option<(usize, usize)>, (usize, usize), usize);
+
 struct Inline<'a> {
     chars: &'a [char],
     fg: Color,
@@ -61,6 +74,33 @@ pub fn parse_inline_formatting(text: &str, base_fg: Color, code_bg: Color) -> Ve
     inline.spans
 }
 
+/// `text` with its math as Unicode and the rest as written, for plain-text
+/// places such as titles.
+pub fn with_math(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let scan = Inline {
+        chars: &chars,
+        fg: Color::Reset,
+        code_bg: Color::Reset,
+        spans: Vec::new(),
+    };
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match scan.math_at(i, chars.len()) {
+            Some((tex, next)) => {
+                out += &crate::math::inline(&chars[tex].iter().collect::<String>());
+                i = next;
+            }
+            None => {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 fn is_delimiter(ch: char) -> bool {
     matches!(ch, '*' | '_' | '~' | '`')
 }
@@ -71,6 +111,39 @@ impl Inline<'_> {
         let mut i = start;
         while i < end {
             let ch = self.chars[i];
+            if ch == '\\' && i + 1 < end && self.chars[i + 1] == '$' {
+                plain.push('$');
+                i += 2;
+                continue;
+            }
+            if let Some((tex, next)) = self.math_at(i, end) {
+                self.push(std::mem::take(&mut plain), style, false);
+                let tex: String = self.chars[tex].iter().collect();
+                let math = Style {
+                    italic: true,
+                    ..style
+                };
+                self.push(crate::math::inline(&tex), math, false);
+                i = next;
+                continue;
+            }
+            if let Some((text, target, next)) = self.link_at(i, end, style) {
+                self.push(std::mem::take(&mut plain), style, false);
+                let linked = Style {
+                    link: Some(target),
+                    ..style
+                };
+                match text {
+                    Some((a, b)) => self.parse(a, b, linked),
+                    None => self.push(
+                        self.chars[target.0..target.1].iter().collect(),
+                        linked,
+                        false,
+                    ),
+                }
+                i = next;
+                continue;
+            }
             if !is_delimiter(ch) {
                 plain.push(ch);
                 i += 1;
@@ -107,6 +180,120 @@ impl Inline<'_> {
             }
         }
         self.push(plain, style, false);
+    }
+
+    /// A link starting at `i`.
+    fn link_at(&self, i: usize, end: usize, style: Style) -> Option<Link> {
+        if style.link.is_some() {
+            return None;
+        }
+        let chars = &self.chars[..end];
+        let find = |from: usize, open: char, close: char| {
+            let mut depth = 0usize;
+            for (j, &c) in chars.iter().enumerate().skip(from) {
+                if c == open {
+                    depth += 1;
+                } else if c == close {
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                    depth -= 1;
+                }
+            }
+            None
+        };
+        let valid = |(a, b): (usize, usize)| {
+            a < b
+                && chars[a..b]
+                    .iter()
+                    .all(|c| !c.is_whitespace() && !c.is_control())
+        };
+        let starts = |at: usize, prefix: &str| {
+            prefix
+                .chars()
+                .enumerate()
+                .all(|(k, p)| chars.get(at + k) == Some(&p))
+        };
+        match chars[i] {
+            '[' => {
+                let close = find(i + 1, '[', ']')?;
+                if chars.get(close + 1) != Some(&'(') {
+                    return None;
+                }
+                let paren = find(close + 2, '(', ')')?;
+                let target_end = (close + 2..paren)
+                    .find(|&j| chars[j].is_whitespace())
+                    .unwrap_or(paren);
+                // Anything after the target must be a quoted title, which is dropped.
+                let title: String = chars[target_end..paren].iter().collect();
+                let title = title.trim();
+                let quoted = title.is_empty()
+                    || (title.len() >= 2
+                        && [('"', '"'), ('\'', '\'')]
+                            .iter()
+                            .any(|&(a, b)| title.starts_with(a) && title.ends_with(b)));
+                let target = (close + 2, target_end);
+                (quoted && valid(target)).then_some((Some((i + 1, close)), target, paren + 1))
+            }
+            '<' => {
+                let close = find(i + 1, '<', '>')?;
+                let target = (i + 1, close);
+                let scheme = ["http://", "https://", "mailto:"]
+                    .iter()
+                    .any(|p| starts(i + 1, p));
+                (scheme && valid(target)).then_some((None, target, close + 1))
+            }
+            'h' => {
+                let boundary = i
+                    .checked_sub(1)
+                    .is_none_or(|p| chars[p].is_whitespace() || chars[p] == '(');
+                let scheme = ["https://", "http://"]
+                    .into_iter()
+                    .find(|p| starts(i, p))?
+                    .len();
+                if !boundary {
+                    return None;
+                }
+                let mut stop = (i..end).find(|&j| chars[j].is_whitespace()).unwrap_or(end);
+                // Sentence punctuation after a URL is not part of it.
+                while stop > i
+                    && matches!(
+                        chars[stop - 1],
+                        '.' | ',' | ';' | ':' | '!' | '?' | ')' | '\'' | '"'
+                    )
+                {
+                    stop -= 1;
+                }
+                let target = (i, stop);
+                (stop > i + scheme && valid(target)).then_some((None, target, stop))
+            }
+            _ => None,
+        }
+    }
+
+    /// Math starting at `i`: the TeX's character range and the index after it.
+    fn math_at(&self, i: usize, end: usize) -> Option<(std::ops::Range<usize>, usize)> {
+        let chars = &self.chars[..end];
+        if chars[i] != '$' {
+            return None;
+        }
+        if chars.get(i + 1) == Some(&'$') {
+            let close =
+                (i + 3..end.saturating_sub(1)).find(|&j| chars[j] == '$' && chars[j + 1] == '$')?;
+            return Some((i + 2..close, close + 2));
+        }
+        let opens = chars.get(i + 1).is_some_and(|c| !c.is_whitespace())
+            && !i.checked_sub(1).is_some_and(|p| chars[p].is_alphanumeric());
+        if !opens {
+            return None;
+        }
+        let close = (i + 2..end).find(|&j| {
+            chars[j] == '$'
+                && !chars[j - 1].is_whitespace()
+                && chars[j - 1] != '\\'
+                && !chars.get(j + 1).is_some_and(|c| c.is_alphanumeric())
+        })?;
+        Some((i + 1..close, close + 1))
     }
 
     fn run_len(&self, i: usize, end: usize) -> usize {
@@ -173,6 +360,10 @@ impl Inline<'_> {
         if code {
             span = span.with_bg(self.code_bg);
         }
+        if let Some((a, b)) = style.link {
+            span.link = Some(self.chars[a..b].iter().collect::<String>().into());
+            span.underline = true;
+        }
         self.spans.push(span);
     }
 }
@@ -238,6 +429,16 @@ mod tests {
             ("5 * 3 = 15, see *.rs", &[("5 * 3 = 15, see *.rs", "")]),
             ("**unclosed bold", &[("**unclosed bold", "")]),
             ("`unclosed code", &[("`unclosed code", "")]),
+            // Math reads as Unicode; dollar amounts and variables stay text.
+            (
+                "area $\\pi r^2$, or $$\\alpha_1$$",
+                &[("area ", ""), ("πr²", "i"), (", or ", ""), ("α₁", "i")],
+            ),
+            (
+                "costs $5 or $10 in $HOME/$USER",
+                &[("costs $5 or $10 in $HOME/$USER", "")],
+            ),
+            ("\\$x$ stays", &[("$x$ stays", "")]),
         ];
         for (input, expected) in cases {
             let expected: Vec<(String, String)> = expected
@@ -245,6 +446,43 @@ mod tests {
                 .map(|(t, f)| (t.to_string(), f.to_string()))
                 .collect();
             assert_eq!(spans(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn links_carry_their_target() {
+        let links = |input: &str| -> Vec<(String, Option<String>)> {
+            parse_inline_formatting(input, FG, BG)
+                .into_iter()
+                .map(|s| (s.text, s.link.map(|l| l.to_string())))
+                .filter(|(_, l)| l.is_some())
+                .collect()
+        };
+        let link = |t: &str, u: &str| (t.to_string(), Some(u.to_string()));
+        assert_eq!(
+            links("see [the **docs**](https://x.dev \"Title\") or <https://a.b>."),
+            [
+                link("the ", "https://x.dev"),
+                link("docs", "https://x.dev"),
+                link("https://a.b", "https://a.b"),
+            ]
+        );
+        assert_eq!(
+            links("(via https://c.d/e?q=1), then http://f.g."),
+            [
+                link("https://c.d/e?q=1", "https://c.d/e?q=1"),
+                link("http://f.g", "http://f.g")
+            ]
+        );
+        for literal in [
+            "[a](has space)",
+            "[esc](http://x\x1b]0;pwned\x07)",
+            "<ftp://old>",
+            "xhttps://glued",
+            "https://",
+            "[checkbox] text",
+        ] {
+            assert!(links(literal).is_empty(), "{literal:?}");
         }
     }
 }

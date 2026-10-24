@@ -1,6 +1,6 @@
 //! Code execution, hot reload, and the remote-control link.
 
-use crate::presentation::ExecMode;
+use crate::presentation::{Block, ExecMode, Poll};
 use crate::remote::{RemoteCommand, StateMessage};
 use crate::theme::colors::color_to_hex;
 
@@ -69,7 +69,8 @@ impl Presenter {
         changed
     }
 
-    /// Re-reads the presentation, keeping the current position.
+    /// Re-reads the presentation and shows the first slide whose source
+    /// changed, fully built; otherwise keeps the current position.
     pub(crate) fn reload(&mut self) {
         let Ok(source) = std::fs::read_to_string(&self.presentation_path) else {
             return;
@@ -86,13 +87,75 @@ impl Presenter {
         self.meta = meta;
         self.images.preload(&slides);
         self.font.set_directives(&slides);
-        self.current = self.current.min(slides.len() - 1);
+        let edited = slides
+            .iter()
+            .zip(&self.slides)
+            .position(|(new, old)| new.fingerprint != old.fingerprint)
+            .or_else(|| (slides.len() > self.slides.len()).then_some(self.slides.len()));
+        self.clock_slide();
         self.slides = slides;
+        self.slide_time
+            .resize(self.slides.len(), std::time::Duration::ZERO);
+        let last = self.slides.len() - 1;
+        match edited {
+            Some(i) => {
+                if i.min(last) != self.current {
+                    self.scroll = 0;
+                }
+                self.current = i.min(last);
+                self.step = self.slides[self.current].steps.len();
+            }
+            None => {
+                self.current = self.current.min(last);
+                self.step = self.step.min(self.slides[self.current].steps.len());
+            }
+        }
         self.exec = None;
         self.exec_output = None;
         self.apply_slide_theme();
         self.font.request(Some(self.current));
         self.invalidate();
+    }
+
+    /// Moves the slide selected in the overview one place later (or earlier)
+    /// in the file, keeping it selected and the current slide in view.
+    pub(crate) fn move_slide(&mut self, later: bool) {
+        let sel = self.overview_sel;
+        let Some(first) = (if later { Some(sel) } else { sel.checked_sub(1) }) else {
+            return;
+        };
+        if first + 1 >= self.slides.len() {
+            return;
+        }
+        let path = std::fs::canonicalize(&self.presentation_path)
+            .unwrap_or_else(|_| self.presentation_path.clone());
+        let moved = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|source| crate::markdown::swap_adjacent_slides(&source, first));
+        let Some(source) = moved else {
+            self.notify("the file no longer matches the deck; reloaded".to_string());
+            self.reload();
+            return;
+        };
+        if let Err(e) = write_atomically(&path, &source) {
+            self.notify(format!("cannot write {}: {e}", path.display()));
+            return;
+        }
+        let current = match self.current {
+            c if c == first => first + 1,
+            c if c == first + 1 => first,
+            c => c,
+        };
+        self.clock_slide();
+        if first + 1 < self.slide_time.len() {
+            self.slide_time.swap(first, first + 1);
+        }
+        self.reload();
+        self.current = current.min(self.slides.len() - 1);
+        self.step = self.slides[self.current].steps.len();
+        self.overview_sel = if later { sel + 1 } else { sel - 1 };
+        self.apply_slide_theme();
+        self.font.request(None);
     }
 
     pub(crate) fn poll_remote(&mut self) {
@@ -106,7 +169,18 @@ impl Presenter {
     }
 
     fn remote_command(&mut self, cmd: RemoteCommand) {
+        if let RemoteCommand::Vote { poll, option } = cmd {
+            // Votes come from the room, not the presenter: they change nothing else.
+            self.vote(Some(&poll), option);
+            return;
+        }
+        if self.blank && !matches!(cmd, RemoteCommand::ToggleBlank) {
+            // Like the keyboard: the first command only brings the slide back.
+            self.blank = false;
+            return;
+        }
         match cmd {
+            RemoteCommand::ToggleBlank => self.blank = !self.blank,
             RemoteCommand::Next => self.next_slide(),
             RemoteCommand::Prev => self.prev_slide(),
             RemoteCommand::Goto(n) => self.goto_slide(n.saturating_sub(1)),
@@ -127,10 +201,9 @@ impl Presenter {
             RemoteCommand::FontDown if self.font.available() => self.font.adjust(self.current, -1),
             RemoteCommand::FontReset if self.font.available() => self.font.reset(self.current),
             RemoteCommand::ExecuteCode if self.allow_remote_exec => self.execute_code(),
-            RemoteCommand::TimerStart => {
-                self.timer_start.get_or_insert_with(std::time::Instant::now);
-            }
-            RemoteCommand::TimerReset => self.timer_start = None,
+            RemoteCommand::TimerStart => self.start_timer(),
+            RemoteCommand::TimerReset => self.reset_timer(),
+            RemoteCommand::Vote { .. } => {}
             RemoteCommand::SetTheme(slug) => {
                 if let Some(theme) = self.registry.get(&slug) {
                     self.set_base_theme(theme);
@@ -138,6 +211,65 @@ impl Presenter {
             }
             _ => {}
         }
+    }
+
+    /// The first poll on the current slide, once the slide has built that far.
+    fn open_poll(&self) -> Option<&Poll> {
+        let slide = &self.slides[self.current];
+        slide.blocks[..slide.shown_blocks(self.step)]
+            .iter()
+            .find_map(|block| match block {
+                Block::Poll(i) => slide.polls.get(*i),
+                _ => None,
+            })
+    }
+
+    /// Counts a vote for `option` of the open poll; a vote from the audience
+    /// page names the poll it saw, and is dropped once another is open.
+    pub(crate) fn vote(&mut self, poll: Option<&str>, option: usize) {
+        let Some(open) = self.open_poll() else {
+            return;
+        };
+        let (id, options) = (open.id(), open.options.len());
+        if option >= options || poll.is_some_and(|p| p != id) {
+            return;
+        }
+        self.votes.entry(id).or_insert_with(|| vec![0; options])[option] += 1;
+        self.invalidate();
+    }
+
+    /// Shows audience pages the open poll and its votes, or that there is none.
+    pub(crate) fn publish_poll(&mut self) {
+        let Some(tx) = &self.audience else {
+            return;
+        };
+        let pal = &self.palette;
+        let mut msg = serde_json::json!({
+            "type": "poll",
+            "bg": color_to_hex(pal.bg),
+            "text": color_to_hex(pal.text),
+            "accent": color_to_hex(pal.accent),
+        });
+        if let Some(poll) = self.open_poll() {
+            let id = poll.id();
+            let counts = self
+                .votes
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| vec![0; poll.options.len()]);
+            msg["id"] = id.into();
+            msg["question"] = poll.question.clone().into();
+            msg["options"] = poll.options.clone().into();
+            msg["counts"] = counts.into();
+        }
+        let json = msg.to_string();
+        tx.send_if_modified(|shown| {
+            let changed = *shown != json;
+            if changed {
+                *shown = json;
+            }
+            changed
+        });
     }
 
     /// Sends the presenter state to remote clients when it changed.
@@ -149,7 +281,7 @@ impl Presenter {
             return;
         }
         let slide = &self.slides[self.current];
-        let slide_content = self
+        let lines: Vec<String> = self
             .frame_cache
             .as_ref()
             .map(|(_, frame)| {
@@ -167,6 +299,18 @@ impl Presenter {
                     .collect()
             })
             .unwrap_or_default();
+        // A phone is narrower than the terminal: drop the centering padding.
+        let indent = lines
+            .iter()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.len() - l.trim_start_matches(' ').len())
+            .min()
+            .unwrap_or(0);
+        let slide_content: Vec<String> = lines
+            .iter()
+            .skip_while(|l| l.is_empty())
+            .map(|l| l.get(indent..).unwrap_or("").to_string())
+            .collect();
         let pal = &self.palette;
         let msg = StateMessage {
             msg_type: "state".to_string(),
@@ -175,9 +319,25 @@ impl Presenter {
             slide_title: slide.title.clone(),
             notes: slide.notes.clone(),
             timer: self.timer_text().unwrap_or_default(),
+            pace: match self.pace() {
+                Some((_, true)) => "over time".to_string(),
+                Some((Some(late), false)) => {
+                    format!("{} behind", crate::presentation::rehearsal::clock(late))
+                }
+                _ => String::new(),
+            },
+            up_next: match slide.steps.len() - self.step.min(slide.steps.len()) {
+                0 => self
+                    .slides
+                    .get(self.current + 1)
+                    .map_or_else(|| "End of deck".to_string(), |s| s.title.clone()),
+                1 => "1 more step on this slide".to_string(),
+                n => format!("{n} more steps on this slide"),
+            },
             slide_content,
             section: slide.section.clone(),
             is_fullscreen: self.fullscreen,
+            is_blank: self.blank,
             is_notes_visible: self.show_notes,
             is_dark_mode: pal.is_dark(),
             show_theme_name: self.show_theme_name,
@@ -202,4 +362,17 @@ impl Presenter {
             self.last_broadcast = json;
         }
     }
+}
+
+/// Replaces `path` without ever leaving it half written, keeping its permissions.
+fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    let mut tmp = tempfile::NamedTempFile::new_in(dir.unwrap_or(std::path::Path::new(".")))?;
+    tmp.write_all(text.as_bytes())?;
+    if let Ok(meta) = std::fs::metadata(path) {
+        std::fs::set_permissions(tmp.path(), meta.permissions())?;
+    }
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }

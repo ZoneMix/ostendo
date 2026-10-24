@@ -38,12 +38,19 @@ pub struct PresentationMeta {
     /// Transition name (`fade`, `slide`, `dissolve`) for slides without their own.
     pub transition: String,
     pub theme: Option<String>,
+    /// `duration: 20m`: planned talk length, for the pace shown by the timer.
+    pub duration: Option<std::time::Duration>,
+    /// `templates:` block: name -> directives (name, value) applied by
+    /// `<!-- template: name -->`.
+    pub templates: HashMap<String, Vec<(String, Option<String>)>>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Slide {
     /// 1-based position in the deck.
     pub number: usize,
+    /// 1-based line in the file where the slide's source starts.
+    pub line: usize,
     /// Text of the first `# ` heading.
     pub title: String,
     /// Set by `<!-- section: name -->`; inherited from the previous slide otherwise.
@@ -96,6 +103,28 @@ pub struct Slide {
     pub diagram_blocks: Vec<DiagramBlock>,
     /// `<!-- theme: slug -->` for this slide only.
     pub theme_override: Option<String>,
+    pub charts: Vec<Chart>,
+    /// Text of each ```` ```qr ```` block, drawn as a QR code.
+    pub qr_codes: Vec<String>,
+    /// TeX of each `$$…$$` block.
+    pub math: Vec<String>,
+    pub polls: Vec<Poll>,
+    /// What each press of → does before the deck moves on, in source order.
+    pub steps: Vec<Step>,
+    /// Hash of the slide's source lines; hot reload uses it to find the slide
+    /// an edit touched.
+    pub fingerprint: u64,
+    /// A `<!-- template: name -->` that names no built-in or deck template.
+    pub missing_template: Option<String>,
+}
+
+/// One build step of a slide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// `<!-- pause -->`: `blocks[n..]` stay hidden until this step.
+    Pause(usize),
+    /// Code block `code` moves to its highlight group `group`.
+    Highlight { code: usize, group: usize },
 }
 
 /// One body element of a slide; indexes point into the matching `Slide` vector.
@@ -109,8 +138,41 @@ pub enum Block {
     Quote(usize),
     Diagram(usize),
     Mermaid(usize),
+    Chart(usize),
+    Qr(usize),
+    Math(usize),
+    Poll(usize),
     Image,
     Columns,
+}
+
+/// A ```` ```poll ```` block: a `# question` and one option per line, voted
+/// on with the number keys or from the `--audience` page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Poll {
+    pub question: String,
+    pub options: Vec<String>,
+}
+
+impl Poll {
+    /// Names the poll to the audience page and keys its votes, which so
+    /// survive a reload that leaves the poll's text alone.
+    pub fn id(&self) -> String {
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(&(&self.question, &self.options), &mut hasher);
+        format!("{:016x}", std::hash::Hasher::finish(&hasher))
+    }
+}
+
+/// A ```` ```chart ```` block: one bar per `label: value` line, `# title`
+/// optional.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chart {
+    pub title: Option<String>,
+    /// Label, value, and the value as written (`42 ms`).
+    pub bars: Vec<(String, f64, String)>,
+    /// `style=columns`: vertical bars instead of horizontal ones.
+    pub columns: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -143,8 +205,15 @@ pub struct ColumnContent {
     pub image: Option<ColumnImage>,
     /// Plain-text lines, typically a column header.
     pub text_lines: Vec<String>,
+    pub tables: Vec<Table>,
+    pub quotes: Vec<BlockQuote>,
+    /// TeX of each `$$…$$` block.
+    pub math: Vec<String>,
     /// The column's content in source order.
     pub items: Vec<ColumnItem>,
+    /// For each of `items`, how many `<!-- pause -->`s come before it on the
+    /// slide; it shows once that many build steps have.
+    pub pauses_before: Vec<usize>,
 }
 
 /// One entry of [`ColumnContent::items`], indexing into the column's lists.
@@ -153,6 +222,9 @@ pub enum ColumnItem {
     Text(usize),
     Bullet(usize),
     Code(usize),
+    Table(usize),
+    Quote(usize),
+    Math(usize),
     Image,
 }
 
@@ -164,6 +236,44 @@ pub struct Bullet {
     pub depth: usize,
 }
 
+impl Slide {
+    /// How many of `blocks` show after `step` build steps: those before the
+    /// first pause still to come.
+    pub fn shown_blocks(&self, step: usize) -> usize {
+        self.steps[step.min(self.steps.len())..]
+            .iter()
+            .find_map(|s| match s {
+                Step::Pause(n) => Some(*n),
+                Step::Highlight { .. } => None,
+            })
+            .unwrap_or(self.blocks.len())
+    }
+}
+
+impl Bullet {
+    /// A task-list item (`[ ] text`, `[x] text`): whether it is done, and its text.
+    pub fn task(&self) -> Option<(bool, &str)> {
+        let rest = self.text.strip_prefix('[')?;
+        let (mark, text) = rest.split_once("] ")?;
+        match mark {
+            " " => Some((false, text)),
+            "x" | "X" => Some((true, text)),
+            _ => None,
+        }
+    }
+
+    /// Whether the item came from an ordered list (`1.` or `1)`).
+    pub fn is_ordered(&self) -> bool {
+        self.text.split_once(' ').is_some_and(|(marker, _)| {
+            marker.len() >= 2
+                && marker.ends_with(['.', ')'])
+                && marker[..marker.len() - 1]
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
     /// Language from the fence info string.
@@ -173,6 +283,10 @@ pub struct CodeBlock {
     pub label: String,
     /// `+exec` or `+pty` on the fence line.
     pub exec_mode: Option<ExecMode>,
+    /// `{1,3-5|7|all}` on the fence line: groups of 1-based inclusive line
+    /// ranges emphasized one step at a time. An empty group (`all`) emphasizes
+    /// nothing; no groups means no emphasis at all.
+    pub highlights: Vec<Vec<(usize, usize)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -232,8 +346,33 @@ pub enum TableAlign {
 
 #[derive(Debug, Clone)]
 pub struct BlockQuote {
-    /// Lines with the leading `> ` removed.
+    /// Lines with the leading `> ` removed (and the `[!KIND]` line of a callout).
     pub lines: Vec<String>,
+    /// `> [!NOTE]` (GitHub alert syntax) with the heading to show: the text
+    /// after the marker, or the kind's name.
+    pub callout: Option<(Callout, String)>,
+}
+
+/// GitHub alert kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Callout {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+impl Callout {
+    pub fn name(self) -> &'static str {
+        match self {
+            Callout::Note => "Note",
+            Callout::Tip => "Tip",
+            Callout::Important => "Important",
+            Callout::Warning => "Warning",
+            Callout::Caution => "Caution",
+        }
+    }
 }
 
 /// A ```` ```mermaid ```` block, rendered to an image by the external `mmdc` CLI.
