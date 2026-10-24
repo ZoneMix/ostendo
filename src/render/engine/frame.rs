@@ -62,7 +62,7 @@ impl Presenter {
     fn build_frame(&mut self, layout: &Layout, compact: bool, shrink: usize) -> SlideFrame {
         let slide = &self.slides[self.current];
         let pal = self.palette;
-        let exec = self.exec_output.as_deref().map(|output| ExecView {
+        let exec = self.exec_output.as_ref().map(|output| ExecView {
             block: self.exec_block,
             output,
             running: self.exec.is_some(),

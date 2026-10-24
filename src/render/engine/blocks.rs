@@ -1,6 +1,7 @@
 //! Builders for slide elements. Each returns lines starting at column 0 of the
 //! content area; the caller places them on screen.
 
+use std::cell::RefCell;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -19,7 +20,7 @@ use super::palette::Palette;
 #[derive(Clone, Copy)]
 pub(crate) struct ExecView<'a> {
     pub block: usize,
-    pub output: &'a str,
+    pub output: &'a ExecOutput,
     pub running: bool,
 }
 
@@ -466,18 +467,62 @@ fn wrap_code(spans: &[StyledSpan], width: usize) -> Vec<Vec<StyledSpan>> {
     rows
 }
 
-/// Program output under the block that produced it.
-pub(crate) fn exec_output(ctx: &Ctx, output: &str, running: bool) -> Vec<StyledLine> {
-    let pal = ctx.pal;
-    let bar = || StyledSpan::new("  │ ").with_fg(pal.accent);
-    let mut out = Vec::new();
-    for raw in output.lines() {
-        for spans in wrap_spans(&parse_ansi_line(raw), ctx.width.saturating_sub(4)) {
-            let mut row = vec![bar()];
-            row.extend(spans);
-            out.push(line(row));
+/// Output of a run so far. The slide is laid out again for every new line, so
+/// lines are wrapped once, as they arrive, instead of all again each time.
+#[derive(Default)]
+pub(crate) struct ExecOutput {
+    lines: Vec<String>,
+    wrapped: RefCell<Wrapped>,
+}
+
+#[derive(Default)]
+struct Wrapped {
+    width: Option<usize>,
+    lines: usize,
+    rows: Vec<Vec<StyledSpan>>,
+}
+
+impl ExecOutput {
+    pub(crate) fn push_line(&mut self, line: String) {
+        self.lines.push(line);
+    }
+}
+
+impl From<String> for ExecOutput {
+    fn from(text: String) -> Self {
+        Self {
+            lines: text.lines().map(str::to_string).collect(),
+            wrapped: RefCell::default(),
         }
     }
+}
+
+/// Program output under the block that produced it.
+pub(crate) fn exec_output(ctx: &Ctx, output: &ExecOutput, running: bool) -> Vec<StyledLine> {
+    let pal = ctx.pal;
+    let width = ctx.width.saturating_sub(4);
+    let mut wrapped = output.wrapped.borrow_mut();
+    if wrapped.width != Some(width) {
+        *wrapped = Wrapped {
+            width: Some(width),
+            ..Wrapped::default()
+        };
+    }
+    for raw in &output.lines[wrapped.lines..] {
+        let rows = wrap_spans(&parse_ansi_line(raw), width);
+        wrapped.rows.extend(rows);
+    }
+    wrapped.lines = output.lines.len();
+    let bar = || StyledSpan::new("  │ ").with_fg(pal.accent);
+    let mut out: Vec<StyledLine> = wrapped
+        .rows
+        .iter()
+        .map(|spans| {
+            let mut row = vec![bar()];
+            row.extend(spans.iter().cloned());
+            line(row)
+        })
+        .collect();
     if running {
         out.push(line(vec![
             bar(),
@@ -703,6 +748,38 @@ mod tests {
     }
 
     #[test]
+    fn output_arriving_line_by_line_lays_out_like_all_at_once() {
+        let lines = [
+            "\x1b[32mfirst line that wraps\x1b[0m",
+            "",
+            "third",
+            "a much longer fourth line",
+        ];
+        let expected = |width: usize, n: usize| -> Vec<String> {
+            let mut rows: Vec<String> = lines[..n]
+                .iter()
+                .flat_map(|l| wrap_spans(&parse_ansi_line(l), width - 4))
+                .map(|spans| {
+                    format!(
+                        "  │ {}",
+                        spans.iter().map(|s| s.text.as_str()).collect::<String>()
+                    )
+                })
+                .collect();
+            rows.push("  │ running…".into());
+            rows
+        };
+        let mut live = ExecOutput::default();
+        for (i, l) in lines.iter().enumerate() {
+            live.push_line(l.to_string());
+            let got = ctx_with(16, |c| exec_output(c, &live, true));
+            assert_eq!(texts(&got), expected(16, i + 1), "after {} lines", i + 1);
+        }
+        let resized = ctx_with(30, |c| exec_output(c, &live, true));
+        assert_eq!(texts(&resized), expected(30, lines.len()));
+    }
+
+    #[test]
     fn wrapping_keeps_inline_styles_across_line_breaks() {
         let spans = vec![
             StyledSpan::new("plain "),
@@ -752,7 +829,7 @@ mod tests {
                         false,
                     ),
                     code_block(ctx, &cb, cb.highlights.first()),
-                    exec_output(ctx, &format!("\x1b[31m{long}"), true),
+                    exec_output(ctx, &format!("\x1b[31m{long}").into(), true),
                     table(ctx, &t),
                     quote(
                         ctx,

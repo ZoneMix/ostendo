@@ -4,6 +4,7 @@ use crate::presentation::{Block, ExecMode, Poll};
 use crate::remote::{RemoteCommand, StateMessage};
 use crate::theme::colors::color_to_hex;
 
+use super::blocks::ExecOutput;
 use super::Presenter;
 
 impl Presenter {
@@ -38,11 +39,11 @@ impl Presenter {
         match started {
             Ok(exec) => {
                 self.exec = Some(exec);
-                self.exec_output = Some(String::new());
+                self.exec_output = Some(ExecOutput::default());
             }
             Err(e) => {
                 self.exec = None;
-                self.exec_output = Some(format!("\x1b[31m{e}\x1b[39m"));
+                self.exec_output = Some(format!("\x1b[31m{e}\x1b[39m").into());
             }
         }
         self.invalidate();
@@ -60,11 +61,9 @@ impl Presenter {
                 self.exec = None;
                 break;
             };
-            let output = self.exec_output.get_or_insert_with(String::new);
-            if !output.is_empty() {
-                output.push('\n');
-            }
-            output.push_str(&line);
+            self.exec_output
+                .get_or_insert_with(ExecOutput::default)
+                .push_line(line);
         }
         changed
     }
