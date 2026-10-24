@@ -30,6 +30,26 @@ impl Fence {
         ))
     }
 
+    /// Whether the block, before its closer, passes a `---` and then a new opener
+    /// such as ```` ```python ````. That closer belongs to the later block: this one
+    /// was left open, and pairing them would merge the slides in between.
+    fn reaches_into_next_slide(self, body: &[&str]) -> bool {
+        let mut crossed = false;
+        for line in body {
+            if self.is_closed_by(line) {
+                return false;
+            }
+            if line.trim_end() == "---" {
+                crossed = true;
+            } else if crossed
+                && matches!(Fence::parse(line), Some((f, info)) if f.tilde == self.tilde && !info.is_empty())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(super) fn is_closed_by(self, line: &str) -> bool {
         matches!(Fence::parse(line), Some((close, "")) if close.tilde == self.tilde && close.len >= self.len)
     }
@@ -66,7 +86,7 @@ pub(super) fn split_front_matter<'a>(
 
 /// Splits on `---` lines outside fences and multi-line comments, returning the line
 /// range of each slide. An opener with no closer anywhere below is an ordinary line, so
-/// one unclosed fence cannot swallow the deck.
+/// one unclosed fence cannot swallow the deck; see also [`Fence::reaches_into_next_slide`].
 pub(super) fn split_slides(lines: &[&str]) -> Vec<std::ops::Range<usize>> {
     let last_comment_end = lines.iter().rposition(|l| l.contains("-->"));
     // longest_close[i][tilde]: longest bare fence of that kind at or after line i.
@@ -94,7 +114,9 @@ pub(super) fn split_slides(lines: &[&str]) -> Vec<std::ops::Range<usize>> {
             blocks.push(start..i);
             start = i + 1;
         } else if let Some((open, _)) = Fence::parse(line) {
-            if longest_close[i + 1][usize::from(open.tilde)] >= open.len {
+            if longest_close[i + 1][usize::from(open.tilde)] >= open.len
+                && !open.reaches_into_next_slide(&lines[i + 1..])
+            {
                 fence = Some(open);
             }
         } else {

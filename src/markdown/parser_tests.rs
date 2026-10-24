@@ -571,3 +571,22 @@ fn display_math_blocks_and_math_in_titles() {
         )
     );
 }
+
+#[test]
+fn a_code_block_missing_its_closer_does_not_swallow_the_next_slide() {
+    let src = "# A\n```bash\necho a\n---\n# B\n```python\nprint(1)\n```\n---\n# C\n```yaml\na: 1\n---\nb: 2\n```";
+    let (meta, slides) = parse_presentation(src, None).unwrap();
+    assert_eq!(titles(&slides), ["A", "B", "C"]);
+    assert_eq!(slides[0].code_blocks[0].code, "echo a");
+    assert_eq!(slides[1].code_blocks[0].code, "print(1)");
+    assert_eq!(
+        slides[2].code_blocks[0].code, "a: 1\n---\nb: 2",
+        "a closed block may still hold a `---` line"
+    );
+    let got: Vec<(usize, &str)> = meta
+        .warnings
+        .iter()
+        .map(|w| (w.line, w.message.as_str()))
+        .collect();
+    assert_eq!(got, [(2, "code block has no closing fence")]);
+}
