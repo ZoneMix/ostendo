@@ -496,6 +496,10 @@ fn parse_slide(
         builder.math_closes_below = last_math_close.is_some_and(|end| end > i);
         builder.line(line);
     }
+    if let Some(OpenBlock::Fence { at, .. }) = builder.open {
+        builder.at = at;
+        builder.warn("code block has no closing fence".to_string());
+    }
     let warnings = std::mem::take(&mut builder.warnings);
     let mut slide = builder.finish();
     if slide.section.is_empty() {
@@ -514,6 +518,8 @@ enum OpenBlock {
     Comment,
     Fence {
         fence: Fence,
+        /// Line of the opener, for the warning if it is never closed.
+        at: usize,
         kind: FenceKind,
         lines: Vec<String>,
     },
@@ -622,7 +628,12 @@ impl<'a> SlideBuilder<'a> {
             self.flush_table();
             let kind = fence_kind(info);
             let lines = Vec::new();
-            self.open = Some(OpenBlock::Fence { fence, kind, lines });
+            self.open = Some(OpenBlock::Fence {
+                fence,
+                at: self.at,
+                kind,
+                lines,
+            });
         } else if let Some(first) = opens_math(line)
             .filter(|rest| rest.trim_end().ends_with("$$") || self.math_closes_below)
         {

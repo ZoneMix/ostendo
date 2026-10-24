@@ -110,7 +110,7 @@ pub struct Presenter {
     allow_exec: bool,
     allow_remote_exec: bool,
     exec: Option<Execution>,
-    exec_output: Option<String>,
+    exec_output: Option<blocks::ExecOutput>,
     /// Ctrl+E index of the block `exec_output` belongs to.
     exec_block: usize,
 

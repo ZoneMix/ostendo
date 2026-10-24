@@ -67,7 +67,9 @@ diagram gives up rows when the slide would otherwise need scrolling;
   caption in text-based rendering.
 - Code fences, diagrams, and Mermaid blocks (below).
 
-`---` inside a code fence or an HTML comment does not end the slide.
+`---` inside a code fence or an HTML comment does not end the slide. A fence
+left open ends with its slide when its only closer lies past a `---` and a new
+fence like ```` ```python ````. `--validate` reports every fence left open.
 
 ## Code blocks
 
