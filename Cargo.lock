@@ -1022,6 +1022,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "strsim",
  "subtle",
  "syntect",
  "tempfile",

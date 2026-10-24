@@ -68,13 +68,20 @@ pub fn display(tex: &str) -> Vec<String> {
 struct Parser {
     chars: Vec<char>,
     pos: usize,
+    /// Nesting of `atom` calls; parsing and layout recurse once per level.
+    depth: usize,
 }
+
+/// Deeper TeX is shown as text: thousands of nested braces would overflow the
+/// stack and abort the presenter.
+const MAX_DEPTH: usize = 100;
 
 impl Parser {
     fn new(tex: &str) -> Self {
         Self {
             chars: tex.chars().collect(),
             pos: 0,
+            depth: 0,
         }
     }
 
@@ -232,6 +239,18 @@ impl Parser {
     }
 
     fn atom(&mut self) -> Option<Node> {
+        if self.depth >= MAX_DEPTH {
+            let rest: String = self.chars[self.pos..].iter().collect();
+            self.pos = self.chars.len();
+            return (!rest.is_empty()).then_some(Node::Sym(rest, Class::Ord));
+        }
+        self.depth += 1;
+        let node = self.atom_unguarded();
+        self.depth -= 1;
+        node
+    }
+
+    fn atom_unguarded(&mut self) -> Option<Node> {
         let c = self.peek()?;
         self.pos += 1;
         Some(match c {
@@ -1123,6 +1142,13 @@ mod tests {
         for (tex, expected) in cases {
             assert_eq!(inline(tex), expected, "{tex}");
         }
+    }
+
+    #[test]
+    fn deeply_nested_tex_does_not_overflow_the_stack() {
+        let tex = format!("{}x{}", "{".repeat(20_000), "}".repeat(20_000));
+        assert!(!display(&tex).is_empty());
+        assert!(!inline(&format!(r"{}x", r"\sqrt".repeat(20_000))).is_empty());
     }
 
     #[test]

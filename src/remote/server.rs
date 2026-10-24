@@ -139,9 +139,13 @@ async fn accept(stream: TcpStream, token: Option<String>) -> Option<WebSocketStr
         serve_page(stream, REMOTE_HTML, csp).await;
         return None;
     }
-    tokio_tungstenite::accept_hdr_async(stream, Authorize { token })
-        .await
-        .ok()
+    tokio_tungstenite::accept_hdr_async_with_config(
+        stream,
+        Authorize { token },
+        Some(super::audience::ws_limits(MAX_COMMAND_BYTES)),
+    )
+    .await
+    .ok()
 }
 
 /// The start of the request, for routing only: the peeked bytes stay in the

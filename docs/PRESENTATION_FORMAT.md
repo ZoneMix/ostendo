@@ -3,7 +3,9 @@
 An Ostendo presentation is one markdown file. Slides are separated by a line
 containing only `---`; directives are HTML comments, so the file still reads
 well anywhere markdown is rendered. Run `ostendo --validate talk.md` to check a
-deck before presenting.
+deck before presenting: it reports missing images and themes, misspelled
+directives and front-matter keys, and values that were ignored, each as
+`talk.md:LINE: message`.
 
 ## Front matter
 
@@ -278,7 +280,8 @@ of notes
 -->
 ```
 
-Press `n` to show notes under the slide; `N` / `P` scroll them.
+Several notes comments on one slide are joined in order. Press `n` to show
+notes under the slide; `N` / `P` scroll them.
 
 ### Images
 

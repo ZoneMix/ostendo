@@ -33,6 +33,12 @@ pub fn contrast_ratio(c1: Color, c2: Color) -> f64 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
+/// Whether a replacement accent keeps the 3:1 contrast with `bg` that every
+/// built-in theme accent has.
+pub fn accent_is_readable(accent: Color, bg: Color) -> bool {
+    contrast_ratio(accent, bg) >= 3.0
+}
+
 /// Linear blend from `from` (t = 0.0) to `to` (t = 1.0); `t` is clamped and non-RGB colors
 /// count as black.
 pub fn interpolate_color(from: Color, to: Color, t: f64) -> Color {

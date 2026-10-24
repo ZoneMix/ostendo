@@ -44,7 +44,7 @@ fn fast_resize(
 /// One frame of an animated GIF, already downscaled.
 #[derive(Clone)]
 pub struct GifFrame {
-    pub image: RgbaImage,
+    pub image: std::sync::Arc<RgbaImage>,
     /// Never zero: zero-delay frames are stored as 100 ms.
     pub delay_ms: u32,
 }
@@ -65,13 +65,15 @@ pub fn load_image(path: &Path) -> Result<RgbaImage> {
     }
 }
 
-/// Decode every frame of an animated GIF. Returns `None` for non-GIF paths
+/// Decode the frames of an animated GIF, up to `MAX_GIF_BYTES` of pixels.
+/// Returns `None` for non-GIF paths
 /// and single-frame GIFs, which load through [`load_image`].
 pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
     use image::AnimationDecoder;
     use std::io::BufReader;
 
     const MAX_DIM: u32 = 800;
+    const MAX_GIF_BYTES: usize = 256 << 20;
 
     let is_gif = path
         .extension()
@@ -102,7 +104,16 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
             } else {
                 raw
             };
-            GifFrame { image, delay_ms }
+            GifFrame {
+                image: std::sync::Arc::new(image),
+                delay_ms,
+            }
+        })
+        // A small file can expand to thousands of full-size frames; past the
+        // budget the animation loops over what was decoded.
+        .scan(0usize, |decoded, frame| {
+            *decoded += frame.image.as_raw().len();
+            (*decoded <= MAX_GIF_BYTES).then_some(frame)
         })
         .collect();
 
@@ -116,8 +127,20 @@ pub fn load_gif_frames(path: &Path) -> Option<Vec<GifFrame>> {
 /// premultiplied alpha internally, so pixel values are un-premultiplied before
 /// returning.
 fn load_svg(path: &Path) -> Result<RgbaImage> {
-    let tree =
-        resvg::usvg::Tree::from_data(&std::fs::read(path)?, &resvg::usvg::Options::default())?;
+    use resvg::usvg::{fontdb, Options};
+    // usvg starts with no fonts, which drops every `<text>`; scanning the
+    // system's fonts takes a moment, so it happens once and only for SVGs.
+    static FONTS: std::sync::LazyLock<std::sync::Arc<fontdb::Database>> =
+        std::sync::LazyLock::new(|| {
+            let mut db = fontdb::Database::new();
+            db.load_system_fonts();
+            std::sync::Arc::new(db)
+        });
+    let options = Options {
+        fontdb: FONTS.clone(),
+        ..Options::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(&std::fs::read(path)?, &options)?;
 
     let size = tree.size();
     // Render at 2x for quality, capped at 2048px
@@ -152,20 +175,38 @@ fn load_svg(path: &Path) -> Result<RgbaImage> {
     Ok(img)
 }
 
-/// Resize `img` to the largest pixel size that fits `max_cols` x `max_rows`
-/// cells (less a 5% horizontal margin) at the terminal's cell size, keeping
-/// its aspect ratio. Returns the image and the `(cols, rows)` it occupies.
+/// Resize `img` to the size [`fit_cells`] gives it. Returns the image and the
+/// `(cols, rows)` it occupies. Without `upscale`, a smaller image is returned
+/// at its own size.
 pub fn scale_image_pixels(
     img: &RgbaImage,
     window: &WindowSize,
     max_cols: usize,
     max_rows: usize,
+    upscale: bool,
 ) -> (RgbaImage, usize, usize) {
     let (iw, ih) = img.dimensions();
     if iw == 0 || ih == 0 {
         return (RgbaImage::new(1, 1), 1, 1);
     }
-    let aspect_ratio = ih as f64 / iw as f64;
+    let (width_px, height_px, cols, rows) = fit_cells((iw, ih), window, max_cols, max_rows);
+    if !upscale && width_px >= iw {
+        return (img.clone(), cols, rows);
+    }
+    let scaled = fast_resize(img, width_px, height_px, fir::FilterType::Lanczos3);
+    (scaled, cols, rows)
+}
+
+/// The largest pixel size for an `iw` x `ih` image that fits `max_cols` x
+/// `max_rows` cells (less a 5% horizontal margin) at the terminal's cell
+/// size, keeping its aspect ratio: `(width_px, height_px, cols, rows)`.
+pub fn fit_cells(
+    (iw, ih): (u32, u32),
+    window: &WindowSize,
+    max_cols: usize,
+    max_rows: usize,
+) -> (u32, u32, usize, usize) {
+    let aspect_ratio = f64::from(ih.max(1)) / f64::from(iw.max(1));
 
     let ppc = window.pixels_per_column();
     let ppr = window.pixels_per_row();
@@ -189,9 +230,7 @@ pub fn scale_image_pixels(
 
     let cols = (width_px as f64 / ppc).ceil() as usize;
     let rows = (height_px as f64 / ppr).ceil() as usize;
-
-    let scaled = fast_resize(img, width_px, height_px, fir::FilterType::Lanczos3);
-    (scaled, cols, rows)
+    (width_px, height_px, cols, rows)
 }
 
 #[cfg(test)]

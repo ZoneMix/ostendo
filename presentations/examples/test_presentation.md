@@ -1895,25 +1895,6 @@ VERIFY: Content centered vertically but left-aligned
 
 ---
 
-# OSC 66: Title Scale
-<!-- section: scaling -->
-<!-- font_size: 4 -->
-<!-- title_scale: 3 -->
-
-This slide uses `title_scale: 3` for a large title.
-
-- OSC 66 per-element text scaling (Kitty only)
-- Title and subtitle rendered at 3x scale
-- Body text remains normal size
-
-<!-- notes:
-FEATURE: OSC 66 title scaling
-EXPECTED: Title rendered at 3x scale (Kitty terminal)
-VERIFY: Title appears much larger than body text
--->
-
----
-
 # OSC 66: Text Scale
 <!-- section: scaling -->
 <!-- font_size: 4 -->
@@ -1935,16 +1916,16 @@ VERIFY: Title/subtitle larger, body text normal
 # Combined Scaling
 <!-- section: scaling -->
 <!-- font_size: 5 -->
-<!-- title_scale: 3 -->
+<!-- text_scale: 3 -->
 
-This slide combines `font_size: 5` with `title_scale: 3`.
+This slide combines `font_size: 5` with `text_scale: 3`.
 
 - Font zoom transition happens first
 - Then OSC 66 scales the title
 - Both effects stack
 
 <!-- notes:
-FEATURE: Combined font_size + title_scale
+FEATURE: Combined font_size + text_scale
 EXPECTED: Font zoom dissolve + large title scale
 VERIFY: Font transition plays, then title appears at 3x scale
 -->

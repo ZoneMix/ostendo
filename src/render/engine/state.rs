@@ -32,7 +32,6 @@ impl Presenter {
         }
         self.palette = self.palette_for(&wanted);
         self.theme = wanted;
-        self.images.clear();
         self.display.invalidate();
         self.invalidate();
     }

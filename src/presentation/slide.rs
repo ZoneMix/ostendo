@@ -43,6 +43,16 @@ pub struct PresentationMeta {
     /// `templates:` block: name -> directives (name, value) applied by
     /// `<!-- template: name -->`.
     pub templates: HashMap<String, Vec<(String, Option<String>)>>,
+    /// Directives and front-matter keys the parser ignored, for `--validate`.
+    pub warnings: Vec<Warning>,
+}
+
+/// Something in the source the parser had to ignore.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Warning {
+    /// 1-based line in the file.
+    pub line: usize,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -114,8 +124,6 @@ pub struct Slide {
     /// Hash of the slide's source lines; hot reload uses it to find the slide
     /// an edit touched.
     pub fingerprint: u64,
-    /// A `<!-- template: name -->` that names no built-in or deck template.
-    pub missing_template: Option<String>,
 }
 
 /// One build step of a slide.
@@ -314,7 +322,6 @@ pub struct SlideImage {
 pub enum ImagePosition {
     #[default]
     Below,
-    Left,
     Right,
 }
 

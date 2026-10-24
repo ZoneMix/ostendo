@@ -2,24 +2,27 @@
 //! (`npm install -g @mermaid-js/mermaid-cli`).
 //!
 //! Diagrams render to transparent PNGs inside a private temporary directory
-//! that is removed when the renderer is dropped. Successful renders are
-//! reused for the same `(source, width)`.
+//! that is removed when the renderer is dropped. mmdc drives a headless
+//! Chromium and takes seconds, so [`MermaidRenderer::job`] hands back work
+//! for another thread.
 
 use anyhow::{bail, Result};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-/// mmdc drives a headless Chromium; a wedged browser must not stall the
-/// presentation indefinitely.
+/// A wedged browser must not hold a render forever.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Page width diagrams are drawn at. Image protocols scale the PNG to its
+/// cells, so one size serves every terminal size and no resize re-renders.
+const WIDTH: usize = 1600;
 
 pub struct MermaidRenderer {
     /// Created with a random name and owner-only permissions, so other users
     /// cannot pre-create it or plant symlinks for mmdc to write through.
     dir: tempfile::TempDir,
-    rendered: HashMap<u64, PathBuf>,
 }
 
 impl MermaidRenderer {
@@ -28,67 +31,65 @@ impl MermaidRenderer {
             dir: tempfile::Builder::new()
                 .prefix("ostendo-mermaid-")
                 .tempdir()?,
-            rendered: HashMap::new(),
         })
     }
 
-    pub fn is_available() -> bool {
+    /// Work that renders `source` to a PNG named by `key` in this renderer's
+    /// directory and returns its path.
+    ///
+    /// The job fails if `mmdc` is not installed, cannot be started, exits
+    /// unsuccessfully (the error includes its stderr), or runs longer than
+    /// 20 seconds.
+    pub fn job(&self, source: &str, key: u64) -> impl FnOnce() -> Result<PathBuf> + Send {
+        let dir = self.dir.path().to_path_buf();
+        let source = source.to_string();
+        move || render(&dir, &source, key)
+    }
+}
+
+fn is_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
         let mut command = Command::new("mmdc");
         command
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         run(command, RENDER_TIMEOUT).is_ok_and(|status| status.success())
-    }
-
-    /// Render `source` to a PNG `width` pixels wide and return its path.
-    ///
-    /// # Errors
-    ///
-    /// Fails if `mmdc` cannot be started, exits unsuccessfully (the error
-    /// includes its stderr), or runs longer than 20 seconds. Failures are not
-    /// remembered, so a caller that retries every frame should cache them.
-    pub fn render(&mut self, source: &str, width: usize) -> Result<PathBuf> {
-        let key = cache_key(source, width);
-        if let Some(path) = self.rendered.get(&key) {
-            return Ok(path.clone());
-        }
-
-        let input = self.dir.path().join(format!("{key}.mmd"));
-        let output = self.dir.path().join(format!("{key}.png"));
-        let log = self.dir.path().join(format!("{key}.log"));
-        std::fs::write(&input, source)?;
-
-        let mut command = Command::new("mmdc");
-        command
-            .arg("-i")
-            .arg(&input)
-            .arg("-o")
-            .arg(&output)
-            .arg("-w")
-            .arg(width.to_string())
-            .args(["--backgroundColor", "transparent"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            // A file, not a pipe: nothing drains a pipe while we wait.
-            .stderr(std::fs::File::create(&log)?);
-        let status = run(command, RENDER_TIMEOUT)?;
-        if !status.success() {
-            let stderr = std::fs::read_to_string(&log).unwrap_or_default();
-            bail!("mmdc failed ({status}): {}", stderr.trim());
-        }
-
-        self.rendered.insert(key, output.clone());
-        Ok(output)
-    }
+    })
 }
 
-fn cache_key(source: &str, width: usize) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    source.hash(&mut hasher);
-    width.hash(&mut hasher);
-    hasher.finish()
+fn render(dir: &Path, source: &str, key: u64) -> Result<PathBuf> {
+    if !is_available() {
+        bail!("install mermaid-cli (mmdc) to render");
+    }
+    let input = dir.join(format!("{key}.mmd"));
+    let output = dir.join(format!("{key}.png"));
+    let log = dir.join(format!("{key}.log"));
+    std::fs::write(&input, source)?;
+
+    let mut command = Command::new("mmdc");
+    command
+        .arg("-i")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .arg("-w")
+        .arg(WIDTH.to_string())
+        .args(["--backgroundColor", "transparent"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        // A file, not a pipe: nothing drains a pipe while we wait.
+        .stderr(std::fs::File::create(&log)?);
+    let status = run(command, RENDER_TIMEOUT)?;
+    if !status.success() {
+        let stderr = std::fs::read_to_string(&log).unwrap_or_default();
+        bail!(
+            "render failed: mmdc exited with {status}: {}",
+            stderr.trim()
+        );
+    }
+    Ok(output)
 }
 
 /// Run `command` to completion or kill it after `timeout`. On Unix it gets its

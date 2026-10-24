@@ -748,10 +748,7 @@ impl<'a> Page<'a> {
     }
 
     fn table(&mut self, t: &Table, (x, y, w, _): (f64, f64, f64, f64), scale: f64) {
-        let columns = t
-            .headers
-            .len()
-            .max(t.rows.iter().map(Vec::len).max().unwrap_or(0));
+        let columns = table_columns(t);
         if columns == 0 {
             return;
         }
@@ -967,8 +964,7 @@ fn item_height(item: &Item, w: f64, text: f64, pics: f64) -> f64 {
                 + 0.2 * INCH
         }
         Item::Table(t) => {
-            let columns = t.headers.len().max(1);
-            let widths = column_widths(t, columns, w);
+            let widths = column_widths(t, table_columns(t).max(1), w);
             std::iter::once(&t.headers)
                 .chain(&t.rows)
                 .map(|row| row_height(row, &widths, 16.0 * text))
@@ -1307,6 +1303,13 @@ const NOTES_MASTER_XML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standal
 <p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/>\
 <p:notesStyle><a:lvl1pPr marL=\"0\" algn=\"l\"><a:defRPr sz=\"1200\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"+mn-lt\"/></a:defRPr></a:lvl1pPr></p:notesStyle>\
 </p:notesMaster>";
+
+/// The widest row sets the column count, headers included.
+fn table_columns(t: &Table) -> usize {
+    t.headers
+        .len()
+        .max(t.rows.iter().map(Vec::len).max().unwrap_or(0))
+}
 
 #[cfg(test)]
 mod tests {

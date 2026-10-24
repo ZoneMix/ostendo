@@ -80,8 +80,10 @@ impl Presenter {
         let layout = self.layout();
         let frame = self.slide_frame(&layout);
         let pad = StyledSpan::new(&" ".repeat(layout.margin));
-        let mut lines: Vec<StyledLine> = frame
-            .lines
+        self.max_scroll = frame.lines.len().saturating_sub(layout.content_rows);
+        self.scroll = self.scroll.min(self.max_scroll);
+        let visible = self.scroll..(self.scroll + layout.content_rows).min(frame.lines.len());
+        let mut lines: Vec<StyledLine> = frame.lines[visible]
             .iter()
             .map(|l| {
                 let mut spans = Vec::with_capacity(l.spans.len() + 1);
@@ -93,11 +95,6 @@ impl Presenter {
                 }
             })
             .collect();
-
-        self.max_scroll = lines.len().saturating_sub(layout.content_rows);
-        self.scroll = self.scroll.min(self.max_scroll);
-        let visible = self.scroll..(self.scroll + layout.content_rows).min(lines.len());
-        lines = lines.drain(visible.clone()).collect();
         let animating = self.animate(&mut lines, &layout);
         self.last_lines.clone_from(&lines);
 
@@ -123,11 +120,16 @@ impl Presenter {
                 row.line.push(StyledSpan::new(glyph).with_fg(pal.muted));
             }
         };
+        // On a terminal shorter than the header, the content rows do not exist.
         if self.scroll > 0 {
-            marker(&mut rows[layout.content_top], "▲");
+            if let Some(row) = rows.get_mut(layout.content_top) {
+                marker(row, "▲");
+            }
         }
         if self.scroll < self.max_scroll {
-            marker(&mut rows[layout.content_top + layout.content_rows - 1], "▼");
+            if let Some(row) = rows.get_mut(layout.content_top + layout.content_rows - 1) {
+                marker(row, "▼");
+            }
         }
 
         let (bar, notes_rows, _) = self.chrome_rows();

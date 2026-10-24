@@ -299,8 +299,13 @@ pub(crate) fn title(
 }
 
 /// FIGlet art for `text`, splitting words across rows when too wide; `None`
-/// when even a single word does not fit.
+/// when even a single word does not fit, or the font lacks a character (it
+/// would silently drop it, and a CJK title would vanish).
 pub(crate) fn figlet(ctx: &Ctx, text: &str) -> Option<Vec<StyledLine>> {
+    let drawable = |c: char| c.is_whitespace() || ctx.figfont.fonts.contains_key(&u32::from(c));
+    if !text.chars().all(drawable) || text.trim().is_empty() {
+        return None;
+    }
     let render = |t: &str| -> Option<Vec<String>> {
         let art = ctx.figfont.convert(t)?.to_string();
         let mut rows: Vec<String> = art.lines().map(|l| l.trim_end().to_string()).collect();
@@ -379,7 +384,7 @@ pub(crate) fn code_block(
     for (n, hl) in ctx
         .highlighter
         .highlight(&cb.code, &cb.language, pal.is_dark())
-        .into_iter()
+        .iter()
         .enumerate()
     {
         let focus = emphasis.map(|r| r.iter().any(|&(a, b)| (a..=b).contains(&(n + 1))));
@@ -828,6 +833,10 @@ mod tests {
                 .iter()
                 .all(|l| l.content_type == LineContentType::FigletTitle));
             assert!(figlet(&ctx.with_width(3), "Hello").is_none());
+            assert!(
+                figlet(ctx, "Launch 日本 🎉").is_none(),
+                "characters the font lacks fall back to the plain title"
+            );
         });
     }
 }

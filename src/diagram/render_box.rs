@@ -12,6 +12,7 @@
 //! the longest annotation word.
 
 use crossterm::style::Color;
+use unicode_width::UnicodeWidthStr;
 
 use crate::diagram::parser::{DiagramGraph, DiagramRow};
 use crate::render::text::{wrap_text, LineContentType, StyledLine, StyledSpan};
@@ -76,12 +77,12 @@ fn compute_column_widths(row: &DiagramRow) -> Vec<usize> {
         .iter()
         .enumerate()
         .map(|(i, node)| {
-            let label_w = node.label.chars().count();
+            let label_w = node.label.width();
             let word_w = row
                 .annotations
                 .get(i)
                 .and_then(|a| a.as_deref())
-                .and_then(|a| a.split_whitespace().map(|w| w.chars().count()).max())
+                .and_then(|a| a.split_whitespace().map(|w| w.width()).max())
                 .unwrap_or(0);
             label_w.max(word_w) + 2 * BOX_PAD + 2 // +2 for `│` on each side
         })
@@ -122,7 +123,7 @@ fn render_row(
     for (i, node) in row.nodes.iter().enumerate() {
         let inner_w = col_widths[i] - 2;
         let label = &node.label;
-        let label_chars: usize = label.chars().count();
+        let label_chars: usize = label.width();
         let right_pad = inner_w.saturating_sub(BOX_PAD + label_chars);
 
         label_line.push(StyledSpan::new("│").with_fg(accent));
@@ -169,7 +170,7 @@ fn render_row(
         ann_line.push(StyledSpan::new(pad));
         for (i, lines) in wrapped.iter().enumerate() {
             let text = lines.get(k).map_or("", String::as_str);
-            let total_pad = col_widths[i].saturating_sub(text.chars().count());
+            let total_pad = col_widths[i].saturating_sub(text.width());
             let left = total_pad / 2;
             ann_line.push(StyledSpan::new(&" ".repeat(left)));
             ann_line.push(StyledSpan::new(text).with_fg(dim_color));
