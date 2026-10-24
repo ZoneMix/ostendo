@@ -97,7 +97,9 @@ pub fn spawn(
         code: code.to_string(),
         pty: mode == ExecMode::Pty,
         pty_cols: pty_cols.max(20),
-        working_dir: working_dir.map(Path::to_path_buf),
+        working_dir: working_dir
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map(Path::to_path_buf),
         sink: Arc::new(Sink {
             tx,
             bytes: AtomicUsize::new(0),
@@ -687,6 +689,17 @@ mod tests {
             Duration::from_secs(5),
         );
         assert_eq!(lines, ["a\u{FFFD}b", "after"]);
+    }
+
+    #[test]
+    fn a_deck_opened_by_bare_file_name_runs_in_the_current_directory() {
+        // `ostendo talk.md` gives the deck an empty parent path.
+        let exec = spawn("sh", "pwd", ExecMode::Exec, Some(Path::new("")), 80).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            collect(exec, Duration::from_secs(5)),
+            [cwd.display().to_string()]
+        );
     }
 
     #[test]
