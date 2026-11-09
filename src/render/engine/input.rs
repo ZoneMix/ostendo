@@ -593,4 +593,28 @@ mod tests {
         press(&mut p, "/best language\n");
         assert_eq!(p.current, 0, "search finds poll questions");
     }
+
+    #[test]
+    fn code_runs_only_when_execution_is_allowed() {
+        let ran = |allow_exec, allow_remote_exec, from_remote: bool| {
+            let mut p = presenter("# Demo\n```sh +exec\necho hi\n```");
+            p.allow_exec = allow_exec;
+            p.allow_remote_exec = allow_remote_exec;
+            if from_remote {
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(crate::remote::RemoteCommand::ExecuteCode).unwrap();
+                p.remote_rx = Some(rx);
+                p.poll_remote();
+            } else {
+                p.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+            }
+            // Set by a started run and by a failed start alike.
+            p.exec_output.is_some()
+        };
+        assert!(ran(true, false, false), "Ctrl+E runs code");
+        assert!(!ran(false, false, false), "--no-exec");
+        assert!(!ran(true, false, true), "the remote needs --remote-exec");
+        assert!(ran(true, true, true), "--remote-exec");
+        assert!(!ran(false, true, true), "--no-exec wins over --remote-exec");
+    }
 }
