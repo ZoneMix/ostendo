@@ -7,3 +7,5 @@ tests/integration/results/
 # Private presentations
 presentations/dakotacon-2026/
 .claude/worktrees/
+.claude/settings.local.json
+CLAUDE.local.md

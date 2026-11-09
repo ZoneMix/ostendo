@@ -9,11 +9,17 @@ cargo build --release
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-cargo run --release -- --validate presentations/examples/test_presentation.md
+for deck in presentations/examples/*.md; do cargo run -q -- --validate "$deck"; done
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy, and tests on every push and PR.
-All four must pass before a commit lands.
+CI (`.github/workflows/ci.yml`) runs on pull requests and pushes to main, on
+Linux, macOS, and Windows: fmt (Linux only), clippy, tests, and `--validate` on
+every example deck. All must pass before a commit lands. Work on a `claude/`
+branch and open a PR into main; never push to main directly.
+
+`.claude/settings.json` enforces the rules that must never break: deny rules
+for destructive git commands, secrets, and protected paths, and hooks that run
+these checks before a push and before a turn ends. The hooks need `jq`.
 
 ## Lean code (mandatory)
 
@@ -62,6 +68,7 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | `presentation/state.rs` | Per-presentation state saved between runs (JSON) |
 | `presentation/rehearsal.rs` | Time per slide of timed runs; the `--report` table |
 | `render/engine/mod.rs` | `Presenter` struct, `run()` |
+| `render/engine/types.rs` | `PresenterConfig`, `Layout`, `SlideFrame`, shared engine types |
 | `render/engine/input.rs` | Event loop, tick rate, key bindings, `:` commands |
 | `render/engine/navigation.rs`, `state.rs` | Slide changes; themes, toggles, persistence |
 | `render/engine/actions.rs` | Code execution, hot reload, remote control |
@@ -78,6 +85,7 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 | `render/engine/record.rs` | `--record` asciicast writer |
 | `render/engine/tests.rs` | Behavior tests on a headless `Presenter` (`presenter()`, `screen()`) |
 | `render/animation/` | Transitions, entrances, loop animations |
+| `render/layout.rs` | `WindowSize`: terminal cells and pixels |
 | `render/text.rs` | `StyledLine` / `StyledSpan`, width-aware wrap and truncate |
 | `terminal/protocols.rs` | Image protocol and font capability detection |
 | `terminal/ascii_art.rs` | Half-block and character-art image rendering |
@@ -93,8 +101,10 @@ Help and overview are Screens built by `chrome.rs` and go through the same
 ## Invariants
 
 - Never write to the terminal outside `Presenter::render` (the font change,
-  the OSC 11 background, and `Display::present`); `--validate --size` builds
-  a headless `Presenter` and must print nothing but its report.
+  the OSC 11 background, and `Display::present`) and the `TerminalGuard`
+  enter/restore path in `terminal.rs`, which also resets the font on exit.
+  `--validate --size` builds a headless `Presenter` and must print nothing but
+  its report.
 - Anything that changes how a slide lays out must be in `FrameKey` or call
   `invalidate()`, which bumps `generation`; otherwise a stale cached frame is
   shown.
@@ -103,13 +113,15 @@ Help and overview are Screens built by `chrome.rs` and go through the same
   `spin(image)` targeting silently breaks.
 - Images are placed in the `Screen`, never written directly; `Display` owns
   Kitty placements and re-sends inline images only when their rows change.
-- Text width is display width (`unicode-width`), and slicing is char-based.
-  Never byte-slice user text.
+- Text width is display width (`unicode-width`). Byte-slice user text only at
+  an index from `find`, a regex match, `char_indices`, or `truncate_to_width`,
+  never at an arithmetic offset.
 - `font_size` directive: -20..=20, 1 = the terminal's own size, 4 pt per step.
   `]`/`[` adjustments are saved per presentation, separately.
 - Program output is untrusted: `ansi.rs` keeps SGR and drops every other
   escape.
-- Code execution: own process group, 30 s timeout, 64 KB input, 1 MB output,
+- Code execution: own process group (Unix only; on Windows only the direct
+  child is killed), 30 s timeout, 64 KB input, 1 MB output,
   no stdin; `--no-exec` disables it, `--remote-exec` gates WebSocket execution.
 
 ## Conventions
@@ -118,9 +130,10 @@ Help and overview are Screens built by `chrome.rs` and go through the same
   user markdown, the terminal, the filesystem, or the network.
 - Prefer `pub(crate)`.
 - Tests live in `#[cfg(test)] mod tests` next to the code (parser tests in
-  `markdown/parser_tests.rs`). Presenter behavior (keys, build steps, what
-  lands on screen) is tested through `render/engine/tests.rs`, which drives a
-  real `Presenter` without a terminal.
+  `markdown/parser_tests.rs`, tests of the built binary in `tests/*.rs`).
+  Presenter behavior (keys, build steps, what lands on screen) is tested
+  through `render/engine/tests.rs`, which drives a real `Presenter` without a
+  terminal.
 - Themes must pass WCAG 2.0: text:bg >= 4.5, accent:bg >= 3.0.
 
 ## Where to look
