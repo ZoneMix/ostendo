@@ -12,10 +12,11 @@ cargo build --release
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-cargo run --release -- --validate presentations/examples/test_presentation.md
+for deck in presentations/examples/*.md; do cargo run -q -- --validate "$deck"; done
 ```
 
-CI runs the same checks on Linux, macOS, and Windows; all must pass.
+CI runs the same checks on Linux, macOS, and Windows (fmt on Linux only);
+all must pass.
 For visual changes, page through `presentations/examples/test_presentation.md`
 in Kitty or Ghostty and in a terminal without graphics support.
 `tests/integration/run_all.sh` drives the release build through tmux and
